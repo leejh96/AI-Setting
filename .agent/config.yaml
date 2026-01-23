@@ -1,0 +1,119 @@
+# .agent/config.yaml
+# 통합 에이전트 설정
+
+# 프로젝트 정보
+project:
+  name: "your-project-name"
+  description: "프로젝트 설명"
+  language: "ko"  # 기본 응답 언어
+
+# 기술 스택
+stack:
+  runtime: "node"
+  version: "20"
+  framework:
+    - nestjs
+    - express
+  database:
+    - mysql
+    - mongodb
+    - redis
+  orm:
+    - prisma
+    - mongoose
+  cloud:
+    - aws
+    - ncp
+  testing:
+    - jest
+
+# 활성화할 규칙 (순서대로 적용)
+active_rules:
+  - coding-conventions
+  - response-style
+  - project-context
+
+# 활성화할 스킬
+active_skills:
+  - backend-development
+  - code-review
+  - backend-testing
+  - nestjs-expert
+
+# 활성화할 워크플로우
+active_workflows:
+  - feature-development
+  - bug-fix
+  - pr-review
+  - refactoring
+
+# 활성화할 에이전트 페르소나
+active_agents:
+  - senior-backend
+  - code-reviewer
+  - tech-writer
+
+# 활성화할 프롬프트
+active_prompts:
+  - commit-message
+  - pr-description
+  - api-documentation
+
+# 모델별 설정
+models:
+  gemini:
+    enabled: true
+    profile: "profiles/gemini.md"
+    # Gemini 특화 설정
+    settings:
+      context_window: "large"  # 100만+ 토큰 활용
+      use_for:
+        - "프로젝트 전체 분석"
+        - "아키텍처 계획"
+        - "멀티모달 작업"
+
+  claude:
+    enabled: true
+    profile: "profiles/claude.md"
+    settings:
+      use_for:
+        - "코드 구현"
+        - "리팩토링"
+        - "버그 수정"
+        - "테스트 작성"
+
+  copilot:
+    enabled: true
+    profile: "profiles/copilot.md"
+    settings:
+      use_for:
+        - "실시간 코드 제안"
+        - "PR 생성"
+        - "커밋 메시지"
+
+# 동기화 설정
+sync:
+  # 자동 생성 파일
+  generated_files:
+    - "GEMINI.md"
+    - "CLAUDE.md"
+    - ".github/copilot-instructions.md"
+  
+  # 심볼릭 링크
+  symlinks:
+    - source: ".agent"
+      target: ".claude"
+    - source: ".agent"
+      target: ".gemini"
+
+  # gitignore에 추가 권장
+  gitignore:
+    - ".claude/"
+    - ".gemini/"
+    - "GEMINI.md"
+    - "CLAUDE.md"
+    # .github/는 다른 용도로도 쓰이므로 제외하지 않음
+
+# MCP 서버 설정 경로
+mcp:
+  config_path: "mcp/servers.json"

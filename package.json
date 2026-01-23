@@ -1,0 +1,12 @@
+{
+  "name": "ai-setting",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "agent:setup": "node .agent/sync/setup.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
