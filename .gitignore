@@ -1,29 +1,12 @@
-# Dependencies
-node_modules/
+# Ignore everything
+*
 
-# Environment variables
-.env
-.env.*
+# Whitelist (Unignore)
+!.gitignore
+!.agent/
+!.agent/**
+!package.json
+!README.md
 
-# OS generated files
+# Re-ignore system files
 .DS_Store
-._*
-.Spotlight-V100
-.Trashes
-
-# Build outputs
-dist/
-build/
-coverage/
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
