@@ -15,41 +15,29 @@
 
 ## 핵심 규칙 가져오기
 
-@./.gemini/rules/project-context.md
-@./.gemini/rules/coding-conventions.md
-@./.gemini/rules/response-style.md
+{{RULES}}
 
 ---
 
 ## 스킬 가져오기
 
-@./.gemini/skills/backend-development/SKILL.md
-@./.gemini/skills/code-review/SKILL.md
-@./.gemini/skills/backend-testing/SKILL.md
-@./.gemini/skills/nestjs-expert/SKILL.md
+{{SKILLS}}
 
 ---
 
 ## 워크플로우 가져오기
 
-@./.gemini/workflows/feature-development.md
-@./.gemini/workflows/bug-fix.md
-@./.gemini/workflows/pr-review.md
-@./.gemini/workflows/refactoring.md
+{{WORKFLOWS}}
 
 ---
 
 ## 에이전트 가져오기
 
-@./.gemini/agents/senior-backend.md
-@./.gemini/agents/code-reviewer.md
-@./.gemini/agents/tech-writer.md
+{{AGENTS}}
 
 ## 프롬프트 가져오기
 
-@./.gemini/prompts/commit-message.md
-@./.gemini/prompts/pr-description.md
-@./.gemini/prompts/api-documentation.md
+{{PROMPTS}}
 
 ---
 

@@ -63,7 +63,6 @@ active_prompts:
 models:
   gemini:
     enabled: true
-    profile: "profiles/gemini.md"
     # Gemini 특화 설정
     settings:
       context_window: "large"  # 100만+ 토큰 활용
@@ -74,7 +73,6 @@ models:
 
   claude:
     enabled: true
-    profile: "profiles/claude.md"
     settings:
       use_for:
         - "코드 구현"
@@ -84,7 +82,6 @@ models:
 
   copilot:
     enabled: true
-    profile: "profiles/copilot.md"
     settings:
       use_for:
         - "실시간 코드 제안"

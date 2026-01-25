@@ -9,9 +9,8 @@
 ├── rules/        # 정적 규칙 (코딩 컨벤션, 응답 스타일, 프로젝트 컨텍스트)
 ├── skills/       # 절차적 지식 (백엔드 개발, DB, 테스트 등)
 ├── workflows/    # 작업 흐름 (기능 개발, 버그 수정, PR 리뷰 등)
-├── agents/       # 역할별 페르소나 (시니어 개발자, 코드 리뷰어 등)
+├── agents/       # 역할별 페르소나 정의
 ├── prompts/      # 재사용 프롬프트 템플릿
-├── profiles/     # 모델별 행동 오버라이드
 ├── mcp/          # MCP 서버 설정
 └── sync/         # 동기화 스크립트
 ```
@@ -43,13 +42,7 @@ Gemini, Claude, Copilot 중 무엇이든, 동일한 규칙과 컨텍스트를 �
 - PR 리뷰 → `workflows/pr-review.md`
 - 리팩토링 → `workflows/refactoring.md`
 
-## 모델별 프로필
 
-각 모델의 특성에 맞는 추가 지침:
-
-- Gemini → `profiles/gemini.md`
-- Claude → `profiles/claude.md`
-- Copilot → `profiles/copilot.md`
 
 ## MCP 도구
 

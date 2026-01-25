@@ -21,7 +21,6 @@
 ├── skills/       # 에이전트가 활용할 전문 스킬 (백엔드, 테스트, 리뷰 등)
 ├── workflows/    # 표준 작업 절차 (기능 개발, 버그 수정 등)
 ├── agents/       # 역할별 페르소나 정의
-├── profiles/     # 각 AI 모델별(Gemini, Claude) 최적화 설정
 └── sync/         # 설정 동기화 및 심볼릭 링크 생성 스크립트
 ```
 
@@ -36,21 +35,46 @@
 npm run agent:setup
 ```
 
+### 2. 새 프로젝트 설정 가이드
 
+새로운 프로젝트에 이 설정을 적용할 때, 다음 파일들을 순서대로 수정하세요.
+
+#### 1단계: 필수 수정 (Must Change)
+가장 먼저 **`.agent/config.yaml`** 파일을 열어 프로젝트 정체성을 정의합니다.
+- **`project`**: 프로젝트 이름과 설명 수정
+- **`stack`**: 기술 스택(NestJS/FastAPI, MySQL/PostgreSQL 등) 정의
+- **`active_*`**: 사용할 규칙, 스킬, 워크플로우 활성화/비활성화
+    > 이 설정에 따라 Copilot 지침과 AI 컨텍스트 파일이 자동 생성됩니다.
+
+그 다음 **`.agent/rules/project-context.md`**를 수정합니다.
+- **프로젝트 개요**: 비즈니스 로직 설명
+- **기술 스택**: 구체적인 버전 및 라이브러리
+- **프로젝트 구조**: 폴더 구조 설명
+- **환경 변수**: 주요 환경 변수 목록
+
+#### 2단계: 선택 수정 (Optional)
+팀의 컨벤션에 맞게 조정이 필요한 경우 수정합니다.
+- **`.agent/rules/coding-conventions.md`**: 네이밍 규칙, 파일 구조 등
+- **`.agent/rules/response-style.md`**: AI 응답 톤앤매너
+
+### 3. 설정 적용
+
+파일 수정 후 반드시 다음 명령어를 실행하여 변경 사항을 모든 에이전트에 전파하세요.
+
+```bash
+npm run agent:setup
+```
+
+이 명령어는 `config.yaml`의 설정을 기반으로:
+- `.github/copilot-instructions.md` 생성
+- `CLAUDE.md`, `GEMINI.md` 컨텍스트 파일 업데이트
+- 필요한 심볼릭 링크 연결
+
+을 자동으로 수행합니다.
 
 ## ✨ 주요 기능
 
+*   **Central Config**: `config.yaml` 하나로 모든 AI 에이전트의 페르소나와 지식을 제어합니다.
 *   **Rules Management**: 프로젝트별 컨텍스트와 코딩 규칙을 한 곳에서 정의합니다.
 *   **Skill System**: AI에게 특정 도메인(NestJS, 테스팅 등)의 전문 지식을 주입합니다.
-*   **Workflow Automation**: 복잡한 작업(PR 리뷰, 기능 구현)을 단계별로 가이드합니다.
-*   **Multi-Model Support**:
-    *   **Gemini**
-    *   **Claude**
-    *   **GitHub Copilot**
-
-## 📝 사용 방법
-
-1.  `.agent/rules/project-context.md`에 현재 프로젝트의 기술 스택과 개요를 작성합니다.
-2.  `.agent/rules/coding-conventions.md`에 팀의 코딩 스타일을 정의합니다.
-3.  `npm run agent:setup`을 실행하여 모든 AI 에이전트에 변경 사항을 전파합니다.
 4.  이제 어떤 AI 오토를 사용하든 정의된 규칙에 따라 코딩을 도와줍니다.
