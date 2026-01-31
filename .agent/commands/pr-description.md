@@ -1,4 +1,4 @@
-# Prompt: PR Description
+# Command: PR Description
 
 ## 사용 시점
 

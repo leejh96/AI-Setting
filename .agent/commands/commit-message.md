@@ -1,4 +1,4 @@
-# Prompt: Commit Message
+# Command: Commit Message
 
 ## 사용 시점
 

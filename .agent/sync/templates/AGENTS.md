@@ -5,6 +5,13 @@
 
 ---
 
+## 🚨 핵심 지침 (CRITICAL)
+
+**사용자가 별도로 요청하지 않는 한, 반드시 한국어로 응답하세요.**
+**ALWAYS RESPOND IN KOREAN UNLESS REQUESTED OTHERWISE.**
+
+---
+
 이 프로젝트는 모든 AI 설정에 통합된 `.agent` 디렉토리를 사용합니다.
 (OpenCode의 경우 일관성을 위해 `.opencode` 심볼릭 링크를 참조합니다.)
 
@@ -32,11 +39,11 @@
 
 {{AGENTS}}
 
-## Prompts
+## Commands
 
 재사용 프롬프트:
 
-{{PROMPTS}}
+{{COMMANDS}}
 
 ## Critical Instructions
 

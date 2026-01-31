@@ -13,6 +13,13 @@
 
 ---
 
+## 🚨 핵심 지침 (CRITICAL)
+
+**사용자가 별도로 요청하지 않는 한, 반드시 한국어로 응답하세요.**
+**ALWAYS RESPOND IN KOREAN UNLESS REQUESTED OTHERWISE.**
+
+---
+
 ## 핵심 규칙 가져오기
 
 {{RULES}}
@@ -35,9 +42,9 @@
 
 {{AGENTS}}
 
-## 프롬프트 가져오기
+## Commands
 
-{{PROMPTS}}
+{{COMMANDS}}
 
 ---
 

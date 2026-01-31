@@ -32,7 +32,7 @@
 - `.agent/skills/` - 전문 스킬
 - `.agent/workflows/` - 작업 흐름
 - `.agent/agents/` - AI 페르소나
-- `.agent/prompts/` - 재사용 프롬프트
+- `.agent/commands/` - 재사용 커맨드 (프롬프트 템플릿)
 
 ```bash
 npm run agent:sync:copilot

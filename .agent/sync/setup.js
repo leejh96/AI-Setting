@@ -33,7 +33,7 @@ const DIRS = {
   skills: path.join(AGENT_DIR, 'skills'),
   workflows: path.join(AGENT_DIR, 'workflows'),
   agents: path.join(AGENT_DIR, 'agents'),
-  prompts: path.join(AGENT_DIR, 'prompts'),
+  commands: path.join(AGENT_DIR, 'commands'),
 };
 
 /**
@@ -45,7 +45,7 @@ function parseConfig() {
     active_skills: ['backend-development', 'code-review', 'backend-testing', 'nestjs-expert'],
     active_workflows: ['feature-development', 'bug-fix', 'pr-review', 'refactoring'],
     active_agents: ['senior-backend', 'code-reviewer', 'tech-writer'],
-    active_prompts: ['commit-message', 'pr-description', 'api-documentation'],
+    active_commands: ['commit-message', 'pr-description', 'api-documentation'],
   };
 
   try {
@@ -85,12 +85,12 @@ function parseConfig() {
         ?.map(m => m.replace('- ', '')) || defaults.active_agents;
     }
 
-    // active_prompts 추출
-    const promptsMatch = content.match(/active_prompts:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (promptsMatch) {
-      config.active_prompts = promptsMatch[1]
+    // active_commands 추출
+    const commandsMatch = content.match(/active_commands:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
+    if (commandsMatch) {
+      config.active_commands = commandsMatch[1]
         .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_prompts;
+        ?.map(m => m.replace('- ', '')) || defaults.active_commands;
     }
 
     return { ...defaults, ...config };
@@ -186,21 +186,21 @@ function compileMarkdownFiles(config) {
         content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .gemini/skills/${s}/SKILL.md`).join('\n'));
         content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .gemini/workflows/${w}.md`).join('\n'));
         content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .gemini/agents/${a}.md`).join('\n'));
-        content = content.replace('{{PROMPTS}}', (config.active_prompts || []).map(p => `- **${p}**: .gemini/prompts/${p}.md`).join('\n'));
+        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .gemini/commands/${p}.md`).join('\n'));
       } else if (file === 'CLAUDE.md') {
         // Claude 스타일 (Markdown list)
         content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .claude/rules/${r}.md`).join('\n'));
         content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .claude/skills/${s}/SKILL.md`).join('\n'));
         content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .claude/workflows/${w}.md`).join('\n'));
         content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .claude/agents/${a}.md`).join('\n'));
-        content = content.replace('{{PROMPTS}}', (config.active_prompts || []).map(p => `- **${p}**: .claude/prompts/${p}.md`).join('\n'));
+        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .claude/commands/${p}.md`).join('\n'));
       } else if (file === 'AGENTS.md') {
         // OpenCode 스타일 (Markdown list w/ .opencode)
         content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .opencode/rules/${r}.md`).join('\n'));
         content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .opencode/skills/${s}/SKILL.md`).join('\n'));
         content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .opencode/workflows/${w}.md`).join('\n'));
         content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .opencode/agents/${a}.md`).join('\n'));
-        content = content.replace('{{PROMPTS}}', (config.active_prompts || []).map(p => `- **${p}**: .opencode/prompts/${p}.md`).join('\n'));
+        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .opencode/commands/${p}.md`).join('\n'));
       }
     }
 
@@ -292,8 +292,13 @@ function addSection(content, title, emoji, items, itemType) {
       filePath = path.join(DIRS.workflows, `${itemName}.md`);
     } else if (itemType === 'agent') {
       filePath = path.join(DIRS.agents, `${itemName}.md`);
-    } else if (itemType === 'prompt') {
-      filePath = path.join(DIRS.prompts, `${itemName}.md`);
+    } else if (itemType === 'command') {
+      // .md 또는 .toml 확인
+      const mdPath = path.join(DIRS.commands, `${itemName}.md`);
+      const tomlPath = path.join(DIRS.commands, `${itemName}.toml`);
+      if (fs.existsSync(mdPath)) filePath = mdPath;
+      else if (fs.existsSync(tomlPath)) filePath = tomlPath;
+      else filePath = mdPath; // 기본값
     } else {
       // rule
       filePath = path.join(DIRS.rules, `${itemName}.md`);
@@ -370,10 +375,10 @@ function syncCopilotInstructions(config) {
     content = addSection(content, 'Agents (Personas)', '👤', config.active_agents, 'agent');
   }
 
-  // Prompts 추가
-  if (config.active_prompts?.length > 0) {
-    console.log('\n  💬 Prompts:');
-    content = addSection(content, 'Prompts', '💬', config.active_prompts, 'prompt');
+  // Commands 추가
+  if (config.active_commands?.length > 0) {
+    console.log('\n  💬 Commands:');
+    content = addSection(content, 'Commands', '💬', config.active_commands, 'command');
   }
 
   // .github/copilot-instructions.md 생성
@@ -388,10 +393,79 @@ function syncCopilotInstructions(config) {
     config.active_skills?.length || 0,
     config.active_workflows?.length || 0,
     config.active_agents?.length || 0,
-    config.active_prompts?.length || 0,
+    config.active_commands?.length || 0,
   ].reduce((a, b) => a + b, 0);
 
   log(`  ✅ Copilot 동기화 완료 (총 ${totalItems}개 항목)`, 'green');
+}
+
+/**
+ * MCP 설정 동기화
+ * .agent/mcp/server.json -> .mcp.json (Claude), .gemini/settings.json, opencode.json
+ */
+function syncMcpSettings() {
+  const mcpSourcePath = path.join(AGENT_DIR, 'mcp', 'servers.json');
+  if (!fs.existsSync(mcpSourcePath)) {
+    log('  ⚠️  MCP 설정 원본이 없습니다 (.agent/mcp/servers.json) - 건너뜀', 'yellow');
+    return;
+  }
+
+  const mcpConfig = JSON.parse(fs.readFileSync(mcpSourcePath, 'utf-8'));
+  const mcpServers = mcpConfig.mcpServers || {};
+
+  // 1. Claude (.mcp.json at root)
+  // Claude uses { "mcpServers": { ... } } format directly
+  const claudeConfigPath = path.join(ROOT_DIR, '.mcp.json');
+  fs.writeFileSync(claudeConfigPath, JSON.stringify({ mcpServers }, null, 2));
+  log('  ✅ Claude MCP 설정 (.mcp.json)', 'green');
+
+  // 2. OpenCode (opencode.json at root)
+  const opencodeConfigPath = path.join(ROOT_DIR, 'opencode.json');
+  // OpenCode requires a specific format transformation
+  const opencodeMcp = {};
+
+  Object.entries(mcpServers).forEach(([name, config]) => {
+    opencodeMcp[name] = {
+      type: 'local',
+      command: [config.command, ...(config.args || [])],
+      environment: config.env || {},
+      enabled: true,
+    };
+  });
+
+  const opencodeConfig = {
+    "$schema": "https://opencode.ai/config.json",
+    mcp: opencodeMcp
+  };
+
+  fs.writeFileSync(opencodeConfigPath, JSON.stringify(opencodeConfig, null, 2));
+  log('  ✅ OpenCode MCP 설정 (opencode.json) - 변환 완료', 'green');
+
+  // 3. Gemini (.gemini/settings.json)
+  // Gemini uses { "mcpServers": { ... } } but inside settings.json which might have other things
+  // Note: Previous file content check showed only mcpServers, so we can overwrite or merge.
+  // Ideally merge if exists, but for now we basically enforcing agent config.
+  // Let's assume we want to manage it via .agent, but preserve other keys if they exist.
+  const geminiConfigPath = path.join(ROOT_DIR, '.gemini', 'settings.json');
+  let geminiConfig = {};
+
+  if (fs.existsSync(geminiConfigPath)) {
+    try {
+      geminiConfig = JSON.parse(fs.readFileSync(geminiConfigPath, 'utf-8'));
+    } catch (e) {
+      log('  ⚠️  기존 Gemini 설정 파싱 실패 - 새로 작성', 'yellow');
+    }
+  }
+
+  geminiConfig.mcpServers = mcpServers;
+
+  // Ensure .gemini dir exists (handled by main loop but double check)
+  if (!fs.existsSync(path.dirname(geminiConfigPath))) {
+    fs.mkdirSync(path.dirname(geminiConfigPath), { recursive: true });
+  }
+
+  fs.writeFileSync(geminiConfigPath, JSON.stringify(geminiConfig, null, 2));
+  log('  ✅ Gemini MCP 설정 (.gemini/settings.json)', 'green');
 }
 
 /**
@@ -416,8 +490,9 @@ function main() {
   log('📁 심볼릭 링크 생성 (sync 폴더 제외)', 'cyan');
 
   // 링크할 항목들 (폴더 및 파일)
+  // commands, prompts는 별도 처리 또는 제거됨
   const itemsToLink = [
-    'rules', 'skills', 'workflows', 'agents', 'prompts', 'mcp', 'profiles',
+    'rules', 'skills', 'workflows', 'agents', 'profiles',
     'config.yaml', 'README.md'
   ];
 
@@ -455,6 +530,47 @@ function main() {
         }
       }
     }
+
+    // 3) Commands 폴더 별도 처리 (파일 단위 선별 링크)
+    const commandsSourceDir = path.join(AGENT_DIR, 'commands');
+    const commandsTargetDir = path.join(targetDirPath, 'commands');
+
+    if (fs.existsSync(commandsSourceDir)) {
+      if (!fs.existsSync(commandsTargetDir)) fs.mkdirSync(commandsTargetDir);
+
+      const commandFiles = fs.readdirSync(commandsSourceDir);
+      let commandCount = 0;
+
+      for (const file of commandFiles) {
+        const ext = path.extname(file);
+        let shouldLink = false;
+
+        if (targetDirName === '.gemini') {
+          // Gemini: .toml 파일만
+          if (ext === '.toml') shouldLink = true;
+        } else {
+          // Claude/OpenCode: .md 파일만 (단, claude.md는 .claude에서 제외)
+          if (ext === '.md') {
+            if (targetDirName === '.claude' && file === 'claude.md') {
+              shouldLink = false;
+            } else {
+              shouldLink = true;
+            }
+          }
+        }
+
+        if (shouldLink) {
+          createSymlink(
+            path.join(commandsSourceDir, file),
+            path.join(commandsTargetDir, file),
+            false // isDirectory = false (파일 링크)
+          );
+          commandCount++;
+        }
+      }
+      log(`  ✅ ${targetDirName}/commands 구성 완료 (${commandCount}개 파일)`, 'dim');
+    }
+
     log(`  ✅ ${targetDirName} 구성 완료 (${linkedCount}개 항목 링크)`, 'green');
   }
 
@@ -490,9 +606,32 @@ function main() {
   log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode)', 'dim');
   log('  COPILOT.md        → 규칙이 통합된 컨텍스트 포인터', 'dim');
   log('  .github/copilot-instructions.md', 'dim');
+
+  // 4. MCP 설정 동기화
+  log('🔌 MCP 설정 동기화', 'cyan');
+  try {
+    syncMcpSettings();
+  } catch (error) {
+    log(`❌ MCP 동기화 실패: ${error.message}`, 'red');
+    console.error(error);
+  }
+
   console.log('');
-  log('이제 CLI나 AI 도구들이 이 파일들의 내용을 직접 읽을 수 있습니다.', 'reset');
+  log('=.'.repeat(25), 'dim');
   console.log('');
+  log('✨ 셋업 완료!', 'green');
+  console.log('');
+  log('생성/업데이트된 파일:', 'cyan');
+  log('  .claude/          → 선별적 링크 (sync 제외)', 'dim');
+  log('  .gemini/          → 선별적 링크 (sync 제외)', 'dim');
+  log('  GEMINI.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
+  log('  CLAUDE.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
+  log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode)', 'dim');
+  log('  COPILOT.md        → 규칙이 통합된 컨텍스트 포인터', 'dim');
+  log('  .mcp.json         → Claude용 MCP 설정', 'dim');
+  log('  opencode.json     → OpenCode용 MCP 설정', 'dim');
+  log('  .gemini/settings.json → Gemini용 MCP 설정', 'dim');
+  log('  .github/copilot-instructions.md', 'dim');
 }
 
 main();

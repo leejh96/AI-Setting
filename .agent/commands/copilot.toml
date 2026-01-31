@@ -1,0 +1,16 @@
+description = "GitHub Copilot에게 질문하기"
+prompt = """
+Reference Context: User invoked the /copilot command.
+Below is the execution result of the Copilot CLI:
+
+---
+!{bash -c 'args=(); for arg in "$@"; do if [ "$arg" = "-m" ]; then args+=("--model"); else args+=("$arg"); fi; done; if [ ${#args[@]} -eq 0 ]; then echo "SHOW_USAGE_HELP"; else copilot -p "${args[@]}"; fi' -- {{args}}}
+---
+
+Instructions for Gemini:
+1. If the result is "SHOW_USAGE_HELP": politely explain how to use the command.
+   - Basic usage: `/copilot "질문 내용"`
+   - With model: `/copilot -m gpt-5 "질문 내용"` (Specify model)
+   - Explain that omitting `-m` will use the default model.
+2. If the result is actual content: This is Copilot's answer. Present it to the user. You can add "Copilot's response:" at the beginning.
+"""

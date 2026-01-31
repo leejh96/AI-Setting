@@ -10,3 +10,4 @@
 
 # Re-ignore system files
 .DS_Store
+bun.lock

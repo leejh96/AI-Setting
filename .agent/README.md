@@ -59,9 +59,6 @@ Gemini, Claude, Copilot 중 무엇이든, 동일한 규칙과 컨텍스트를 �
 ```bash
 # 최초 1회 (심볼릭 링크 설정)
 npm run agent:setup
-
-# Copilot instructions 업데이트 (Windows)
-npm run agent:sync:copilot
 ```
 
 ## 규칙

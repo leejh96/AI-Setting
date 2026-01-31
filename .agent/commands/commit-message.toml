@@ -1,0 +1,17 @@
+description = "Generate a commit message based on staged changes"
+prompt = """
+Act as a senior developer writing a git commit message.
+Follow these rules (Conventional Commits):
+1. Format: <type>(<scope>): <subject>
+2. Types: feat, fix, docs, style, refactor, test, chore
+3. Use imperative mood (e.g., "Add feature" not "Added feature")
+4. Keep the subject line under 50 characters if possible.
+
+Here are the staged changes you are committing:
+---
+!{bash -c 'git diff --cached --ignore-all-space -- . ":(exclude)package-lock.json" ":(exclude)yarn.lock"'}
+---
+
+If there are no staged changes, ask the user to stage files first.
+User additional context: {{args}}
+"""

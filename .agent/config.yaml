@@ -54,14 +54,13 @@ active_agents:
   - tech-writer
 
 # 활성화할 프롬프트
-active_prompts:
+active_commands:
   - commit-message
   - pr-description
   - api-documentation
-
-# 모델별 설정
-models:
-  gemini:
+  - gemini
+  - claude
+  - copilotni:
     enabled: true
     # Gemini 특화 설정
     settings:

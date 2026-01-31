@@ -77,4 +77,6 @@ npm run agent:setup
 *   **Central Config**: `config.yaml` 하나로 모든 AI 에이전트의 페르소나와 지식을 제어합니다.
 *   **Rules Management**: 프로젝트별 컨텍스트와 코딩 규칙을 한 곳에서 정의합니다.
 *   **Skill System**: AI에게 특정 도메인(NestJS, 테스팅 등)의 전문 지식을 주입합니다.
+*   **MCP Integration**: `.agent/mcp/servers.json`을 단일 진실 공급원(SSOT)으로 사용하여 모든 에이전트의 도구 설정을 자동 동기화합니다.
+
 4.  이제 어떤 AI 오토를 사용하든 정의된 규칙에 따라 코딩을 도와줍니다.

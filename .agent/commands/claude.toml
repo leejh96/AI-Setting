@@ -1,0 +1,16 @@
+description = "Claude 3.5 Sonnet에게 질문하기"
+prompt = """
+Reference Context: User invoked the /claude command.
+Below is the execution result of the Claude CLI:
+
+---
+!{bash -c 'args=(); for arg in "$@"; do if [ "$arg" = "-m" ]; then args+=("--model"); else args+=("$arg"); fi; done; if [ ${#args[@]} -eq 0 ]; then echo "SHOW_USAGE_HELP"; else claude -p "${args[@]}"; fi' -- {{args}}}
+---
+
+Instructions for Gemini:
+1. If the result is "SHOW_USAGE_HELP": politely explain how to use the command.
+   - Basic usage: `/claude "질문 내용"` (Default model)
+   - With model: `/claude -m sonnet "질문 내용"` (Specify model)
+   - Explain that omitting `-m` will use the default model automatically.
+2. If the result is actual content: This is Claude's answer. Present it to the user. You can add "Claude's response:" at the beginning.
+"""

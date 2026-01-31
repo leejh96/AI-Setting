@@ -1,4 +1,4 @@
-# Prompt: API Documentation
+# Command: API Documentation
 
 ## 사용 시점
 
