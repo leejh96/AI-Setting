@@ -165,7 +165,7 @@ function createSymlink(source, target, isDirectory = true) {
  * 3. @.agent/... 참조를 실제 파일 내용으로 변환
  */
 function compileMarkdownFiles(config) {
-  const files = ['GEMINI.md', 'CLAUDE.md'];
+  const files = ['GEMINI.md', 'CLAUDE.md', 'AGENTS.md'];
 
   for (const file of files) {
     const source = path.join(TEMPLATES_DIR, file);
@@ -194,6 +194,13 @@ function compileMarkdownFiles(config) {
         content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .claude/workflows/${w}.md`).join('\n'));
         content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .claude/agents/${a}.md`).join('\n'));
         content = content.replace('{{PROMPTS}}', (config.active_prompts || []).map(p => `- **${p}**: .claude/prompts/${p}.md`).join('\n'));
+      } else if (file === 'AGENTS.md') {
+        // OpenCode 스타일 (Markdown list w/ .opencode)
+        content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .opencode/rules/${r}.md`).join('\n'));
+        content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .opencode/skills/${s}/SKILL.md`).join('\n'));
+        content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .opencode/workflows/${w}.md`).join('\n'));
+        content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .opencode/agents/${a}.md`).join('\n'));
+        content = content.replace('{{PROMPTS}}', (config.active_prompts || []).map(p => `- **${p}**: .opencode/prompts/${p}.md`).join('\n'));
       }
     }
 
@@ -225,11 +232,13 @@ function compileMarkdownFiles(config) {
       let realPath = relativePath
         .replace(/^\.\/\.gemini\//, '.agent/')
         .replace(/^[git ]*\.claude\//, '.agent/')
-        .replace(/^\.claude\//, '.agent/'); // .claude/rules/...
+        .replace(/^\.claude\//, '.agent/') // .claude/rules/...
+        .replace(/^\.opencode\//, '.agent/'); // .opencode/rules/...
 
       // config.yaml 등에서 .claude/ 로 참조하는 경우 대응
       if (realPath.includes('.claude')) realPath = realPath.replace('.claude', '.agent');
       if (realPath.includes('.gemini')) realPath = realPath.replace('.gemini', '.agent');
+      if (realPath.includes('.opencode')) realPath = realPath.replace('.opencode', '.agent');
 
       const absolutePath = path.join(ROOT_DIR, realPath);
 
@@ -413,7 +422,7 @@ function main() {
   ];
 
   // 타겟 디렉토리들
-  const targetDirs = ['.claude', '.gemini'];
+  const targetDirs = ['.claude', '.gemini', '.opencode'];
 
   for (const targetDirName of targetDirs) {
     const targetDirPath = path.join(ROOT_DIR, targetDirName);
@@ -451,7 +460,7 @@ function main() {
 
   console.log('');
 
-  // 2. 파일 컴파일 (CLAUDE.md, GEMINI.md)
+  // 2. 파일 컴파일 (CLAUDE.md, GEMINI.md, AGENTS.md)
   log('📄 컨텍스트 파일 컴파일', 'cyan');
   compileMarkdownFiles(config);
 
@@ -478,6 +487,7 @@ function main() {
   log('  .gemini/          → 선별적 링크 (sync 제외)', 'dim');
   log('  GEMINI.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
   log('  CLAUDE.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
+  log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode)', 'dim');
   log('  COPILOT.md        → 규칙이 통합된 컨텍스트 포인터', 'dim');
   log('  .github/copilot-instructions.md', 'dim');
   console.log('');
