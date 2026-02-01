@@ -52,8 +52,7 @@ diff에서 다음을 추출합니다:
 **임시 파일 패턴(temp-files pattern)**을 사용하여 리뷰 문서를 생성합니다:
 
 ```bash
-SANITIZED_PATH=$(echo "$PWD" | tr '/' '-')
-REPORT_DIR="/tmp/claude/${SANITIZED_PATH}/reviews"
+REPORT_DIR="docs/code-review"
 mkdir -p "$REPORT_DIR"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 FILEPATH="${REPORT_DIR}/code-review-${TIMESTAMP}.md"
@@ -77,6 +76,7 @@ FILEPATH="${REPORT_DIR}/code-review-${TIMESTAMP}.md"
 |----------|---------------|--------|--------|----------|
 | 보안 (Security) | 0 | 0 | 0 | 0 |
 | 코드 품질 (Code Quality) | 0 | 0 | 0 | 0 |
+| 성능 (Performance) | 0 | 0 | 0 | 0 |
 | LLM 코드 스멜 | 0 | 0 | 0 | 0 |
 | 영향도 분석 (Impact Analysis) | 0 | 0 | 0 | 0 |
 | 단순화 (Simplification) | 0 | 0 | 0 | 0 |
@@ -219,6 +219,86 @@ diff가 코드베이스의 다른 부분에 영향을 줄 수 있는지 확인�
 
 **통과 기준**: 모든 에러 핸들러는 로그를 남기거나 다시 던져야(rethrow) 함
 **심각도**: High
+
+---
+
+## 카테고리: 성능 (Performance)
+
+### N+1 쿼리 문제
+
+**diff 확인**:
+- 반복문 내에서 데이터베이스 쿼리 실행
+- ORM에서 관계(relation)를 lazy loading하는 패턴
+- 예: `for item in items: db.query(item.id)`
+
+**통과 기준**: 쿼리가 배치 처리되거나 eager loading 사용
+**심각도**: High
+**제안**: `IN` 쿼리, `join`, 또는 ORM의 `include`/`with` 사용
+
+---
+
+### 비효율적인 알고리즘
+
+**diff 확인**:
+- 중첩 반복문 (O(n²) 복잡도)
+- 불필요한 정렬 또는 필터링
+- 같은 계산의 반복 수행
+
+**통과 기준**: 효율적인 알고리즘 사용 (적절한 시간 복잡도)
+**심각도**: Medium
+**제안**: 해시맵, Set, 메모이제이션 활용
+
+---
+
+### 캐싱 기회
+
+**diff 확인**:
+- 변경되지 않는 데이터를 반복적으로 조회
+- 외부 API 호출을 매번 수행
+- 계산 비용이 높은 작업의 반복
+
+**통과 기준**: 적절한 캐싱 전략 적용
+**심각도**: Medium
+**제안**: Redis, 메모리 캐시, 또는 메모이제이션 사용
+
+---
+
+### 메모리 누수 가능성
+
+**diff 확인**:
+- JavaScript/TypeScript: 클로저 내 대용량 객체 참조
+- Python: 순환 참조, 전역 변수에 대량 데이터 저장
+- 이벤트 리스너 미해제
+
+**통과 기준**: 메모리 관리가 적절함
+**심각도**: High
+**제안**: 적절한 정리(cleanup), weak reference 사용
+
+---
+
+### 불필요한 API/네트워크 호출
+
+**diff 확인**:
+- 동일한 데이터를 여러 번 요청
+- 병렬 처리 가능한 호출을 순차적으로 실행
+- 필요 이상의 데이터 요청
+
+**통과 기준**: API 호출이 최적화됨
+**심각도**: Medium
+**제안**: 배치 요청, 병렬 처리 (`Promise.all`, `asyncio.gather`), 필요한 필드만 요청
+
+---
+
+### 비동기 처리 기회
+
+**diff 확인**:
+- I/O 작업을 동기적으로 실행 (파일 읽기, API 호출)
+- 블로킹 작업으로 인한 성능 저하
+- 병렬 처리 가능한 작업의 순차 실행
+
+**통과 기준**: I/O 작업이 비동기로 처리됨
+**심각도**: Medium
+**제안**: `async/await`, `Promise.all`, 워커 스레드 활용
 
 ---
 
