@@ -35,32 +35,27 @@ active_rules:
 
 # 활성화할 스킬
 active_skills:
+  - api-documentation
   - backend-development
-  - code-review
   - backend-testing
-  - nestjs-expert
+  - code-review
 
 # 활성화할 워크플로우
 active_workflows:
   - feature-development
   - bug-fix
-  - pr-review
   - refactoring
 
 # 활성화할 에이전트 페르소나
 active_agents:
   - senior-backend
-  - code-reviewer
-  - tech-writer
 
 # 활성화할 프롬프트
 active_commands:
-  - commit-message
-  - pr-description
-  - api-documentation
-  - gemini
   - claude
   - copilot
+  - gemini
+
 gemini:
   enabled: true
   # Gemini 특화 설정
@@ -80,6 +75,14 @@ claude:
       - "버그 수정"
       - "테스트 작성"
 
+opencode:
+  enabled: true
+  settings:
+    use_for:
+      - "로컬 LLM 활용"
+      - "보안 민감 작업"
+      - "오프라인 코딩"
+
 copilot:
   enabled: true
   settings:
@@ -95,16 +98,18 @@ sync:
     - "GEMINI.md"
     - "CLAUDE.md"
     - "AGENTS.md"
+    - "opencode.json"
+    - ".mcp.json"
     - ".github/copilot-instructions.md"
   
-  # 심볼릭 링크
-  symlinks:
-    - source: ".agent"
-      target: ".claude"
-    - source: ".agent"
-      target: ".gemini"
-    - source: ".agent"
-      target: ".opencode"
+  # 관리 방식
+  mode: "smart-sync" # Rules=Embedded, Others=Linked
+  
+  # 설정 디렉토리
+  directories:
+    - ".claude"
+    - ".gemini"
+    - ".opencode"
 
   # gitignore에 추가 권장
   gitignore:
@@ -114,7 +119,8 @@ sync:
     - "GEMINI.md"
     - "CLAUDE.md"
     - "AGENTS.md"
-    # .github/는 다른 용도로도 쓰이므로 제외하지 않음
+    - "opencode.json"
+    - ".mcp.json"
 
 # MCP 서버 설정 경로
 mcp:
