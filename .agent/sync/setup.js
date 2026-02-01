@@ -37,6 +37,25 @@ const DIRS = {
 };
 
 /**
+ * YAML 배열 추출 헬퍼 함수
+ * @param {string} content - YAML 파일 내용
+ * @param {string} sectionName - 추출할 섹션 이름 (예: 'active_rules')
+ * @param {Array} defaults - 기본값 배열
+ * @returns {Array} 추출된 배열 또는 기본값
+ */
+function extractYamlArray(content, sectionName, defaults) {
+  const YAML_ARRAY_PATTERN = /- ([\w-]+)/g;
+  const regex = new RegExp(`${sectionName}:\\s*\\n([\\s\\S]*?)(?=\\n[a-z_]+:|$)`);
+  const match = content.match(regex);
+
+  if (!match) return defaults;
+
+  return match[1]
+    .match(YAML_ARRAY_PATTERN)
+    ?.map(m => m.replace('- ', '')) || defaults;
+}
+
+/**
  * 간단한 YAML 파싱 (active_* 배열만 추출)
  */
 function parseConfig() {
@@ -51,50 +70,19 @@ function parseConfig() {
   try {
     if (!fs.existsSync(CONFIG_FILE)) return defaults;
     const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-    const config = {};
 
-    // active_rules 추출
-    const rulesMatch = content.match(/active_rules:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (rulesMatch) {
-      config.active_rules = rulesMatch[1]
-        .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_rules;
-    }
-
-    // active_skills 추출
-    const skillsMatch = content.match(/active_skills:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (skillsMatch) {
-      config.active_skills = skillsMatch[1]
-        .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_skills;
-    }
-
-    // active_workflows 추출
-    const workflowsMatch = content.match(/active_workflows:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (workflowsMatch) {
-      config.active_workflows = workflowsMatch[1]
-        .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_workflows;
-    }
-
-    // active_agents 추출
-    const agentsMatch = content.match(/active_agents:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (agentsMatch) {
-      config.active_agents = agentsMatch[1]
-        .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_agents;
-    }
-
-    // active_commands 추출
-    const commandsMatch = content.match(/active_commands:\s*\n([\s\S]*?)(?=\n[a-z_]+:|$)/);
-    if (commandsMatch) {
-      config.active_commands = commandsMatch[1]
-        .match(/- (\w+-\w+)/g)
-        ?.map(m => m.replace('- ', '')) || defaults.active_commands;
-    }
+    const config = {
+      active_rules: extractYamlArray(content, 'active_rules', defaults.active_rules),
+      active_skills: extractYamlArray(content, 'active_skills', defaults.active_skills),
+      active_workflows: extractYamlArray(content, 'active_workflows', defaults.active_workflows),
+      active_agents: extractYamlArray(content, 'active_agents', defaults.active_agents),
+      active_commands: extractYamlArray(content, 'active_commands', defaults.active_commands),
+    };
 
     return { ...defaults, ...config };
   } catch (e) {
+    log('⚠️  config.yaml 파싱 실패 - 기본 설정 사용', 'yellow');
+    log(`   오류: ${e.message}`, 'dim');
     return defaults;
   }
 }
@@ -307,9 +295,9 @@ function addSection(content, title, emoji, items, itemType) {
     const itemContent = loadContent(filePath);
     if (itemContent) {
       content += `\n---\n\n${itemContent}\n`;
-      console.log(`  ✅ ${itemName}`);
+      log(`  ✅ ${itemName}`, 'green');
     } else {
-      console.log(`  ⚠️  ${itemName} (파일 없음)`);
+      log(`  ⚠️  ${itemName} (파일 없음)`, 'yellow');
     }
   }
 
@@ -324,7 +312,7 @@ function createRootPointer(config) {
   const template = loadContent(templatePath);
 
   if (!template) {
-    console.error('⚠️  템플릿 파일을 찾을 수 없습니다: ' + templatePath);
+    log('⚠️  템플릿 파일을 찾을 수 없습니다: ' + templatePath, 'yellow');
     return;
   }
 
@@ -592,20 +580,6 @@ function main() {
   }
 
   console.log('');
-
-  // 결과 출력
-  log('='.repeat(50), 'dim');
-  console.log('');
-  log('✨ 셋업 완료!', 'green');
-  console.log('');
-  log('생성/업데이트된 파일:', 'cyan');
-  log('  .claude/          → 선별적 링크 (sync 제외)', 'dim');
-  log('  .gemini/          → 선별적 링크 (sync 제외)', 'dim');
-  log('  GEMINI.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
-  log('  CLAUDE.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
-  log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode)', 'dim');
-  log('  COPILOT.md        → 규칙이 통합된 컨텍스트 포인터', 'dim');
-  log('  .github/copilot-instructions.md', 'dim');
 
   // 4. MCP 설정 동기화
   log('🔌 MCP 설정 동기화', 'cyan');

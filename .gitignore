@@ -8,6 +8,17 @@
 !package.json
 !README.md
 
+# Auto-generated files (managed by .agent/sync/setup.js)
+.claude/
+.gemini/
+.opencode/
+GEMINI.md
+CLAUDE.md
+AGENTS.md
+COPILOT.md
+.mcp.json
+opencode.json
+
 # Re-ignore system files
 .DS_Store
 bun.lock
