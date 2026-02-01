@@ -27,8 +27,9 @@ graph TD
     F -->|성공| G[6. 코드 리뷰]
     G --> H{리뷰 통과?}
     H -->|미통과| D
-    H -->|통과| I[7. Develop 머지]
-    I --> J[8. Worktree 제거]
+    H -->|통과| I[7. 문서 업데이트]
+    I --> J[8. Develop 머지]
+    J --> K[9. Worktree 제거]
 ```
 
 ---
@@ -446,7 +447,26 @@ git reset
 
 ---
 
-## 7️⃣ Develop 브랜치 머지 및 푸시
+---
+
+## 7️⃣ 문서 업데이트 (필요시)
+
+> **리팩토링 과정에서 API 구조나 타입이 변경된 경우**
+
+### 체크리스트
+- [ ] API 스펙 변경 시: `api-documentation` 스킬 사용
+- [ ] 타입 정의(DTO) 변경 시: 관련 API 문서 최신화
+- [ ] 환경 설정 리팩토링 시: 설정 파일 및 가이드 업데이트
+
+### API 문서 자동 업데이트
+```bash
+# 명령어 예시
+"api-documentation 스킬을 써서 리팩토링된 코드를 반영해 API 문서를 업데이트해줘."
+```
+
+---
+
+## 8️⃣ Develop 브랜치 머지 및 푸시
 
 > **AI 리뷰 통과 후 로컬에서 develop에 머지하고 원격에 푸시**
 
@@ -511,12 +531,12 @@ git branch -d refactor/user-service-extract
 
 ---
 
-## 8️⃣ Worktree 제거
+## 9️⃣ Worktree 제거
 
 ### 안전한 Worktree 제거
 
 ```bash
-# 1. 메인 프로젝트로 이동 (이미 7단계에서 이동함)
+# 1. 메인 프로젝트로 이동 (이미 8단계에서 이동함)
 cd /path/to/main-project
 
 # 2. Worktree 제거

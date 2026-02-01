@@ -24,8 +24,9 @@ graph TD
     E -->|성공| F[5. 코드 리뷰]
     F --> G{리뷰 통과?}
     G -->|미통과| C
-    G -->|통과| H[6. Develop 머지]
-    H --> I[7. Worktree 제거]
+    G -->|통과| H[6. 문서 업데이트]
+    H --> I[7. Develop 머지]
+    I --> J[8. Worktree 제거]
 ```
 
 ---
@@ -325,7 +326,26 @@ git reset
 
 ---
 
-## 6️⃣ Develop 브랜치 머지 및 푸시
+---
+
+## 6️⃣ 문서 업데이트 (필요시)
+
+> **버그 수정으로 인해 API 스펙이나 환경 설정이 변경된 경우**
+
+### 체크리스트
+- [ ] API 응답/파라미터 변경 시: `api-documentation` 스킬 사용
+- [ ] 환경변수 추가/변경 시: `.env.example` 업데이트
+- [ ] 새로운 설정 추가 시: `README.md` 업데이트
+
+### API 문서 자동 업데이트
+```bash
+# 명령어 예시
+"api-documentation 스킬을 써서 변경된 user 모듈의 API 명세서를 업데이트해줘."
+```
+
+---
+
+## 7️⃣ Develop 브랜치 머지 및 푸시
 
 > **AI 리뷰 통과 후 로컬에서 develop에 머지하고 원격에 푸시**
 
@@ -390,12 +410,12 @@ git branch -d fix/123-login-bug
 
 ---
 
-## 7️⃣ Worktree 제거
+## 8️⃣ Worktree 제거
 
 ### 안전한 Worktree 제거
 
 ```bash
-# 1. 메인 프로젝트로 이동 (이미 6단계에서 이동함)
+# 1. 메인 프로젝트로 이동 (이미 7단계에서 이동함)
 cd /path/to/main-project
 
 # 2. Worktree 제거

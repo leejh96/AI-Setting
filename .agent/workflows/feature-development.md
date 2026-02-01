@@ -345,6 +345,15 @@ git diff --staged 결과를 code-review 스킬로 리뷰해줘
 
 > **코드 리뷰 통과 후 API 엔드포인트를 추가/변경한 경우 반드시 문서화**
 
+### AI 자동 문서화
+
+에이전트에게 `api-documentation` 스킬을 사용하여 자동으로 문서를 생성하도록 요청하세요.
+
+```bash
+# 명령어 예시
+"api-documentation 스킬을 써서 user 모듈의 API 명세서를 작성해줘. 경로는 docs/guides/user-api.md로 해줘."
+```
+
 ### 문서 경로
 
 ```bash
@@ -356,89 +365,18 @@ docs/guides/user-profile-api.md
 docs/guides/payment-api.md
 ```
 
-### API 문서 템플릿
+### 문서화 대상
 
-```markdown
-# [모듈명] API
+- **Request**: Path/Query 파라미터, Body 필드 (타입, 필수/선택, 제약조건)
+- **Response**: 성공 응답 구조, 예시 데이터
+- **Error**: 발생 가능한 에러 코드 및 케이스
+- **Example**: cURL 또는 실제 요청 예시
 
-## 개요
-[모듈의 역할과 주요 기능 설명]
-
----
-
-## 인증
-- **필수**: Bearer Token
-- **권한**: `USER`, `ADMIN` 등
+> 💡 **Tip**: `api-documentation` 스킬은 코드(DTO, Controller)를 분석하여 위 내용을 자동으로 추출하고 표준 포맷으로 작성해줍니다.
 
 ---
 
-## 엔드포인트 목록
 
-### 1. 사용자 프로필 조회
-
-**Endpoint**
-```
-GET /api/v1/users/:id/profile
-```
-
-**Headers**
-```
-Authorization: Bearer {token}
-```
-
-**Path Parameters**
-| 이름 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| id | string | O | 사용자 ID |
-
-**Response (200 OK)**
-```json
-{
-  "id": "user-123",
-  "username": "john_doe",
-  "email": "john@example.com",
-  "profile": {
-    "bio": "Developer",
-    "avatar": "https://..."
-  }
-}
-```
-
-**Error Responses**
-| 코드 | 설명 |
-|------|------|
-| 401 | 인증 실패 |
-| 403 | 권한 없음 |
-| 404 | 사용자 없음 |
-
----
-
-### 2. 프로필 업데이트
-
-**Endpoint**
-```
-PATCH /api/v1/users/:id/profile
-```
-
-**Request Body**
-```json
-{
-  "bio": "Full-stack Developer",
-  "avatar": "https://new-avatar.com/..."
-}
-```
-
-**Response (200 OK)**
-```json
-{
-  "id": "user-123",
-  "profile": {
-    "bio": "Full-stack Developer",
-    "avatar": "https://new-avatar.com/..."
-  },
-  "updatedAt": "2026-02-01T12:00:00Z"
-}
-```
 
 ### 문서 작성 체크리스트
 

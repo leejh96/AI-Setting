@@ -37,51 +37,69 @@ const DIRS = {
 };
 
 /**
- * YAML 배열 추출 헬퍼 함수
- * @param {string} content - YAML 파일 내용
- * @param {string} sectionName - 추출할 섹션 이름 (예: 'active_rules')
- * @param {Array} defaults - 기본값 배열
- * @returns {Array} 추출된 배열 또는 기본값
+ * 디렉토리에서 항목 목록 추출
+ * @param {string} dirPath - 디렉토리 경로
+ * @param {boolean} isDir - 디렉토리만 찾을지 여부 (Skills 등)
+ * @returns {Array} 항목 이름 배열 (확장자 제외)
  */
-function extractYamlArray(content, sectionName, defaults) {
-  const YAML_ARRAY_PATTERN = /- ([\w-]+)/g;
-  const regex = new RegExp(`${sectionName}:\\s*\\n([\\s\\S]*?)(?=\\n[a-z_]+:|$)`);
-  const match = content.match(regex);
+function getListFromDir(dirPath, isDir = false) {
+  if (!fs.existsSync(dirPath)) return [];
 
-  if (!match) return defaults;
+  return fs.readdirSync(dirPath)
+    .filter(file => {
+      // 숨김 파일 제외
+      if (file.startsWith('.')) return false;
 
-  return match[1]
-    .match(YAML_ARRAY_PATTERN)
-    ?.map(m => m.replace('- ', '')) || defaults;
+      const fullPath = path.join(dirPath, file);
+      try {
+        const stats = fs.statSync(fullPath);
+        if (isDir) {
+          // 디렉토리 모드: 디렉토리이면서 내부에 SKILL.md 등이 있는지 확인
+          return stats.isDirectory();
+        } else {
+          // 파일 모드: .md 파일만 대상
+          return stats.isFile() && file.endsWith('.md');
+        }
+      } catch (e) {
+        return false;
+      }
+    })
+    .map(file => path.parse(file).name)
+    .sort(); // 알파벳순 정렬
 }
 
 /**
- * 간단한 YAML 파싱 (active_* 배열만 추출)
+ * 설정 로드 (파일 시스템 우선)
  */
 function parseConfig() {
   const defaults = {
-    active_rules: ['coding-conventions', 'response-style', 'project-context'],
-    active_skills: ['backend-development', 'code-review', 'backend-testing', 'nestjs-expert'],
-    active_workflows: ['feature-development', 'bug-fix', 'pr-review', 'refactoring'],
-    active_agents: ['senior-backend', 'code-reviewer', 'tech-writer'],
-    active_commands: ['commit-message', 'pr-description', 'api-documentation'],
+    active_rules: [],
+    active_skills: [],
+    active_workflows: [],
+    active_agents: [],
+    active_commands: [],
   };
 
   try {
-    if (!fs.existsSync(CONFIG_FILE)) return defaults;
-    const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-
-    const config = {
-      active_rules: extractYamlArray(content, 'active_rules', defaults.active_rules),
-      active_skills: extractYamlArray(content, 'active_skills', defaults.active_skills),
-      active_workflows: extractYamlArray(content, 'active_workflows', defaults.active_workflows),
-      active_agents: extractYamlArray(content, 'active_agents', defaults.active_agents),
-      active_commands: extractYamlArray(content, 'active_commands', defaults.active_commands),
+    // 1. 파일 시스템에서 동적 탐색 (Source of Truth)
+    const dynamicConfig = {
+      active_rules: getListFromDir(DIRS.rules),
+      active_skills: getListFromDir(DIRS.skills, true), // Skills는 디렉토리
+      active_workflows: getListFromDir(DIRS.workflows),
+      active_agents: getListFromDir(DIRS.agents),
+      active_commands: getListFromDir(DIRS.commands),
     };
 
-    return { ...defaults, ...config };
+    // 2. config.yaml에서 추가 설정(ignore 등)이 있다면 읽을 수 있겠지만,
+    // 현재 요구사항은 "삭제할거 삭제했으니 반영해달라"이므로 파일 시스템이 우선.
+
+    // 로깅
+    // console.log('Detected configuration:');
+    // console.log(dynamicConfig);
+
+    return { ...defaults, ...dynamicConfig };
   } catch (e) {
-    log('⚠️  config.yaml 파싱 실패 - 기본 설정 사용', 'yellow');
+    log('⚠️  설정 탐색 실패 - 기본값 사용', 'yellow');
     log(`   오류: ${e.message}`, 'dim');
     return defaults;
   }
@@ -524,7 +542,11 @@ function main() {
     const commandsTargetDir = path.join(targetDirPath, 'commands');
 
     if (fs.existsSync(commandsSourceDir)) {
-      if (!fs.existsSync(commandsTargetDir)) fs.mkdirSync(commandsTargetDir);
+      // 확실한 동기화를 위해 기존 commands 폴더 삭제 후 재생성
+      if (fs.existsSync(commandsTargetDir)) {
+        fs.rmSync(commandsTargetDir, { recursive: true, force: true });
+      }
+      fs.mkdirSync(commandsTargetDir);
 
       const commandFiles = fs.readdirSync(commandsSourceDir);
       let commandCount = 0;

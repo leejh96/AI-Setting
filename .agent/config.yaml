@@ -94,6 +94,7 @@ sync:
   generated_files:
     - "GEMINI.md"
     - "CLAUDE.md"
+    - "AGENTS.md"
     - ".github/copilot-instructions.md"
   
   # 심볼릭 링크
@@ -102,13 +103,17 @@ sync:
       target: ".claude"
     - source: ".agent"
       target: ".gemini"
+    - source: ".agent"
+      target: ".opencode"
 
   # gitignore에 추가 권장
   gitignore:
     - ".claude/"
     - ".gemini/"
+    - ".opencode/"
     - "GEMINI.md"
     - "CLAUDE.md"
+    - "AGENTS.md"
     # .github/는 다른 용도로도 쓰이므로 제외하지 않음
 
 # MCP 서버 설정 경로
