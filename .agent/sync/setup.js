@@ -495,9 +495,10 @@ function main() {
   log('📁 심볼릭 링크 생성 (sync 폴더 제외)', 'cyan');
 
   // 링크할 항목들 (폴더 및 파일)
+  // rules는 컨텍스트 파일에 직접 임베딩되므로 링크 대상에서 제외
   // commands, prompts는 별도 처리 또는 제거됨
   const itemsToLink = [
-    'rules', 'skills', 'workflows', 'agents', 'profiles',
+    'skills', 'workflows', 'agents', 'profiles',
     'config.yaml'
   ];
 
@@ -539,6 +540,25 @@ function main() {
       // 파일이 없으면 무시
       if (e.code !== 'ENOENT') {
         log(`  ⚠️  ${targetDirName}/README.md 제거 실패: ${e.message}`, 'dim');
+      }
+    }
+
+    // rules도 강제 제거 (직접 임베딩되어 더 이상 링크 불필요)
+    const rulesTarget = path.join(targetDirPath, 'rules');
+    try {
+      const stats = fs.lstatSync(rulesTarget);
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        // 실제 디렉토리면 rm -rf (드물지만 안전장치)
+        fs.rmSync(rulesTarget, { recursive: true, force: true });
+      } else {
+        // 심볼릭 링크면 unlink
+        fs.unlinkSync(rulesTarget);
+      }
+      log(`  🗑️  ${targetDirName}/rules 제거됨 (임베딩 대체)`, 'dim');
+    } catch (e) {
+      // 없으면 무시
+      if (e.code !== 'ENOENT') {
+        log(`  ⚠️  ${targetDirName}/rules 제거 실패: ${e.message}`, 'dim');
       }
     }
 
