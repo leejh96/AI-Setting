@@ -185,29 +185,28 @@ function compileMarkdownFiles(config) {
     let content = fs.readFileSync(source, 'utf-8');
 
     // 1. Placeholder 치환 (Config 기반)
+    // 1. Placeholder 치환 (Config 기반)
     if (config) {
-      if (file === 'GEMINI.md') {
-        // Gemini 스타일 (단순 경로 나열, 임베딩 X)
-        content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .gemini/rules/${r}.md`).join('\n'));
-        content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .gemini/skills/${s}/SKILL.md`).join('\n'));
-        content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .gemini/workflows/${w}.md`).join('\n'));
-        content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .gemini/agents/${a}.md`).join('\n'));
-        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .gemini/commands/${p}.md`).join('\n'));
-      } else if (file === 'CLAUDE.md') {
-        // Claude 스타일 (Markdown list)
-        content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .claude/rules/${r}.md`).join('\n'));
-        content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .claude/skills/${s}/SKILL.md`).join('\n'));
-        content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .claude/workflows/${w}.md`).join('\n'));
-        content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .claude/agents/${a}.md`).join('\n'));
-        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .claude/commands/${p}.md`).join('\n'));
-      } else if (file === 'AGENTS.md') {
-        // OpenCode 스타일 (Markdown list w/ .opencode)
-        content = content.replace('{{RULES}}', (config.active_rules || []).map(r => `- **${r}**: .opencode/rules/${r}.md`).join('\n'));
-        content = content.replace('{{SKILLS}}', (config.active_skills || []).map(s => `- **${s}**: .opencode/skills/${s}/SKILL.md`).join('\n'));
-        content = content.replace('{{WORKFLOWS}}', (config.active_workflows || []).map(w => `- **${w}**: .opencode/workflows/${w}.md`).join('\n'));
-        content = content.replace('{{AGENTS}}', (config.active_agents || []).map(a => `- **${a}**: .opencode/agents/${a}.md`).join('\n'));
-        content = content.replace('{{COMMANDS}}', (config.active_commands || []).map(p => `- **${p}**: .opencode/commands/${p}.md`).join('\n'));
-      }
+      // 1) Rules: 내용 직접 임베딩 (@구문 사용 -> Source of Truth인 .agent 사용)
+      // (@로 시작하면 아래 로직에서 파일 내용을 읽어와 교체함)
+      const embedRules = (list) => (list || []).map(r => `### ${r}\n\n@.agent/rules/${r}.md`).join('\n\n');
+      content = content.replace('{{RULES}}', embedRules(config.active_rules));
+
+      // 2) Others: 경로만 링크 (각 환경별 심볼릭 링크 폴더 사용)
+      let linkPrefix = '.agent';
+      if (file === 'GEMINI.md') linkPrefix = '.gemini';
+      else if (file === 'CLAUDE.md') linkPrefix = '.claude';
+      else if (file === 'AGENTS.md') linkPrefix = '.opencode';
+
+      const listSkills = (list) => (list || []).map(s => `- **${s}**: ${linkPrefix}/skills/${s}/SKILL.md`).join('\n');
+      const listWorkflows = (list) => (list || []).map(w => `- **${w}**: ${linkPrefix}/workflows/${w}.md`).join('\n');
+      const listAgents = (list) => (list || []).map(a => `- **${a}**: ${linkPrefix}/agents/${a}.md`).join('\n');
+      const listCommands = (list) => (list || []).map(c => `- **${c}**: ${linkPrefix}/commands/${c}.md`).join('\n');
+
+      content = content.replace('{{SKILLS}}', listSkills(config.active_skills));
+      content = content.replace('{{WORKFLOWS}}', listWorkflows(config.active_workflows));
+      content = content.replace('{{AGENTS}}', listAgents(config.active_agents));
+      content = content.replace('{{COMMANDS}}', listCommands(config.active_commands));
     }
 
     // 헤더 메시지 수정
@@ -499,8 +498,15 @@ function main() {
   // commands, prompts는 별도 처리 또는 제거됨
   const itemsToLink = [
     'rules', 'skills', 'workflows', 'agents', 'profiles',
-    'config.yaml', 'README.md'
+    'config.yaml'
   ];
+
+  // .agent/README.md 삭제 (사용자 요청)
+  const agentReadme = path.join(AGENT_DIR, 'README.md');
+  if (fs.existsSync(agentReadme)) {
+    try { fs.unlinkSync(agentReadme); } catch (e) { }
+  }
+
 
   // 타겟 디렉토리들
   const targetDirs = ['.claude', '.gemini', '.opencode'];
@@ -518,6 +524,22 @@ function main() {
       }
     } else {
       fs.mkdirSync(targetDirPath);
+    }
+
+    // README.md 강제 삭제 (사용자 요청: 폴더 내 README 제거)
+    // fs.existsSync는 Broken Symlink에 대해 false를 반환하므로 lstat을 사용해야 함
+    const readmeTarget = path.join(targetDirPath, 'README.md');
+    try {
+      // 존재 여부 확인 (Broken Symlink 포함)
+      fs.lstatSync(readmeTarget);
+      // 존재하면 삭제
+      fs.unlinkSync(readmeTarget);
+      log(`  🗑️  ${targetDirName}/README.md 제거됨`, 'dim');
+    } catch (e) {
+      // 파일이 없으면 무시
+      if (e.code !== 'ENOENT') {
+        log(`  ⚠️  ${targetDirName}/README.md 제거 실패: ${e.message}`, 'dim');
+      }
     }
 
     // 2) 내부 항목들 개별 링크 생성
