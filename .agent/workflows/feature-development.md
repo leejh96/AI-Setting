@@ -475,11 +475,18 @@ git pull origin develop
 
 ### 2. Feature 브랜치 머지
 
+**옵션 1: 일반 Merge (히스토리 유지)**
 ```bash
-# Feature 브랜치를 develop에 머지
+# 모든 커밋 히스토리 유지
 git merge feature/123-user-profile
+```
+- ✅ 모든 세부 커밋 접근 가능
+- ✅ 큰 기능이나 장기 작업에 적합
+- ❌ develop 히스토리가 복잡해질 수 있음
 
-# 또는 squash merge (커밋 히스토리를 하나로 압축)
+**옵션 2: Squash Merge (히스토리 압축)**
+```bash
+# 여러 커밋을 하나로 압축
 git merge --squash feature/123-user-profile
 git commit -m "feat(user): add user profile feature
 
@@ -491,10 +498,13 @@ git commit -m "feat(user): add user profile feature
 
 Closes #123"
 ```
+- ✅ 깔끔한 develop 히스토리
+- ✅ 작은~중간 크기 기능에 적합
+- ❌ 세부 커밋 히스토리는 feature 브랜치에만 남음
 
-**Merge 전략**:
-- `git merge`: 모든 커밋 히스토리 유지
-- `git merge --squash`: 여러 커밋을 하나로 압축 (권장)
+**선택 가이드**:
+- **Squash 권장**: 일반적인 기능 개발 (1주일 이하)
+- **일반 Merge 권장**: 큰 기능 (여러 주), 각 커밋이 중요한 마일스톤일 때
 
 ### 3. Develop 푸시
 

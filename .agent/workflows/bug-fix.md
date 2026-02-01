@@ -344,11 +344,18 @@ git pull origin develop
 
 ### 2. Fix 브랜치 머지
 
+**옵션 1: 일반 Merge (히스토리 유지)**
 ```bash
-# Fix 브랜치를 develop에 머지
+# 모든 커밋 히스토리 유지
 git merge fix/123-login-bug
+```
+- ✅ 모든 세부 커밋 접근 가능
+- ✅ 복잡한 버그 수정에 적합
+- ❌ develop 히스토리가 복잡해질 수 있음
 
-# 또는 squash merge (권장)
+**옵션 2: Squash Merge (히스토리 압축)**
+```bash
+# 여러 커밋을 하나로 압축
 git merge --squash fix/123-login-bug
 git commit -m "fix(user): handle special characters in password
 
@@ -359,6 +366,13 @@ git commit -m "fix(user): handle special characters in password
 
 Fixes #123"
 ```
+- ✅ 깔끔한 develop 히스토리
+- ✅ 일반적인 버그 수정에 적합
+- ❌ 세부 커밋 히스토리는 fix 브랜치에만 남음
+
+**선택 가이드**:
+- **Squash 권장**: 일반적인 버그 수정
+- **일반 Merge 권장**: 복잡한 버그, 여러 단계 수정이 중요할 때
 
 ### 3. Develop 푸시
 
