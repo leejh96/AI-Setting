@@ -171,14 +171,17 @@ function createSymlink(source, target, isDirectory = true) {
  * 3. @.agent/... 참조를 실제 파일 내용으로 변환
  */
 function compileMarkdownFiles(config) {
-  const files = ['GEMINI.md', 'CLAUDE.md', 'AGENTS.md'];
+  // 템플릿 파일은 template- 프리픽스가 붙어있음
+  const templates = ['template-GEMINI.md', 'template-CLAUDE.md', 'template-AGENTS.md'];
 
-  for (const file of files) {
-    const source = path.join(TEMPLATES_DIR, file);
-    const target = path.join(ROOT_DIR, file);
+  for (const templateFile of templates) {
+    const source = path.join(TEMPLATES_DIR, templateFile);
+    // 출력 파일명은 template- 프리픽스 제거
+    const outputFile = templateFile.replace('template-', '');
+    const target = path.join(ROOT_DIR, outputFile);
 
     if (!fs.existsSync(source)) {
-      log(`  ⚠️  템플릿 없음: ${file}`, 'yellow');
+      log(`  ⚠️  템플릿 없음: ${templateFile}`, 'yellow');
       continue;
     }
 
@@ -194,9 +197,9 @@ function compileMarkdownFiles(config) {
 
       // 2) Others: 경로만 링크 (각 환경별 심볼릭 링크 폴더 사용)
       let linkPrefix = '.agent';
-      if (file === 'GEMINI.md') linkPrefix = '.gemini';
-      else if (file === 'CLAUDE.md') linkPrefix = '.claude';
-      else if (file === 'AGENTS.md') linkPrefix = '.opencode';
+      if (outputFile === 'GEMINI.md') linkPrefix = '.gemini';
+      else if (outputFile === 'CLAUDE.md') linkPrefix = '.claude';
+      else if (outputFile === 'AGENTS.md') linkPrefix = '.opencode';
 
       const listSkills = (list) => (list || []).map(s => `- **${s}**: ${linkPrefix}/skills/${s}/SKILL.md`).join('\n');
       const listWorkflows = (list) => (list || []).map(w => `- **${w}**: ${linkPrefix}/workflows/${w}.md`).join('\n');
@@ -267,7 +270,7 @@ function compileMarkdownFiles(config) {
     // 다시 작성: (기존 map 로직 중복 실행 방지 위해 위에서 처리한 것 사용)
     const finalContent = processedLines.join('\n');
     fs.writeFileSync(target, finalContent);
-    log(`  ✅ ${file} 컴파일 완료`, 'green');
+    log(`  ✅ ${outputFile} 컴파일 완료`, 'green');
   }
 }
 
@@ -325,7 +328,7 @@ function addSection(content, title, emoji, items, itemType) {
  * 루트 포인터 파일 생성 (Copilot.md)
  */
 function createRootPointer(config) {
-  const templatePath = path.join(AGENT_DIR, 'sync/templates/COPILOT.md');
+  const templatePath = path.join(AGENT_DIR, 'sync/templates/template-COPILOT.md');
   const template = loadContent(templatePath);
 
   if (!template) {
@@ -471,6 +474,37 @@ function syncMcpSettings() {
 
   fs.writeFileSync(geminiConfigPath, JSON.stringify(geminiConfig, null, 2));
   log('  ✅ Gemini MCP 설정 (.gemini/settings.json)', 'green');
+
+  // 4. Codex (.codex/config.toml)
+  // Codex uses TOML format with [mcp_servers.xxx] tables
+  const codexDir = path.join(ROOT_DIR, '.codex');
+  if (!fs.existsSync(codexDir)) {
+    fs.mkdirSync(codexDir, { recursive: true });
+  }
+
+  const codexConfigPath = path.join(codexDir, 'config.toml');
+  let tomlContent = '# Codex MCP Configuration\n# Auto-generated from .agent/mcp/servers.json\n\n';
+
+  Object.entries(mcpServers).forEach(([name, config]) => {
+    // TOML 키에 하이픈이 포함된 경우 따옴표로 감싸야 함
+    const tomlKey = name.includes('-') ? `"${name}"` : name;
+    tomlContent += `[mcp_servers.${tomlKey}]\n`;
+    tomlContent += `command = "${config.command}"\n`;
+    if (config.args && config.args.length > 0) {
+      const argsStr = config.args.map(a => `"${a}"`).join(', ');
+      tomlContent += `args = [${argsStr}]\n`;
+    }
+    if (config.env && Object.keys(config.env).length > 0) {
+      tomlContent += `\n[mcp_servers.${tomlKey}.env]\n`;
+      Object.entries(config.env).forEach(([key, value]) => {
+        tomlContent += `${key} = "${value}"\n`;
+      });
+    }
+    tomlContent += '\n';
+  });
+
+  fs.writeFileSync(codexConfigPath, tomlContent);
+  log('  ✅ Codex MCP 설정 (.codex/config.toml)', 'green');
 }
 
 /**
@@ -510,7 +544,7 @@ function main() {
 
 
   // 타겟 디렉토리들
-  const targetDirs = ['.claude', '.gemini', '.opencode'];
+  const targetDirs = ['.claude', '.gemini', '.opencode', '.codex'];
 
   for (const targetDirName of targetDirs) {
     const targetDirPath = path.join(ROOT_DIR, targetDirName);
@@ -655,6 +689,37 @@ function main() {
   }
 
   console.log('');
+
+  // 5. Codex용 .agents/skills 심볼릭 링크 생성
+  log('🔗 Codex Skills 링크 생성', 'cyan');
+  const agentsDir = path.join(ROOT_DIR, '.agents');
+  const agentsSkillsLink = path.join(agentsDir, 'skills');
+  const agentSkillsSource = path.join(AGENT_DIR, 'skills');
+
+  if (fs.existsSync(agentSkillsSource)) {
+    // .agents 폴더 생성
+    if (!fs.existsSync(agentsDir)) {
+      fs.mkdirSync(agentsDir, { recursive: true });
+    }
+
+    // 기존 링크 제거 후 재생성
+    try {
+      const linkStats = fs.lstatSync(agentsSkillsLink);
+      if (linkStats.isSymbolicLink() || linkStats.isDirectory()) {
+        fs.unlinkSync(agentsSkillsLink);
+      }
+    } catch (e) {
+      // 파일이 존재하지 않으면 무시
+    }
+
+    if (createSymlink(agentSkillsSource, agentsSkillsLink, true)) {
+      log('  ✅ .agents/skills → .agent/skills', 'green');
+    }
+  } else {
+    log('  ⚠️  .agent/skills 폴더가 없습니다 - 건너뜀', 'yellow');
+  }
+
+  console.log('');
   log('=.'.repeat(25), 'dim');
   console.log('');
   log('✨ 셋업 완료!', 'green');
@@ -662,13 +727,16 @@ function main() {
   log('생성/업데이트된 파일:', 'cyan');
   log('  .claude/          → 선별적 링크 (sync 제외)', 'dim');
   log('  .gemini/          → 선별적 링크 (sync 제외)', 'dim');
+  log('  .codex/           → MCP 설정 (config.toml)', 'dim');
+  log('  .agents/skills    → Codex Skills 링크', 'dim');
   log('  GEMINI.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
   log('  CLAUDE.md         → 규칙이 통합된 컨텍스트 파일', 'dim');
-  log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode)', 'dim');
+  log('  AGENTS.md         → 규칙이 통합된 컨텍스트 파일 (OpenCode/Codex)', 'dim');
   log('  COPILOT.md        → 규칙이 통합된 컨텍스트 포인터', 'dim');
   log('  .mcp.json         → Claude용 MCP 설정', 'dim');
   log('  opencode.json     → OpenCode용 MCP 설정', 'dim');
   log('  .gemini/settings.json → Gemini용 MCP 설정', 'dim');
+  log('  .codex/config.toml    → Codex용 MCP 설정', 'dim');
   log('  .github/copilot-instructions.md', 'dim');
 }
 
