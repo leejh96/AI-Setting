@@ -86,6 +86,3 @@ npm run setup:codex
 *   **MCP Integration**: `.agent/mcp/servers.json`을 SSOT로 사용하여 모든 에이전트의 도구 설정을 자동 동기화합니다.
 *   **Rules Management**: 프로젝트별 컨텍스트와 코딩 규칙을 한 곳에서 정의하고 모든 에이전트에게 전파합니다.
 
-<br>
-
-이제 어떤 AI 도구를 사용하든 정의된 규칙에 따라 일관된 코딩 경험을 누리세요.
