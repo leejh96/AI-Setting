@@ -49,7 +49,6 @@ project-root/
 │   ├── prisma/           # Prisma 스키마
 │   └── main.ts
 ├── test/                 # E2E 테스트
-├── .agent/               # LLM 설정 (이 폴더)
 ├── docker-compose.yml
 └── package.json
 ```

@@ -1,7 +1,6 @@
 ---
 name: backend-development
 description: 최신 기술(Node.js, Python, Go, Rust), 프레임워크(NestJS, FastAPI, Django), 데이터베이스(PostgreSQL, MySQL, MongoDB, Redis), API(REST, GraphQL, gRPC), 인증(OAuth 2.1, JWT), 테스트 전략, 보안 모범 사례(OWASP Top 10), 성능 최적화, 확장성 패턴(마이크로서비스, 캐싱, 샤딩), DevOps 관행(Docker, Kubernetes, CI/CD) 및 모니터링을 사용하여 견고한 백엔드 시스템을 구축합니다. API 설계, 인증 구현, 데이터베이스 쿼리 최적화, CI/CD 파이프라인 설정, 보안 취약점 처리, 마이크로서비스 구축 또는 프로덕션 준비가 된 백엔드 시스템 개발 시 사용합니다.
-license: MIT
 ---
 
 # 백엔드 개발 스킬

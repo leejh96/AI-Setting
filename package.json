@@ -4,7 +4,12 @@
   "description": "통합 AI 에이전트 설정 관리 저장소 - Claude, Gemini, Copilot 등 모든 AI 코딩 어시스턴트를 위한 단일 진실 공급원(SSOT)",
   "main": "index.js",
   "scripts": {
-    "agent:setup": "node .agent/sync/setup.js"
+    "setup:all": "node .agent/sync/setup.js all",
+    "setup:copilot": "node .agent/sync/setup.js copilot",
+    "setup:claude": "node .agent/sync/setup.js claude",
+    "setup:gemini": "node .agent/sync/setup.js gemini",
+    "setup:opencode": "node .agent/sync/setup.js opencode",
+    "setup:codex": "node .agent/sync/setup.js codex"
   },
   "keywords": [
     "ai",

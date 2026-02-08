@@ -2,7 +2,7 @@
 
 **모든 AI 에이전트를 위한 통합 설정 및 컨텍스트 관리 저장소**
 
-이 프로젝트는 다양한 AI 코딩 어시스턴트(Claude, Gemini, Copilot 등)가 동일한 프로젝트 컨텍스트, 코딩 컨벤션, 워크플로우를 공유할 수 있도록 설정을 중앙화하고 동기화하는 도구입니다.
+이 프로젝트는 다양한 AI 코딩 어시스턴트(Claude, Gemini, Copilot, OpenCode, Codex 등)가 동일한 프로젝트 컨텍스트, 코딩 컨벤션, 워크플로우를 공유할 수 있도록 설정을 중앙화하고 동기화하는 도구입니다.
 
 ## 🎯 목적
 
@@ -10,29 +10,46 @@
 - **동일한 페르소나**: 시니어 풀스택 엔지니어로서의 행동 지침
 - **일관된 규칙**: 코딩 스타일, 프로젝트 구조, 기술 스택 준수
 - **공유된 지식**: 스킬(Skills)과 워크플로우(Workflows)의 재사용
+- **자동화된 설정**: 에이전트별 설정 파일 및 심볼릭 링크 자동 생성
 
 ## 📂 프로젝트 구조
 
-핵심 설정은 `.agent/` 디렉토리 내에서 관리됩니다.
+핵심 설정은 `.agent/` 디렉토리 내에서 '단일 진실 공급원(SSOT)'으로 관리됩니다.
 
 ```bash
 .agent/
-├── rules/        # 정적 규칙 (코딩 컨벤션, 응답 스타일, 프로젝트 컨텍스트)
+├── rules/        # 정적 규칙 (코딩 컨벤션, 응답 스타일, 프로젝트 컨텍스트 등)
 ├── skills/       # 에이전트가 활용할 전문 스킬 (백엔드, 테스트, 리뷰 등)
 ├── workflows/    # 표준 작업 절차 (기능 개발, 버그 수정 등)
-├── agents/       # 역할별 페르소나 정의
-└── sync/         # 설정 동기화 및 심볼릭 링크 생성 스크립트
+├── agents/       # 역할별 페르소나 정의 (시니어 백엔드 등)
+├── commands/     # AI에게 내릴 수 있는 프롬프트 명령어
+├── mcp/          # MCP(Model Context Protocol) 서버 설정
+└── sync/         # 설정 동기화 스크립트
 ```
 
 ## 🚀 시작하기
 
-### 1. 설정 동기화
-
-이 스크립트는 `.agent`의 설정을 각 AI 도구가 인식할 수 있는 파일(예: `.gemini/`, `.claude/`)로 연결하거나 생성합니다.
+### 1. 설정 동기화 (Setup)
+원하는 AI 에이전트 환경에 맞춰 설정을 동기화합니다. 사용하지 않는 에이전트 설정은 자동으로 정리됩니다.
 
 ```bash
-# 최초 설정 및 심볼릭 링크/파일 생성
-npm run agent:setup
+# 모든 에이전트 설정 동기화 (기본값)
+npm run setup:all
+
+# GitHub Copilot 전용 설정 (나머지 에이전트 설정 제거)
+npm run setup:copilot
+
+# Claude 전용 설정
+npm run setup:claude
+
+# Gemini 전용 설정
+npm run setup:gemini
+
+# OpenCode 전용 설정
+npm run setup:opencode
+
+# Codex 전용 설정
+npm run setup:codex
 ```
 
 ### 2. 새 프로젝트 설정 가이드
@@ -40,13 +57,7 @@ npm run agent:setup
 새로운 프로젝트에 이 설정을 적용할 때, 다음 파일들을 순서대로 수정하세요.
 
 #### 1단계: 필수 수정 (Must Change)
-가장 먼저 **`.agent/config.yaml`** 파일을 열어 프로젝트 정체성을 정의합니다.
-- **`project`**: 프로젝트 이름과 설명 수정
-- **`stack`**: 기술 스택(NestJS/FastAPI, MySQL/PostgreSQL 등) 정의
-- **`active_*`**: 사용할 규칙, 스킬, 워크플로우 활성화/비활성화
-    > 이 설정에 따라 Copilot 지침과 AI 컨텍스트 파일이 자동 생성됩니다.
-
-그 다음 **`.agent/rules/project-context.md`**를 수정합니다.
+**`.agent/rules/project-context.md`**를 수정하여 프로젝트의 정체성을 정의합니다.
 - **프로젝트 개요**: 비즈니스 로직 설명
 - **기술 스택**: 구체적인 버전 및 라이브러리
 - **프로젝트 구조**: 폴더 구조 설명
@@ -56,27 +67,25 @@ npm run agent:setup
 팀의 컨벤션에 맞게 조정이 필요한 경우 수정합니다.
 - **`.agent/rules/coding-conventions.md`**: 네이밍 규칙, 파일 구조 등
 - **`.agent/rules/response-style.md`**: AI 응답 톤앤매너
+- **`.agent/mcp/servers.json`**: 사용할 MCP 서버 목록 정의
 
-### 3. 설정 적용
+### 3. 설정 적용 확인
 
-파일 수정 후 반드시 다음 명령어를 실행하여 변경 사항을 모든 에이전트에 전파하세요.
-
-```bash
-npm run agent:setup
-```
-
-이 명령어는 `config.yaml`의 설정을 기반으로:
-- `.github/copilot-instructions.md` 생성
-- `CLAUDE.md`, `GEMINI.md` 컨텍스트 파일 업데이트
-- 필요한 심볼릭 링크 연결
-
-을 자동으로 수행합니다.
+`setup` 명령어를 실행하면 다음과 같은 파일들이 자동 생성되거나 업데이트됩니다:
+- **Copilot**: `.github/` (instructions, agents, prompts 등), `.vscode/mcp.json`
+- **Claude**: `.claude/`, `CLAUDE.md`, `.mcp.json`
+- **Gemini**: `.gemini/`, `GEMINI.md`
+- **OpenCode**: `.opencode/`, `AGENTS.md`, `opencode.json`
+- **Codex**: `.codex/`, `AGENTS.md` (Prefix: .codex), `.codex/config.toml`
 
 ## ✨ 주요 기능
 
-*   **Central Config**: `config.yaml` 하나로 모든 AI 에이전트의 페르소나와 지식을 제어합니다.
-*   **Rules Management**: 프로젝트별 컨텍스트와 코딩 규칙을 한 곳에서 정의합니다.
-*   **Skill System**: AI에게 특정 도메인(NestJS, 테스팅 등)의 전문 지식을 주입합니다.
-*   **MCP Integration**: `.agent/mcp/servers.json`을 단일 진실 공급원(SSOT)으로 사용하여 모든 에이전트의 도구 설정을 자동 동기화합니다.
+*   **Integrated Setup**: 한 번의 명령어로 모든 AI 도구의 설정을 최신 상태로 유지합니다.
+*   **Mode-Specific Builds**: `setup:copilot`, `setup:claude` 등 필요한 환경만 구축하고 나머지는 제거하여 프로젝트를 깔끔하게 유지합니다.
+*   **Dynamic Linking**: 각 에이전트가 참조하는 파일 경로(Prefix)를 자동으로 조정하여 링크 깨짐을 방지합니다.
+*   **MCP Integration**: `.agent/mcp/servers.json`을 SSOT로 사용하여 모든 에이전트의 도구 설정을 자동 동기화합니다.
+*   **Rules Management**: 프로젝트별 컨텍스트와 코딩 규칙을 한 곳에서 정의하고 모든 에이전트에게 전파합니다.
 
-4.  이제 어떤 AI 오토를 사용하든 정의된 규칙에 따라 코딩을 도와줍니다.
+<br>
+
+이제 어떤 AI 도구를 사용하든 정의된 규칙에 따라 일관된 코딩 경험을 누리세요.
