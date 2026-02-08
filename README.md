@@ -74,7 +74,7 @@ npm run setup:codex
 `setup` 명령어를 실행하면 다음과 같은 파일들이 자동 생성되거나 업데이트됩니다:
 - **Copilot**: `.github/` (instructions, agents, prompts 등), `.vscode/mcp.json`
 - **Claude**: `.claude/`, `CLAUDE.md`, `.mcp.json`
-- **Gemini**: `.gemini/`, `GEMINI.md`
+- **Gemini**: `.gemini/`, `AGENTS.md` (Prefix: .gemini), `.gemini/settings.json` (Context 설정 포함)
 - **OpenCode**: `.opencode/`, `AGENTS.md`, `opencode.json`
 - **Codex**: `.codex/`, `AGENTS.md` (Prefix: .codex), `.codex/config.toml`
 

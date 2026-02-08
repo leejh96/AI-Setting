@@ -45,7 +45,7 @@ const MODES = {
   },
   gemini: {
     targets: ['.gemini'],
-    contextFiles: ['GEMINI.md'],
+    contextFiles: ['AGENTS.md'],
     mcpFiles: ['.gemini/settings.json'],
     prefix: '.gemini',
     agentConfig: { type: 'link', ext: '.md' },
@@ -309,7 +309,12 @@ function setupMcp(config) {
 
   // 4. Gemini & Codex (Internal)
   if (config.targets.includes('.gemini') && fs.existsSync(path.join(ROOT, '.gemini'))) {
-    const p = path.join(ROOT, '.gemini', 'settings.json'); let g = {}; try { g = JSON.parse(readFile(p)); } catch (e) { } g.mcpServers = mcpServerConfig; writeFile(p, JSON.stringify(g, null, 2));
+    const p = path.join(ROOT, '.gemini', 'settings.json');
+    let g = {};
+    try { g = JSON.parse(readFile(p)); } catch (e) { }
+    g.mcpServers = mcpServerConfig;
+    g.context = { fileName: 'AGENTS.md' };
+    writeFile(p, JSON.stringify(g, null, 2));
   }
   if (config.targets.includes('.codex') && fs.existsSync(path.join(ROOT, '.codex'))) {
     let t = '# Auto-generated\n\n';
