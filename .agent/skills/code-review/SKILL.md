@@ -1,7 +1,6 @@
 ---
 name: code-review
 description: Diff(변경분)에 대한 포괄적인 코드 리뷰를 수행합니다. 변경된 코드에서 보안 취약점, 안티 패턴, 품질 문제를 분석합니다. 파일 경로에서 도메인(프론트엔드/백엔드)을 자동으로 감지합니다.
-allowed-tools: Bash, Read, Edit, Write, Grep, Glob, Task
 ---
 
 # 코드 리뷰 스킬
