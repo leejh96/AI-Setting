@@ -22,22 +22,18 @@ Apple Silicon Mac에서는 `/opt/homebrew/bin/gitleaks`를 우선 사용하며,
 
 ## 전역 등록
 
-기존 전역 설정과 각 프로젝트의 실행 가능한 Git 훅을 먼저 확인합니다.
-`core.hooksPath`를 지정하면 기존 `.git/hooks` 대신 이 폴더의 훅을 실행합니다.
-다른 훅이 있다면 필요한 훅을 연결하는 방식을 결정한 뒤 등록하세요.
-기존 설정 파일 전체를 복구할 수 있게 준비한 다음, 저장소 루트에서 실행합니다.
+운영체제별 준비·등록 명령·실제 커밋 검증은 아래 문서를 따릅니다.
 
-```sh
-chmod +x hooks/commit-secret-checker/pre-commit
-git config --global core.hooksPath "$(pwd)/hooks/commit-secret-checker"
-git config --show-origin --get core.hooksPath
-```
+- [macOS 설정 안내](README.macos.md)
+- [Windows 설정 안내](README.windows.md)
+
+기존 전역 설정 파일 전체와 각 프로젝트의 실행 가능한 훅을 먼저 확인·백업합니다.
+`core.hooksPath`를 지정하면 기존 `.git/hooks` 대신 지정한 폴더의 훅을 실행합니다.
+다른 훅이 있으면 필요한 훅을 연결하는 방식을 결정한 뒤 등록하세요.
 
 설정한 절대 경로의 저장소를 이동하거나 삭제하면 등록 경로도 갱신해야 합니다.
 프로젝트의 로컬 `core.hooksPath` 또는 명령별 설정이 전역 값을 덮어쓰면 이 훅이 적용되지 않습니다.
 Git 전역 등록은 즉시 적용되며 AI 앱의 훅 승인은 필요하지 않습니다.
-
-새 기기에서는 저장소를 받은 뒤 Node.js·Gitleaks를 준비하고 위 등록 명령을 실행합니다.
 저장소를 clone하는 것만으로 전역 Git 설정이 적용되지는 않습니다.
 
 ## 동작

@@ -2,6 +2,7 @@
 
 API 키나 토큰을 실수로 채팅에 붙여 넣었을 때 사용자 입력을 Gitleaks로 검사하는 로컬 훅입니다.
 Codex는 모델 전송 전에 요청을 차단하며, Antigravity는 모델에 보안 경고를 주입합니다.
+Antigravity의 경고 주입은 모델 전송을 차단하지 않으므로 모델이 비밀값을 받지 않는다고 보장할 수 없습니다.
 Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 유효성 확인 요청은 하지 않습니다.
 
 ## 입력과 차단 동작
@@ -37,65 +38,18 @@ hooks/prompt-secret-checker/
 두 도구(Codex, Gemini/Antigravity)가 같은 공통 검사 함수와 설정을 사용합니다.
 `gitleaks.toml`은 Gitleaks의 기본 탐지 규칙을 불러오는 공통 설정입니다.
 
-## 준비
+## 설치와 설정
+
+운영체제별 설치·설정 생성·전역 등록·재시작 절차는 아래 문서를 따릅니다.
+
+- [macOS 설정 안내](README.macos.md)
+- [Windows 설정 안내](README.windows.md)
 
 Node.js 22 이상과 `stdin` 명령을 지원하는 Gitleaks가 필요합니다. Gitleaks 8.30.1로 검증했습니다.
 공식 설치 방법은 [Gitleaks 프로젝트](https://github.com/gitleaks/gitleaks#installing)를 참고하세요.
-
-macOS에서는 다음과 같이 설치할 수 있습니다.
-
-```bash
-brew install gitleaks
-node --version
-gitleaks version
-```
-
-Windows와 Linux에서는 공식 릴리스의 실행 파일이나 해당 운영체제의 설치 방법을 사용하세요.
-에이전트를 실행하는 환경의 `PATH`에서 `gitleaks`를 찾을 수 있어야 합니다.
-다른 위치에 설치했다면 실행 전에 `AI_SETTING_GITLEAKS_BIN` 환경변수로 실행 파일의 절대 경로를 지정할 수 있습니다.
-비밀값을 담는 환경변수는 아닙니다.
-
-## Codex 설정 생성과 적용
-
-저장소 루트에서 실행하면 현재 기기의 Node와 훅 스크립트 절대 경로가 들어간 JSON 설정을 출력합니다.
-저장소를 이동하거나 Node 설치 경로를 바꾼 경우 다시 생성하세요.
-
-```bash
-node hooks/prompt-secret-checker/codex/codex-secret-checker.mjs --print-config
-```
-
-출력된 설정은 다음 위치 중 하나에 등록합니다.
-
-- 전역 적용: `~/.codex/hooks.json`
-- 특정 프로젝트에만 적용: 그 프로젝트의 `.codex/hooks.json`
-
-기존 설정이 있다면 변경 직전 파일 전체를 복구할 수 있도록 백업하고,
-기존 이벤트와 핸들러를 유지하면서 `hooks.UserPromptSubmit` 배열에 새 핸들러 그룹을 추가하세요.
-같은 검사를 전역·프로젝트 양쪽에 중복 등록하지 마세요. 이미 `config.toml`의 인라인 훅을 사용한다면 해당 구성과의 중복도 확인하세요.
-
-저장소에 파일을 추가하거나 JSON을 생성하는 것만으로 훅이 활성화되지는 않습니다.
-Codex를 새로 시작한 뒤 CLI의 `/hooks`에서 이 훅의 명령·출처를 검토하고 신뢰 등록하세요.
-프로젝트에 적용했다면 프로젝트 자체도 신뢰되어야 합니다. 훅 정의가 변경되면 다시 검토가 필요합니다.
-검토 없이 훅을 실행하는 옵션을 일상 설정에 추가하지 마세요.
-
-현재 기기의 경로가 들어간 생성 설정은 이 저장소에 커밋하지 않습니다.
-
-## Antigravity 설정 생성과 적용
-
-저장소 루트에서 다음 명령을 실행하면 Antigravity 설정에 등록할 JSON을 출력합니다.
-
-```bash
-node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
-```
-
-출력된 설정은 다음 위치에 등록합니다:
-
-- 전역 적용: `~/.gemini/config/hooks.json`
-- 특정 프로젝트에만 적용: 그 프로젝트의 `.agents/hooks.json`
-
-출력된 JSON을 위 파일에 등록합니다.
-모델 호출 전(`PreInvocation`) 세션 대화 기록(`transcript.jsonl`)의 최신 사용자 입력에 시크릿 후보가 있으면, 모델에 보안 경고 메시지(`ephemeralMessage`)를 주입하여 작업을 즉시 중단하도록 유도합니다.
-경고 주입은 모델 전송을 차단하지 않으므로, Antigravity에서는 모델이 비밀값을 받지 않는다고 보장할 수 없습니다.
+Linux에서는 공식 릴리스나 해당 운영체제의 설치 방법을 사용하며, 실행은 아직 검증하지 않았습니다.
+검사기는 PATH 또는 `AI_SETTING_GITLEAKS_BIN`으로 지정한 절대 경로에서 Gitleaks를 찾습니다.
+이 환경변수는 비밀값을 담는 용도가 아닙니다.
 
 ## 검증
 
@@ -107,7 +61,7 @@ node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
 실제 Codex 적용 후에는 정상 문장의 통과와 가상 토큰 입력의 차단을 새 세션에서 확인하세요.
 검사기 경로를 존재하지 않는 경로로 바꾼 세션에서도 요청이 차단되는지 확인한 뒤 원래 경로로 복구하세요.
 
-Windows·Linux에서의 훅 실행은 아직 검증하지 않았습니다.
+Windows의 실제 적용·검증 기록은 [Windows 설정 안내](README.windows.md#프롬프트-훅-검증-기록)에 기록했습니다.
 
 ## 적용 범위와 한계
 

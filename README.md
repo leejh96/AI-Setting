@@ -8,10 +8,10 @@
 ```text
 ai-setting/
 ├── AGENTS.md     # 전역 공통 지침의 원본
-├── README.md     # 저장소 목적과 사용 방법
+├── README.md     # 저장소 목적과 공통 안내
 ├── hooks/
-│   ├── prompt-secret-checker/  # Codex·Antigravity 사용자 입력 검사
-│   └── commit-secret-checker/  # 전역 Git 커밋 시크릿 검사
+│   ├── prompt-secret-checker/  # 사용자 입력 검사와 OS별 README
+│   └── commit-secret-checker/  # Git 커밋 검사와 OS별 README
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -35,30 +35,36 @@ Codex·Antigravity·직접 터미널 실행에 같은 검사가 적용되며, �
 
 ## 새 기기에서 사용하기
 
-Git과 이 private 저장소에 접근할 수 있는 GitHub 인증을 준비한 뒤, 원하는 작업 폴더에서 실행합니다.
+Git과 이 private 저장소에 접근할 GitHub 인증을 준비한 뒤, 원하는 작업 폴더에서 실행합니다.
 
-```powershell
+```sh
 git clone https://github.com/leejh96/AI-Setting.git ai-setting
 cd ai-setting
 ```
 
-사용 중인 도구가 실제로 읽는 전역 지침 경로를 확인하고, 기존 파일이 있으면 백업한 뒤 이 저장소의 `AGENTS.md` 내용을 반영합니다.
-파일명과 적용 경로는 해당 도구가 지원하는 방식에 맞춥니다. 이후 도구에서 지침을 다시 불러오거나 새 세션을 시작하고, 반영된 내용을 확인합니다.
+사용 중인 도구가 읽는 전역 지침 경로를 확인하고 기존 파일 전체를 백업한 뒤,
+이 저장소의 `AGENTS.md`를 도구가 지원하는 파일명과 경로에 반영합니다. 새 세션에서 반영된 지침을 확인합니다.
+훅 설치와 검증 절차는 각 훅 폴더의 운영체제별 README를 따릅니다.
 
-현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침이 자동 갱신되지는 않습니다.
+| 훅 | macOS | Windows |
+| --- | --- | --- |
+| 프롬프트 시크릿 검사 | [설정 안내](hooks/prompt-secret-checker/README.macos.md) | [설정 안내](hooks/prompt-secret-checker/README.windows.md) |
+| Git 커밋 시크릿 검사 | [설정 안내](hooks/commit-secret-checker/README.macos.md) | [설정 안내](hooks/commit-secret-checker/README.windows.md) |
+
+현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침과 훅이 자동 적용되지는 않습니다.
 
 ## 지침 갱신하기
 
 수정 전에는 작업 중인 변경을 확인하고 최신 내용을 받습니다.
 
-```powershell
+```sh
 git status
 git pull --ff-only
 ```
 
 `AGENTS.md`를 수정하고 변경 내용을 검토한 뒤 커밋·푸시합니다.
 
-```powershell
+```sh
 git diff -- AGENTS.md
 git add AGENTS.md
 git commit -m "Update agent guidelines"
