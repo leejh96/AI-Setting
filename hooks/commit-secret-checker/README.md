@@ -1,0 +1,68 @@
+# 전역 Git 커밋 시크릿 검사
+
+Git의 `pre-commit` 훅에서 커밋할 파일을 Gitleaks로 검사합니다.
+Codex·Antigravity·직접 터미널 실행 모두 같은 훅을 사용합니다.
+시크릿 후보가 있거나 검사를 완료하지 못하면 커밋을 차단합니다.
+원문 명령·파일 내용·시크릿 값·검사 로그를 차단 메시지에 포함하지 않습니다.
+
+## 파일 구성
+
+```text
+hooks/commit-secret-checker/
+├── pre-commit                # Git이 실행하는 진입점
+├── commit-secret-checker.mjs # 실제 커밋 대상 인덱스 검사
+├── gitleaks.toml             # 커밋 검사 전용 규칙
+└── README.md
+```
+
+Git을 실행하는 환경의 `PATH`에서 Node.js를 찾을 수 있어야 합니다.
+Apple Silicon Mac에서는 `/opt/homebrew/bin/gitleaks`를 우선 사용하며,
+다른 환경에서는 `PATH`에서 Gitleaks를 찾습니다. `AI_SETTING_GITLEAKS_BIN`으로 검사기 경로를 지정할 수 있습니다.
+프롬프트 검사와 커밋 검사는 서로 다른 `gitleaks.toml`을 사용하며 자동 동기화하지 않습니다.
+
+## 전역 등록
+
+기존 전역 설정과 각 프로젝트의 실행 가능한 Git 훅을 먼저 확인합니다.
+`core.hooksPath`를 지정하면 기존 `.git/hooks` 대신 이 폴더의 훅을 실행합니다.
+다른 훅이 있다면 필요한 훅을 연결하는 방식을 결정한 뒤 등록하세요.
+기존 설정 파일 전체를 복구할 수 있게 준비한 다음, 저장소 루트에서 실행합니다.
+
+```sh
+chmod +x hooks/commit-secret-checker/pre-commit
+git config --global core.hooksPath "$(pwd)/hooks/commit-secret-checker"
+git config --show-origin --get core.hooksPath
+```
+
+설정한 절대 경로의 저장소를 이동하거나 삭제하면 등록 경로도 갱신해야 합니다.
+프로젝트의 로컬 `core.hooksPath` 또는 명령별 설정이 전역 값을 덮어쓰면 이 훅이 적용되지 않습니다.
+Git 전역 등록은 즉시 적용되며 AI 앱의 훅 승인은 필요하지 않습니다.
+
+새 기기에서는 저장소를 받은 뒤 Node.js·Gitleaks를 준비하고 위 등록 명령을 실행합니다.
+저장소를 clone하는 것만으로 전역 Git 설정이 적용되지는 않습니다.
+
+## 동작
+
+```sh
+git add README.md && git commit -m 'docs: 안내 수정'
+```
+
+add 완료 → Git이 실제 커밋 대상 인덱스를 준비 → 훅 검사 → 통과 시 커밋 순서입니다.
+`cd`, `git -C`, Git 별칭, 스크립트 내부 커밋도 Git이 `pre-commit`을 실행하면 같은 검사를 받습니다.
+`git commit -a`와 파일 지정 커밋은 Git이 준비한 커밋 대상 인덱스를 검사합니다.
+커밋 차단 시 이미 실행된 add나 앞선 커밋은 되돌리지 않습니다.
+셸의 `&&`, `||`, `;`는 원래 규칙대로 동작하므로, 실패 후 실행을 막으려면 `&&`로 연결하세요.
+명령의 자동 승인 여부는 각 AI 도구의 기존 승인 설정을 따릅니다.
+
+## 검사 범위와 한계
+
+추가·변경한 파일의 커밋 대상 전체 내용을 검사합니다. 수정한 파일의 기존 시크릿도 차단될 수 있습니다.
+변경하지 않은 파일·커밋 이력·삭제 파일·서브모듈 커밋·커밋 메시지는 검사하지 않습니다.
+각 커밋의 검사는 총 10초이며 한 파일이 10MiB 읽기 버퍼를 초과해도 차단합니다.
+프로젝트의 `.gitleaksignore`, `.gitleaks.toml`, `gitleaks:allow` 주석으로 검사를 우회하지 않습니다.
+파일 내용은 검사기 표준 입력으로 전달하며 임시 파일이나 로그에 저장하지 않습니다.
+테스트에는 가짜 값만 사용하고 테스트 파일은 검증 후 제거합니다.
+
+`--no-verify`, 다른 훅 경로 지정, 훅 파일 제거·실행 권한 해제는 검사를 우회할 수 있습니다.
+Git이 이 훅을 실행하지 않는 작업과 Gitleaks 규칙이 모르는 시크릿 형식까지 차단하지는 않습니다.
+
+공식 동작은 [Git 훅 문서](https://git-scm.com/docs/githooks#_pre_commit)를 참고하세요.

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getPromptBlockReason } from '../secret-checker.mjs';
 
@@ -39,7 +39,6 @@ function runHook() {
     return;
   }
 
-  // 1. Antigravity PreInvocation (사용자 프롬프트 검사 및 사전 보안 경고 주입)
   if (typeof event?.invocationNum === 'number' || event?.transcriptPath) {
     let warning = null;
     if (event.transcriptPath && existsSync(event.transcriptPath)) {
@@ -50,10 +49,7 @@ function runHook() {
           if (!line) continue;
           const entry = JSON.parse(line);
           if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') {
-            const reason = getPromptBlockReason(entry.content);
-            if (reason) {
-              warning = reason;
-            }
+            warning = getPromptBlockReason(entry.content);
             break;
           }
         }

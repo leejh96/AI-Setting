@@ -1,6 +1,7 @@
 # Codex·Antigravity 사용자 입력의 시크릿 검사
 
-API 키나 토큰을 실수로 채팅에 붙여 넣었을 때, 모델에 보내기 전에 요청을 차단하거나 검사하는 로컬 훅입니다.
+API 키나 토큰을 실수로 채팅에 붙여 넣었을 때 사용자 입력을 Gitleaks로 검사하는 로컬 훅입니다.
+Codex는 모델 전송 전에 요청을 차단하며, Antigravity는 모델에 보안 경고를 주입합니다.
 Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 유효성 확인 요청은 하지 않습니다.
 
 ## 입력과 차단 동작
@@ -10,9 +11,11 @@ Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 
 
 - 탐지 결과가 없으면 모델 문맥이나 사용자 안내를 추가하지 않고 통과합니다.
   Codex는 출력 없이 종료하고, Antigravity는 빈 주입 응답을 반환합니다.
-- 후보가 하나라도 탐지되면 요청을 차단하거나 보안 경고를 주입합니다. 가짜 예제라도 탐지 규칙에 맞으면 차단될 수 있습니다.
-- Gitleaks 미설치, 실행 오류, 5초 시간 초과, 잘못된 훅 입력이면 요청을 차단하거나 안전하게 보호합니다.
-- 차단 안내에는 입력 원문, 시크릿 값, Gitleaks 로그를 포함하지 않습니다.
+- 시크릿 후보 또는 검사 오류가 있으면 Codex는 요청을 차단하고 Antigravity는 보안 경고를 주입합니다.
+  가짜 예제라도 탐지 규칙에 맞으면 같은 처리를 받습니다.
+- Gitleaks 미설치, 실행 오류, 5초 시간 초과도 검사 오류로 처리합니다.
+- Codex는 잘못된 훅 입력도 차단합니다. Antigravity는 훅 입력·대화 기록을 읽거나 해석하지 못하면 경고 없이 진행합니다.
+- 차단 안내와 경고에는 입력 원문, 시크릿 값, Gitleaks 로그를 포함하지 않습니다.
 
 검사 입력은 프로세스의 표준 입력으로 전달하며 셸 명령 인자나 임시파일로 저장하지 않습니다.
 원문 대신 탐지 여부만 사용하고, Gitleaks의 출력과 로그는 폐기합니다.
@@ -21,7 +24,7 @@ Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 
 ## 파일 구성
 
 ```text
-hooks/secret-checker/
+hooks/prompt-secret-checker/
 ├── codex/
 │   └── codex-secret-checker.mjs
 ├── gemini/
@@ -58,7 +61,7 @@ Windows와 Linux에서는 공식 릴리스의 실행 파일이나 해당 운영�
 저장소를 이동하거나 Node 설치 경로를 바꾼 경우 다시 생성하세요.
 
 ```bash
-node hooks/secret-checker/codex/codex-secret-checker.mjs --print-config
+node hooks/prompt-secret-checker/codex/codex-secret-checker.mjs --print-config
 ```
 
 출력된 설정은 다음 위치 중 하나에 등록합니다.
@@ -82,15 +85,17 @@ Codex를 새로 시작한 뒤 CLI의 `/hooks`에서 이 훅의 명령·출처를
 저장소 루트에서 다음 명령을 실행하면 Antigravity 설정에 등록할 JSON을 출력합니다.
 
 ```bash
-node hooks/secret-checker/gemini/gemini-secret-checker.mjs --print-config
+node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
 ```
 
 출력된 설정은 다음 위치에 등록합니다:
+
 - 전역 적용: `~/.gemini/config/hooks.json`
 - 특정 프로젝트에만 적용: 그 프로젝트의 `.agents/hooks.json`
 
 출력된 JSON을 위 파일에 등록합니다.
 모델 호출 전(`PreInvocation`) 세션 대화 기록(`transcript.jsonl`)의 최신 사용자 입력에 시크릿 후보가 있으면, 모델에 보안 경고 메시지(`ephemeralMessage`)를 주입하여 작업을 즉시 중단하도록 유도합니다.
+경고 주입은 모델 전송을 차단하지 않으므로, Antigravity에서는 모델이 비밀값을 받지 않는다고 보장할 수 없습니다.
 
 ## 검증
 
@@ -102,15 +107,7 @@ node hooks/secret-checker/gemini/gemini-secret-checker.mjs --print-config
 실제 Codex 적용 후에는 정상 문장의 통과와 가상 토큰 입력의 차단을 새 세션에서 확인하세요.
 검사기 경로를 존재하지 않는 경로로 바꾼 세션에서도 요청이 차단되는지 확인한 뒤 원래 경로로 복구하세요.
 
-기존 구현 검증에서는 macOS의 Node.js 22.18.0, Gitleaks 8.30.1에서 두 연결 파일의 테스트 27개가 통과했습니다.
 Windows·Linux에서의 훅 실행은 아직 검증하지 않았습니다.
-Codex CLI 0.149.0과 실제 모델이 연결되지 않은 로컬 HTTP 서버를 사용한 검사에서는
-가상 토큰과 검사기 미설치 시 모델 요청이 0건이었고, 정상 입력은 서버에 도달했습니다.
-이 검사는 검토한 훅을 일회성 설정으로 실행했으며 전역 활성화나 실제 LLM 호출은 하지 않았습니다.
-
-해당 CLI의 `exec --json` 출력에는 차단 사유가 표시되지 않았습니다.
-훅은 `reason`과 사용자 안내용 `systemMessage`를 반환하지만, 데스크톱·대화형 CLI에서의 안내 표시는 아직 확인하지 않았습니다.
-활성화할 환경에서 차단 여부와 안내 표시를 함께 확인하세요.
 
 ## 적용 범위와 한계
 
@@ -119,7 +116,7 @@ Codex CLI 0.149.0과 실제 모델이 연결되지 않은 로컬 HTTP 서버를 
 Gitleaks 규칙이 모르는 형식이나 특징 없는 짧은 비밀번호는 놓칠 수 있습니다.
 원문의 마스킹, 자동 수정, 별도 저장은 하지 않습니다. 에이전트 자체의 대화 기록·동기화 정책은 별개입니다.
 
-검사 중 발생한 오류는 스크립트가 명시적 차단 JSON으로 바꿉니다. 다만 Node가 없어 훅 자체가 시작되지 않거나,
+Codex는 검사 중 발생한 오류를 명시적 차단 JSON으로 바꿉니다. 다만 Node가 없어 훅 자체가 시작되지 않거나,
 신뢰가 필요한 훅을 승인하지 않았거나, 훅을 끄거나, 에이전트가 훅 프로세스를 먼저 강제 종료하는 상황은
 이 스크립트가 제어할 수 없습니다. **모든 실행 환경에서 실패 시 차단을 보장하는 보안 경계는 아닙니다.**
 두 도구의 훅 제한은 15초이고 검사기는 5초에 종료해, 검사 시간 초과를 처리할 여유를 둡니다.

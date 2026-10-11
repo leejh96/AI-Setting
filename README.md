@@ -9,7 +9,9 @@
 ai-setting/
 ├── AGENTS.md     # 전역 공통 지침의 원본
 ├── README.md     # 저장소 목적과 사용 방법
-├── hooks/        # 로컬에서 실행하는 훅과 검사 설정
+├── hooks/
+│   ├── prompt-secret-checker/  # Codex·Antigravity 사용자 입력 검사
+│   └── commit-secret-checker/  # 전역 Git 커밋 시크릿 검사
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -18,10 +20,18 @@ ai-setting/
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
 사용자가 보낸 문장을 Gitleaks로 검사하는 Codex `UserPromptSubmit`과 Antigravity `PreInvocation` 훅을 제공합니다.
-탐지된 시크릿 후보가 있거나 검사를 완료할 수 없으면 요청을 차단하거나 보안 검사를 수행합니다.
+Codex는 시크릿 후보나 검사 오류가 있으면 요청을 차단합니다.
+Antigravity는 최신 사용자 입력의 검사 결과를 모델에 보안 경고로 전달합니다.
 정상일 때는 사용자 안내나 모델 문맥을 추가하지 않습니다.
 
-설치 조건, 설정 생성, 검증 방법과 적용 범위는 [시크릿 검사 훅 안내](hooks/secret-checker/README.md)를 확인하세요.
+설치 조건, 설정 생성, 검증 방법과 적용 범위는 [시크릿 검사 훅 안내](hooks/prompt-secret-checker/README.md)를 확인하세요.
+
+## Git 커밋의 시크릿 검사
+
+전역 Git `pre-commit` 훅에서 커밋할 파일을 Gitleaks로 검사합니다.
+Codex·Antigravity·직접 터미널 실행에 같은 검사가 적용되며, 프롬프트 검사와 독립된 규칙을 사용합니다.
+`git add && git commit`을 그대로 실행할 수 있고, 시크릿 후보가 있거나 검사를 완료하지 못하면 커밋을 차단합니다.
+전역 등록과 검사 범위는 [커밋 검사 훅 안내](hooks/commit-secret-checker/README.md)를 확인하세요.
 
 ## 새 기기에서 사용하기
 

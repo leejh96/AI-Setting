@@ -1,0 +1,4 @@
+title = "AI Setting Git commit secret guard"
+
+[extend]
+useDefault = true
