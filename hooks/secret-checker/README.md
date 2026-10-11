@@ -1,0 +1,129 @@
+# Codex·Antigravity 사용자 입력의 시크릿 검사
+
+API 키나 토큰을 실수로 채팅에 붙여 넣었을 때, 모델에 보내기 전에 요청을 차단하거나 검사하는 로컬 훅입니다.
+Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 유효성 확인 요청은 하지 않습니다.
+
+## 입력과 차단 동작
+
+- **Codex**: 사용자 입력 → Codex의 `UserPromptSubmit` → 로컬 Gitleaks 검사 → 통과 또는 차단 순서로 실행합니다.
+- **Antigravity**: 사용자 입력 → Antigravity의 `PreInvocation` → 로컬 Gitleaks 검사 순서로 실행합니다.
+
+- 탐지 결과가 없으면 모델 문맥이나 사용자 안내를 추가하지 않고 통과합니다.
+  Codex는 출력 없이 종료하고, Antigravity는 빈 주입 응답을 반환합니다.
+- 후보가 하나라도 탐지되면 요청을 차단하거나 보안 경고를 주입합니다. 가짜 예제라도 탐지 규칙에 맞으면 차단될 수 있습니다.
+- Gitleaks 미설치, 실행 오류, 5초 시간 초과, 잘못된 훅 입력이면 요청을 차단하거나 안전하게 보호합니다.
+- 차단 안내에는 입력 원문, 시크릿 값, Gitleaks 로그를 포함하지 않습니다.
+
+검사 입력은 프로세스의 표준 입력으로 전달하며 셸 명령 인자나 임시파일로 저장하지 않습니다.
+원문 대신 탐지 여부만 사용하고, Gitleaks의 출력과 로그는 폐기합니다.
+`gitleaks:allow` 주석으로 검사를 건너뛸 수 없습니다. 프로젝트별 Gitleaks 설정·예외 파일 대신 `gitleaks.toml`의 검사 설정을 사용합니다.
+
+## 파일 구성
+
+```text
+hooks/secret-checker/
+├── codex/
+│   └── codex-secret-checker.mjs
+├── gemini/
+│   └── gemini-secret-checker.mjs
+├── secret-checker.mjs       # 공통 검사기와 차단 사유
+├── gitleaks.toml            # 공통 탐지 규칙
+└── README.md
+```
+
+두 도구(Codex, Gemini/Antigravity)가 같은 공통 검사 함수와 설정을 사용합니다.
+`gitleaks.toml`은 Gitleaks의 기본 탐지 규칙을 불러오는 공통 설정입니다.
+
+## 준비
+
+Node.js 22 이상과 `stdin` 명령을 지원하는 Gitleaks가 필요합니다. Gitleaks 8.30.1로 검증했습니다.
+공식 설치 방법은 [Gitleaks 프로젝트](https://github.com/gitleaks/gitleaks#installing)를 참고하세요.
+
+macOS에서는 다음과 같이 설치할 수 있습니다.
+
+```bash
+brew install gitleaks
+node --version
+gitleaks version
+```
+
+Windows와 Linux에서는 공식 릴리스의 실행 파일이나 해당 운영체제의 설치 방법을 사용하세요.
+에이전트를 실행하는 환경의 `PATH`에서 `gitleaks`를 찾을 수 있어야 합니다.
+다른 위치에 설치했다면 실행 전에 `AI_SETTING_GITLEAKS_BIN` 환경변수로 실행 파일의 절대 경로를 지정할 수 있습니다.
+비밀값을 담는 환경변수는 아닙니다.
+
+## Codex 설정 생성과 적용
+
+저장소 루트에서 실행하면 현재 기기의 Node와 훅 스크립트 절대 경로가 들어간 JSON 설정을 출력합니다.
+저장소를 이동하거나 Node 설치 경로를 바꾼 경우 다시 생성하세요.
+
+```bash
+node hooks/secret-checker/codex/codex-secret-checker.mjs --print-config
+```
+
+출력된 설정은 다음 위치 중 하나에 등록합니다.
+
+- 전역 적용: `~/.codex/hooks.json`
+- 특정 프로젝트에만 적용: 그 프로젝트의 `.codex/hooks.json`
+
+기존 설정이 있다면 변경 직전 파일 전체를 복구할 수 있도록 백업하고,
+기존 이벤트와 핸들러를 유지하면서 `hooks.UserPromptSubmit` 배열에 새 핸들러 그룹을 추가하세요.
+같은 검사를 전역·프로젝트 양쪽에 중복 등록하지 마세요. 이미 `config.toml`의 인라인 훅을 사용한다면 해당 구성과의 중복도 확인하세요.
+
+저장소에 파일을 추가하거나 JSON을 생성하는 것만으로 훅이 활성화되지는 않습니다.
+Codex를 새로 시작한 뒤 CLI의 `/hooks`에서 이 훅의 명령·출처를 검토하고 신뢰 등록하세요.
+프로젝트에 적용했다면 프로젝트 자체도 신뢰되어야 합니다. 훅 정의가 변경되면 다시 검토가 필요합니다.
+검토 없이 훅을 실행하는 옵션을 일상 설정에 추가하지 마세요.
+
+현재 기기의 경로가 들어간 생성 설정은 이 저장소에 커밋하지 않습니다.
+
+## Antigravity 설정 생성과 적용
+
+저장소 루트에서 다음 명령을 실행하면 Antigravity 설정에 등록할 JSON을 출력합니다.
+
+```bash
+node hooks/secret-checker/gemini/gemini-secret-checker.mjs --print-config
+```
+
+출력된 설정은 다음 위치에 등록합니다:
+- 전역 적용: `~/.gemini/config/hooks.json`
+- 특정 프로젝트에만 적용: 그 프로젝트의 `.agents/hooks.json`
+
+출력된 JSON을 위 파일에 등록합니다.
+모델 호출 전(`PreInvocation`) 세션 대화 기록(`transcript.jsonl`)의 최신 사용자 입력에 시크릿 후보가 있으면, 모델에 보안 경고 메시지(`ephemeralMessage`)를 주입하여 작업을 즉시 중단하도록 유도합니다.
+
+## 검증
+
+테스트 파일은 저장소에 상시 보관하지 않습니다. 변경 시 필요한 테스트를 임시 파일로 작성해 실행하고,
+검증 후 임시 파일을 삭제합니다. 실제로 확인한 범위와 확인하지 못한 부분은 작업 결과에 기록합니다.
+검사 동작을 변경할 때는 정상 입력, 탐지, 비밀값 비노출과 검사 실패 시 차단을 확인합니다.
+실제 인증 키 대신 가상의 문자열을 사용합니다.
+
+실제 Codex 적용 후에는 정상 문장의 통과와 가상 토큰 입력의 차단을 새 세션에서 확인하세요.
+검사기 경로를 존재하지 않는 경로로 바꾼 세션에서도 요청이 차단되는지 확인한 뒤 원래 경로로 복구하세요.
+
+기존 구현 검증에서는 macOS의 Node.js 22.18.0, Gitleaks 8.30.1에서 두 연결 파일의 테스트 27개가 통과했습니다.
+Windows·Linux에서의 훅 실행은 아직 검증하지 않았습니다.
+Codex CLI 0.149.0과 실제 모델이 연결되지 않은 로컬 HTTP 서버를 사용한 검사에서는
+가상 토큰과 검사기 미설치 시 모델 요청이 0건이었고, 정상 입력은 서버에 도달했습니다.
+이 검사는 검토한 훅을 일회성 설정으로 실행했으며 전역 활성화나 실제 LLM 호출은 하지 않았습니다.
+
+해당 CLI의 `exec --json` 출력에는 차단 사유가 표시되지 않았습니다.
+훅은 `reason`과 사용자 안내용 `systemMessage`를 반환하지만, 데스크톱·대화형 CLI에서의 안내 표시는 아직 확인하지 않았습니다.
+활성화할 환경에서 차단 여부와 안내 표시를 함께 확인하세요.
+
+## 적용 범위와 한계
+
+이 훅은 사용자가 제출한 텍스트만 검사합니다. 파일 첨부, 도구 실행 결과, 이전 대화,
+자동으로 읽은 파일과 이후의 모든 LLM 요청을 검사하지는 않습니다.
+Gitleaks 규칙이 모르는 형식이나 특징 없는 짧은 비밀번호는 놓칠 수 있습니다.
+원문의 마스킹, 자동 수정, 별도 저장은 하지 않습니다. 에이전트 자체의 대화 기록·동기화 정책은 별개입니다.
+
+검사 중 발생한 오류는 스크립트가 명시적 차단 JSON으로 바꿉니다. 다만 Node가 없어 훅 자체가 시작되지 않거나,
+신뢰가 필요한 훅을 승인하지 않았거나, 훅을 끄거나, 에이전트가 훅 프로세스를 먼저 강제 종료하는 상황은
+이 스크립트가 제어할 수 없습니다. **모든 실행 환경에서 실패 시 차단을 보장하는 보안 경계는 아닙니다.**
+두 도구의 훅 제한은 15초이고 검사기는 5초에 종료해, 검사 시간 초과를 처리할 여유를 둡니다.
+
+공식 동작은 [Codex 훅 문서](https://learn.chatgpt.com/docs/hooks#userpromptsubmit)와
+[훅 신뢰 등록](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)을 참고하세요.
+Antigravity 훅 설정과 동작은 [Antigravity 훅 문서](https://antigravity.google/docs/hooks)를 참고하세요.

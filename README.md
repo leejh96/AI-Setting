@@ -9,10 +9,19 @@
 ai-setting/
 ├── AGENTS.md     # 전역 공통 지침의 원본
 ├── README.md     # 저장소 목적과 사용 방법
+├── hooks/        # 로컬에서 실행하는 훅과 검사 설정
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
 공통 지침은 `AGENTS.md` 하나로 관리합니다. 스킬, MCP, 도구별 설정과 플러그인은 실제로 추가할 때 필요한 구조를 마련합니다.
+
+## Codex·Antigravity 사용자 입력의 시크릿 검사
+
+사용자가 보낸 문장을 Gitleaks로 검사하는 Codex `UserPromptSubmit`과 Antigravity `PreInvocation` 훅을 제공합니다.
+탐지된 시크릿 후보가 있거나 검사를 완료할 수 없으면 요청을 차단하거나 보안 검사를 수행합니다.
+정상일 때는 사용자 안내나 모델 문맥을 추가하지 않습니다.
+
+설치 조건, 설정 생성, 검증 방법과 적용 범위는 [시크릿 검사 훅 안내](hooks/secret-checker/README.md)를 확인하세요.
 
 ## 새 기기에서 사용하기
 

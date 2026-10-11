@@ -1,0 +1,4 @@
+title = "AI Setting prompt secret guard"
+
+[extend]
+useDefault = true
