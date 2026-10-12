@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOK_DIRECTORY = dirname(fileURLToPath(import.meta.url));
-const SCAN_TIMEOUT_MS = 10000;
+const SCAN_TIMEOUT_MS = 60000;
 const LEAK_EXIT_CODE = 42;
 class ScanFailure extends Error {}
 
@@ -12,7 +12,7 @@ function getCommitBlockReason() {
   const deadline = Date.now() + SCAN_TIMEOUT_MS;
   const execute = (program, args, options = {}) => {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new ScanFailure('검사가 10초를 초과해 커밋을 차단했습니다.');
+    if (remaining <= 0) throw new ScanFailure('검사가 60초를 초과해 커밋을 차단했습니다.');
     const result = spawnSync(program, args, {
       cwd: process.cwd(),
       encoding: 'utf8',
@@ -23,7 +23,7 @@ function getCommitBlockReason() {
       windowsHide: true,
       ...options,
     });
-    if (result.error?.code === 'ETIMEDOUT') throw new ScanFailure('검사가 10초를 초과해 커밋을 차단했습니다.');
+    if (result.error?.code === 'ETIMEDOUT') throw new ScanFailure('검사가 60초를 초과해 커밋을 차단했습니다.');
     if (result.error || result.signal || result.status === null) {
       throw new ScanFailure('검사에 필요한 프로그램을 실행할 수 없어 커밋을 차단했습니다. Git·Gitleaks 실행 환경을 확인하세요.');
     }
