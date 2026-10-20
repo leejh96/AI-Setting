@@ -11,7 +11,8 @@ ai-setting/
 ├── README.md     # 저장소 목적과 공통 안내
 ├── hooks/
 │   ├── prompt-secret-checker/  # 사용자 입력 검사와 OS별 README
-│   └── commit-secret-checker/  # Git 커밋 검사와 OS별 README
+│   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
+│   └── code-quality-review/    # Codex 완료 전 코드 품질 검토
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -32,6 +33,12 @@ Antigravity는 최신 사용자 입력의 검사 결과를 모델에 보안 경�
 Codex·Antigravity·직접 터미널 실행에 같은 검사가 적용되며, 프롬프트 검사와 독립된 규칙을 사용합니다.
 `git add && git commit`을 그대로 실행할 수 있고, 시크릿 후보가 있거나 검사를 완료하지 못하면 커밋을 차단합니다.
 전역 등록과 검사 범위는 [커밋 검사 훅 안내](hooks/commit-secret-checker/README.md)를 확인하세요.
+
+## Codex 완료 전 코드 품질 검토
+
+코드 수정 후 요구사항 충족, AI 슬롭, 과잉 설계와 중복 구현을 검토하고 필요한 수정·검증을 한 번 수행하는 `Stop` 훅을 제공합니다.
+기본 구현 원칙은 `AGENTS.md`에 유지하고 상세 점검 절차는 훅의 `REVIEW.md`에서 관리합니다.
+동작 범위, 추가 continuation과 사용량, 설치·신뢰 등록·검증은 [코드 품질 검토 훅 안내](hooks/code-quality-review/README.md)를 확인하세요.
 
 ## 새 기기에서 사용하기
 
