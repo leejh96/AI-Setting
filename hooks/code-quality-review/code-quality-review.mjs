@@ -2,13 +2,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 function printConfig() {
+  const scriptPath = fileURLToPath(import.meta.url);
+  if (process.platform === 'win32' && /%/.test(process.execPath + scriptPath)) {
+    throw new Error('Unsupported Windows path');
+  }
   const quote = process.platform === 'win32'
     ? (value) => `"${value.replaceAll('\\', '/')}"`
     : (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const executable = process.platform === 'win32' && !/\s/.test(process.execPath)
-    ? process.execPath.replaceAll('\\', '/')
-    : quote(process.execPath);
-  const command = `${executable} ${quote(fileURLToPath(import.meta.url))}`;
+  const invocation = `${quote(process.execPath)} ${quote(scriptPath)}`;
+  // cmd.exe /s /c strips the outer pair before parsing the quoted executable.
+  const command = process.platform === 'win32' ? `"${invocation}"` : invocation;
   process.stdout.write(`${JSON.stringify({
     hooks: {
       Stop: [{ hooks: [{
@@ -40,8 +43,13 @@ try {
     throw new Error('Invalid arguments');
   }
 } catch {
-  // A broken hook must be visible, without restarting the turn indefinitely.
-  process.stdout.write(`${JSON.stringify({
-    systemMessage: '코드 품질 검토 훅을 실행하지 못했습니다. 자동 검토 완료로 간주하지 말고 훅 입력과 REVIEW.md를 확인하세요.',
-  })}\n`);
+  if (process.argv.includes('--print-config')) {
+    process.stderr.write('코드 품질 검토 훅 설정을 생성하지 못했습니다. 실행 인자를 확인하고, Windows에서는 Node와 스크립트 모두 %가 없는 경로를 사용하세요.\n');
+    process.exitCode = 1;
+  } else {
+    // A broken hook must be visible, without restarting the turn indefinitely.
+    process.stdout.write(`${JSON.stringify({
+      systemMessage: '코드 품질 검토 훅을 실행하지 못했습니다. 자동 검토 완료로 간주하지 말고 훅 입력과 REVIEW.md를 확인하세요.',
+    })}\n`);
+  }
 }
