@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createReviewRequest } from '../review-request.mjs';
+import { hasTerminalReviewStatus } from '../review-status.mjs';
 
 function printConfig() {
   const scriptPath = fileURLToPath(import.meta.url);
@@ -23,11 +25,9 @@ function runHook() {
   if (event?.hook_event_name !== 'Stop' || typeof event.stop_hook_active !== 'boolean') {
     throw new Error('Invalid Stop hook event');
   }
-  const reason = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
-  if (!reason) throw new Error('Empty review instructions');
+  const reason = createReviewRequest();
   // Only a review continuation can finish this gate; initial answers cannot skip it.
-  if (event.stop_hook_active && typeof event.last_assistant_message === 'string'
-      && /(?:^|\r?\n)\[code-quality-review:(clean|skipped|blocked)\]$/.test(event.last_assistant_message.trimEnd())) {
+  if (event.stop_hook_active && hasTerminalReviewStatus(event.last_assistant_message)) {
     return {};
   }
   return { decision: 'block', reason };

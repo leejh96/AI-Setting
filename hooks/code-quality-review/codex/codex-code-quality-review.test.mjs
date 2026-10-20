@@ -53,6 +53,8 @@ function copyHookToTemp({ review } = {}) {
   mkdirSync(join(directory, 'codex'));
   const hookPath = join(directory, 'codex', 'codex-code-quality-review.mjs');
   copyFileSync(HOOK_PATH, hookPath);
+  copyFileSync(join(HOOK_DIR, '..', 'review-request.mjs'), join(directory, 'review-request.mjs'));
+  copyFileSync(join(HOOK_DIR, '..', 'review-status.mjs'), join(directory, 'review-status.mjs'));
   if (review !== undefined) {
     writeFileSync(join(directory, 'REVIEW.md'), review, 'utf8');
   }
@@ -63,17 +65,29 @@ function removeTempDirectory(directory) {
   rmSync(directory, { force: true, recursive: true });
 }
 
-test('첫 Stop은 REVIEW 지시를 전달하고 원래 사용자 변경 보호를 포함한다', () => {
+function assertReviewRequest(output, hookPath = HOOK_PATH) {
+  assert.equal(output.decision, 'block');
+  const reviewPath = join(dirname(hookPath), '..', 'REVIEW.md');
+  assert.ok(output.reason.includes(JSON.stringify(reviewPath)));
+  assert.ok(!output.reason.includes(readFileSync(reviewPath, 'utf8').trim()));
+  assert.match(output.reason, /이번 회차에 실제로 읽고/);
+}
+
+test('첫 Stop은 본문 대신 적용 판단과 절대 REVIEW 경로를 전달한다', () => {
   const output = runEvent(HOOK_PATH, {
     hook_event_name: 'Stop',
     stop_hook_active: false,
   });
 
-  assert.equal(output.decision, 'block');
-  assert.equal(output.reason, readFileSync(REVIEW_PATH, 'utf8').trim());
-  assert.match(output.reason, /원래 사용자 요청/);
-  assert.match(output.reason, /기존 사용자 변경/);
-  assert.match(output.reason, /보존/);
+  assertReviewRequest(output);
+  assert.ok(output.reason.length < readFileSync(REVIEW_PATH, 'utf8').trim().length / 3);
+  assert.match(output.reason, /원래 요청/);
+  assert.match(output.reason, /서브에이전트/);
+  assert.match(output.reason, /동작 설정/);
+  assert.match(output.reason, /문서만 변경/);
+  assert.match(output.reason, /파일 읽기나 저장소 전체 검색은 하지 마세요/);
+  assert.match(output.reason, /\[code-quality-review:skipped\]/);
+  assert.match(output.reason, /읽을 수 없으면[\s\S]*\[code-quality-review:blocked\]/);
 });
 
 test('수정 회차와 상태 누락은 계속 검토하고 수정 없는 통과 회차에서 종료한다', () => {
@@ -84,8 +98,8 @@ test('수정 회차와 상태 누락은 계속 검토하고 수정 없는 통과
       stop_hook_active: true,
       last_assistant_message: message,
     });
-    assert.equal(output.decision, 'block');
-    assert.equal(output.reason, readFileSync(REVIEW_PATH, 'utf8').trim());
+    assertReviewRequest(output);
+    assert.match(output.reason, /앞 검토 회차에서 변경을 마쳤다는 이유로 제외하지 마세요/);
   }
   assert.deepEqual(runEvent(HOOK_PATH, {
     hook_event_name: 'Stop', stop_hook_active: true,
@@ -114,6 +128,32 @@ test('첫 응답의 종료 표식이나 인용·중간 표식·오타로 검토�
     assert.equal(runEvent(HOOK_PATH, {
       hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: message,
     }).decision, 'block');
+  }
+});
+
+test('열린 코드 펜스 안의 종료 표식은 거부하고 닫힌 펜스 뒤의 독립 표식만 허용한다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const prefix of ['```text\n', '~~~text\n', '   ```text\r\n',
+      '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
+      '```text\n    ```\n', '- item\n\n```text\n',
+      '- item\n\n# heading\n   ```text\n', '- item\n\ntext\n   ```text\n',
+      '* * *\n  ```text\n', '- - -\n  ~~~text\n']) {
+      assert.equal(runEvent(HOOK_PATH, {
+        hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: prefix + marker,
+      }).decision, 'block', prefix);
+    }
+    for (const prefix of ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~\n',
+      '   ```text\r\nexample\r\n ```\t\r\n', '```not `a fence`\n', '    ```text\n',
+      '- ```text\n  example\n  ```\n\n', '1. ~~~text\n   example\n   ~~~\n\n',
+      '- item\n  ```text\n  example\n  ```\n\n', '- ```text\n  example\n\n',
+      '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
+      '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
+      '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n']) {
+      assert.deepEqual(runEvent(HOOK_PATH, {
+        hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: prefix + marker,
+      }), {}, prefix);
+    }
   }
 });
 
@@ -195,9 +235,8 @@ function assertGeneratedCommand(hookPath, nodePath = NODE_PATH) {
       windowsHide: true,
     });
     const output = parseOutput(result);
-    assert.deepEqual(output, blocks ? {
-      decision: 'block', reason: readFileSync(join(dirname(hookPath), '..', 'REVIEW.md'), 'utf8').trim(),
-    } : {});
+    if (blocks) assertReviewRequest(output, hookPath);
+    else assert.deepEqual(output, {});
   }
 }
 
@@ -310,7 +349,7 @@ test('macOS 형식 Codex 명령을 Windows Git sh에서 검사한다(실제 macO
       input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
       encoding: 'utf8', windowsHide: true, timeout: 10_000,
     }));
-    assert.deepEqual(output, { decision: 'block', reason: 'temporary review' });
+    assertReviewRequest(output, target);
   } finally {
     removeTempDirectory(directory);
   }

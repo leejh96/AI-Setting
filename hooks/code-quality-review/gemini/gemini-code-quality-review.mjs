@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createReviewRequest } from '../review-request.mjs';
+import { hasTerminalReviewStatus } from '../review-status.mjs';
 
 function printConfig() {
   const quote = process.platform === 'win32'
@@ -53,9 +55,7 @@ function runHook() {
   if (!event.fullyIdle || !['model_stop', 'NO_TOOL_CALL'].includes(event.terminationReason)) {
     return {};
   }
-  const review = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
-  if (!review) throw new Error('Empty review instructions');
-  const reason = `[code-quality-review:request]\n${review}`;
+  const reason = `[code-quality-review:request]\n${createReviewRequest()}`;
   const entries = readFileSync(event.transcriptPath, 'utf8').split(/\r?\n/).filter((line) => line.trim()).map(JSON.parse);
   const { stopHookActive, lastAssistantMessage } = analyzeTurn(entries);
 
@@ -63,7 +63,7 @@ function runHook() {
     return { decision: 'continue', reason };
   }
 
-  if (/(?:^|\r?\n)\[code-quality-review:(clean|skipped|blocked)\]$/.test(lastAssistantMessage.trimEnd())) {
+  if (hasTerminalReviewStatus(lastAssistantMessage)) {
     return {};
   }
 

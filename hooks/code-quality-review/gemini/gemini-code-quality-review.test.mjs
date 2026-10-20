@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const HOOK_PATH = fileURLToPath(new URL('./gemini-code-quality-review.mjs', import.meta.url));
 const REVIEW = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
-const REQUEST = `[code-quality-review:request]\n${REVIEW}`;
+const REQUEST = '[code-quality-review:request]\nA recorded review request';
 const user = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: '구현 요청' };
 const model = (content) => ({ type: 'PLANNER_RESPONSE', source: 'MODEL', content });
 const request = { type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: REQUEST };
@@ -32,6 +32,8 @@ function fixture(fn, { review = REVIEW } = {}) {
   mkdirSync(directory);
   const script = join(directory, 'gemini-code-quality-review.mjs');
   copyFileSync(HOOK_PATH, script);
+  copyFileSync(new URL('../review-request.mjs', import.meta.url), join(root, 'review-request.mjs'));
+  copyFileSync(new URL('../review-status.mjs', import.meta.url), join(root, 'review-status.mjs'));
   if (review !== null) writeFileSync(join(root, 'REVIEW.md'), review);
   const transcriptPath = join(root, 'transcript.jsonl');
   const event = { executionNum: 1, fullyIdle: true, terminationReason: 'model_stop', transcriptPath };
@@ -49,7 +51,22 @@ function turn(entries, overrides = {}) {
   return output;
 }
 
-const continues = (output) => assert.deepEqual(output, { decision: 'continue', reason: REQUEST });
+function continues(output, expectedReviewPath) {
+  assert.equal(output.decision, 'continue');
+  assert.ok(output.reason.startsWith('[code-quality-review:request]\n'));
+  assert.ok(!output.reason.includes(REVIEW));
+  const pathMatch = output.reason.match(/적용 대상이면 ("(?:\\.|[^"\\])*") 파일/);
+  assert.ok(pathMatch, 'must include a JSON-quoted REVIEW path');
+  const reviewPath = JSON.parse(pathMatch[1]);
+  assert.ok(isAbsolute(reviewPath));
+  if (expectedReviewPath) assert.equal(reviewPath, expectedReviewPath);
+  assert.ok(output.reason.length < REVIEW.length / 3);
+  assert.match(output.reason, /이번 회차에 실제로 읽고/);
+  assert.match(output.reason, /문서만 변경/);
+  assert.match(output.reason, /서브에이전트/);
+  assert.match(output.reason, /파일 읽기나 저장소 전체 검색은 하지 마세요/);
+  assert.match(output.reason, /읽을 수 없으면[\s\S]*\[code-quality-review:blocked\]/);
+}
 function warns(result) {
   assert.deepEqual(parse(result), {});
   assert.match(result.stderr, /자동 검토 완료로 간주하지/);
@@ -72,6 +89,28 @@ test('수정 회차·누락·잘못된 표식은 반복하며 종료 표식은 �
   }
   for (const status of ['clean', 'skipped', 'blocked']) {
     assert.deepEqual(turn([user, model('구현 완료'), request, model(`결과\r\n[code-quality-review:${status}]\r\n`)]), {});
+  }
+});
+
+test('열린 코드 펜스 안의 종료 표식은 거부하고 닫힌 펜스 뒤의 독립 표식만 허용한다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const prefix of ['```text\n', '~~~text\n', '   ```text\r\n',
+      '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
+      '```text\n    ```\n', '- item\n\n```text\n',
+      '- item\n\n# heading\n   ```text\n', '- item\n\ntext\n   ```text\n',
+      '* * *\n  ```text\n', '- - -\n  ~~~text\n']) {
+      continues(turn([user, request, model(prefix + marker)]));
+    }
+    for (const prefix of ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~\n',
+      '   ```text\r\nexample\r\n ```\t\r\n', '```not `a fence`\n', '    ```text\n',
+      '- ```text\n  example\n  ```\n\n', '1. ~~~text\n   example\n   ~~~\n\n',
+      '- item\n  ```text\n  example\n  ```\n\n', '- ```text\n  example\n\n',
+      '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
+      '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
+      '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n']) {
+      assert.deepEqual(turn([user, request, model(prefix + marker)]), {}, prefix);
+    }
   }
 });
 
@@ -159,7 +198,7 @@ function assertCommand(script, event, node = process.execPath) {
   } else {
     result = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', timeout: 15_000 });
   }
-  continues(parse(result));
+  continues(parse(result), join(dirname(script), '..', 'REVIEW.md'));
 }
 
 test('현재 Node와 훅 경로로 생성한 설정 명령이 셸 해석에 의존하지 않고 실행된다', () => {
@@ -196,6 +235,6 @@ test('macOS 형식 명령을 Windows Git sh에서 검사한다(실제 macOS 실�
     const command = output['ai-setting-code-quality-review'].Stop[0].command;
     const shell = process.env.CODE_QUALITY_REVIEW_TEST_POSIX_SHELL;
     assert.ok(existsSync(shell));
-    continues(parse(spawnSync(shell, ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000 })));
+    continues(parse(spawnSync(shell, ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000 })), join(dirname(target), '..', 'REVIEW.md'));
   });
 });
