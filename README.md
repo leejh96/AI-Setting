@@ -12,7 +12,7 @@ ai-setting/
 ├── hooks/
 │   ├── prompt-secret-checker/  # 사용자 입력 검사와 OS별 README
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
-│   └── code-quality-review/    # Codex 완료 전 코드 품질 검토
+│   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -34,9 +34,9 @@ Codex·Antigravity·직접 터미널 실행에 같은 검사가 적용되며, �
 `git add && git commit`을 그대로 실행할 수 있고, 시크릿 후보가 있거나 검사를 완료하지 못하면 커밋을 차단합니다.
 전역 등록과 검사 범위는 [커밋 검사 훅 안내](hooks/commit-secret-checker/README.md)를 확인하세요.
 
-## Codex 완료 전 코드 품질 검토
+## Codex·Gemini 완료 전 코드 품질 검토
 
-코드 수정 후 요구사항 충족, AI 슬롭, 과잉 설계와 중복 구현을 검토하는 `Stop` 훅을 제공합니다. 문제가 발견되면 수정·검증 후 새 회차에서 다시 검토하며, 수정 없는 검토에서 미해결 문제가 없을 때 종료합니다. 답변·승인 필요나 실행 불가 상황은 사유를 보고하고 멈춥니다.
+Codex와 Gemini/Antigravity에서 코드 수정 후 요구사항 충족, AI 슬롭, 과잉 설계와 중복 구현을 검토하는 `Stop` 훅을 제공합니다. 문제가 발견되면 수정·검증 후 새 회차에서 다시 검토하며, 수정 없는 검토에서 미해결 문제가 없을 때 종료합니다. 답변·승인 필요나 실행 불가 상황은 사유를 보고하고 멈춥니다.
 기본 구현 원칙은 `AGENTS.md`에 유지하고 상세 점검 절차는 훅의 `REVIEW.md`에서 관리합니다.
 동작 범위, 추가 continuation과 사용량, 설치·신뢰 등록·검증은 [코드 품질 검토 훅 안내](hooks/code-quality-review/README.md)를 확인하세요.
 
@@ -57,6 +57,7 @@ cd ai-setting
 | --- | --- | --- |
 | 프롬프트 시크릿 검사 | [설정 안내](hooks/prompt-secret-checker/README.macos.md) | [설정 안내](hooks/prompt-secret-checker/README.windows.md) |
 | Git 커밋 시크릿 검사 | [설정 안내](hooks/commit-secret-checker/README.macos.md) | [설정 안내](hooks/commit-secret-checker/README.windows.md) |
+| 코드 품질 검토 | [설정 안내](hooks/code-quality-review/README.macos.md) | [설정 안내](hooks/code-quality-review/README.windows.md) |
 
 현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침과 훅이 자동 적용되지는 않습니다.
 

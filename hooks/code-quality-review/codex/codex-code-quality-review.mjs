@@ -23,7 +23,7 @@ function runHook() {
   if (event?.hook_event_name !== 'Stop' || typeof event.stop_hook_active !== 'boolean') {
     throw new Error('Invalid Stop hook event');
   }
-  const reason = readFileSync(new URL('./REVIEW.md', import.meta.url), 'utf8').trim();
+  const reason = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
   if (!reason) throw new Error('Empty review instructions');
   // Only a review continuation can finish this gate; initial answers cannot skip it.
   if (event.stop_hook_active && typeof event.last_assistant_message === 'string'

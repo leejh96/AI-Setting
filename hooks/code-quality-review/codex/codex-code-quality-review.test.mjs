@@ -4,19 +4,20 @@ import {
   copyFileSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const NODE_PATH = process.execPath;
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
-const HOOK_PATH = join(HOOK_DIR, 'code-quality-review.mjs');
-const REVIEW_PATH = join(HOOK_DIR, 'REVIEW.md');
+const HOOK_PATH = join(HOOK_DIR, 'codex-code-quality-review.mjs');
+const REVIEW_PATH = join(HOOK_DIR, '..', 'REVIEW.md');
 
 assert.ok(existsSync(NODE_PATH), `expected Node executable at ${NODE_PATH}`);
 assert.ok(existsSync(HOOK_PATH), `expected hook next to this test: ${HOOK_PATH}`);
@@ -49,7 +50,8 @@ function assertWarning(output) {
 
 function copyHookToTemp({ review } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'codex quality hook-'));
-  const hookPath = join(directory, 'code-quality-review.mjs');
+  mkdirSync(join(directory, 'codex'));
+  const hookPath = join(directory, 'codex', 'codex-code-quality-review.mjs');
   copyFileSync(HOOK_PATH, hookPath);
   if (review !== undefined) {
     writeFileSync(join(directory, 'REVIEW.md'), review, 'utf8');
@@ -194,7 +196,7 @@ function assertGeneratedCommand(hookPath, nodePath = NODE_PATH) {
     });
     const output = parseOutput(result);
     assert.deepEqual(output, blocks ? {
-      decision: 'block', reason: readFileSync(join(dirname(hookPath), 'REVIEW.md'), 'utf8').trim(),
+      decision: 'block', reason: readFileSync(join(dirname(hookPath), '..', 'REVIEW.md'), 'utf8').trim(),
     } : {});
   }
 }
@@ -215,7 +217,7 @@ test('공백이 있는 훅 경로에서도 생성된 명령이 실행된다', ()
 test('작은따옴표가 있는 훅 경로에서도 생성된 명령이 실행된다', () => {
   const { directory } = copyHookToTemp({ review: 'temporary review' });
   try {
-    const hookPath = join(directory, "reviewer's hook.mjs");
+    const hookPath = join(directory, 'codex', "reviewer's hook.mjs");
     copyFileSync(HOOK_PATH, hookPath);
     assertGeneratedCommand(hookPath);
   } finally {
@@ -241,7 +243,7 @@ test('Windows의 % 포함 스크립트·Node 경로에서도 생성된 명령이
 }, () => {
   const { directory, hookPath } = copyHookToTemp({ review: 'temporary review' });
   try {
-    const percentHookPath = join(directory, '%QUALITY_REVIEW_TEST%.mjs');
+    const percentHookPath = join(directory, 'codex', '%QUALITY_REVIEW_TEST%.mjs');
     copyFileSync(HOOK_PATH, percentHookPath);
     assertGeneratedCommand(percentHookPath);
 
@@ -256,7 +258,7 @@ test('Windows의 % 포함 스크립트·Node 경로에서도 생성된 명령이
 test('셸 구문처럼 보이는 스크립트 경로도 리터럴로 실행한다', () => {
   const { directory } = copyHookToTemp({ review: 'temporary review' });
   try {
-    const hookPath = join(directory, "review'; Write-Output 'INJECTED'; #.mjs");
+    const hookPath = join(directory, 'codex', "review'; Write-Output 'INJECTED'; #.mjs");
     copyFileSync(HOOK_PATH, hookPath);
     assertGeneratedCommand(hookPath);
   } finally {
@@ -283,10 +285,32 @@ test('PowerShell이 인식하는 곡선형 작은따옴표 경로도 리터럴�
   const { directory } = copyHookToTemp({ review: 'temporary review' });
   try {
     for (const quote of ['\u2018', '\u2019', '\u201a', '\u201b']) {
-      const hookPath = join(directory, `O${quote}Connor.mjs`);
+      const hookPath = join(directory, 'codex', `O${quote}Connor.mjs`);
       copyFileSync(HOOK_PATH, hookPath);
       assertGeneratedCommand(hookPath);
     }
+  } finally {
+    removeTempDirectory(directory);
+  }
+});
+
+test('macOS 형식 Codex 명령을 Windows Git sh에서 검사한다(실제 macOS 실행은 아님)', {
+  skip: process.platform !== 'win32' || !process.env.CODE_QUALITY_REVIEW_TEST_POSIX_SHELL,
+}, () => {
+  const { directory, hookPath } = copyHookToTemp({ review: 'temporary review' });
+  try {
+    const target = join(directory, 'codex', "reviewer's 한글 hook.mjs");
+    copyFileSync(hookPath, target);
+    const code = `Object.defineProperty(process,'platform',{value:'darwin'});Object.defineProperty(process,'execPath',{value:process.execPath.replaceAll('\\\\','/')});process.argv=[process.execPath,${JSON.stringify(target)},'--print-config'];await import(${JSON.stringify(pathToFileURL(target).href)});`;
+    const config = parseOutput(spawnSync(NODE_PATH, ['--input-type=module', '-e', code], {
+      encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    }));
+    const command = config.hooks.Stop[0].hooks[0].command;
+    const output = parseOutput(spawnSync(process.env.CODE_QUALITY_REVIEW_TEST_POSIX_SHELL, ['-c', command], {
+      input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+      encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    }));
+    assert.deepEqual(output, { decision: 'block', reason: 'temporary review' });
   } finally {
     removeTempDirectory(directory);
   }
