@@ -61,7 +61,7 @@ function removeTempDirectory(directory) {
   rmSync(directory, { force: true, recursive: true });
 }
 
-test('첫 Stop은 REVIEW 지시를 한 번 전달하고 원래 사용자 변경 보호를 포함한다', () => {
+test('첫 Stop은 REVIEW 지시를 전달하고 원래 사용자 변경 보호를 포함한다', () => {
   const output = runEvent(HOOK_PATH, {
     hook_event_name: 'Stop',
     stop_hook_active: false,
@@ -74,16 +74,44 @@ test('첫 Stop은 REVIEW 지시를 한 번 전달하고 원래 사용자 변경 
   assert.match(output.reason, /보존/);
 });
 
-test('stop_hook_active true는 REVIEW.md가 없어도 재요청하지 않는다', () => {
-  const { directory, hookPath } = copyHookToTemp();
-  try {
-    const output = runEvent(hookPath, {
+test('수정 회차와 상태 누락은 계속 검토하고 수정 없는 통과 회차에서 종료한다', () => {
+  for (const message of [undefined, null, '', '검토했습니다.', '[code-quality-review:revised]',
+    '[code-quality-review:revised]', '[code-quality-review:revised]']) {
+    const output = runEvent(HOOK_PATH, {
       hook_event_name: 'Stop',
       stop_hook_active: true,
+      last_assistant_message: message,
     });
-    assert.deepEqual(output, {});
-  } finally {
-    removeTempDirectory(directory);
+    assert.equal(output.decision, 'block');
+    assert.equal(output.reason, readFileSync(REVIEW_PATH, 'utf8').trim());
+  }
+  assert.deepEqual(runEvent(HOOK_PATH, {
+    hook_event_name: 'Stop', stop_hook_active: true,
+    last_assistant_message: '수정 없이 현재 코드 검토 완료\r\n[code-quality-review:clean]\r\n',
+  }), {});
+});
+
+test('비적용과 해결 불가도 통과로 위장하지 않고 반복을 종료한다', () => {
+  for (const status of ['skipped', 'blocked']) {
+    assert.deepEqual(runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: true,
+      last_assistant_message: `사유 보고\n[code-quality-review:${status}]`,
+    }), {});
+  }
+});
+
+test('첫 응답의 종료 표식이나 인용·중간 표식·오타로 검토를 생략하지 않는다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    assert.equal(runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: false,
+      last_assistant_message: `[code-quality-review:${status}]`,
+    }).decision, 'block');
+  }
+  for (const message of ['> [code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
+    '[code-quality-review:clean]\n추가 내용', '[code-quality-review:Clean]', '[code-quality-review:unknown]']) {
+    assert.equal(runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: message,
+    }).decision, 'block');
   }
 });
 
@@ -126,6 +154,10 @@ test('REVIEW.md 누락 또는 빈 내용은 경고하고 검토 완료로 위장
         hook_event_name: 'Stop',
         stop_hook_active: false,
       }));
+      assertWarning(runEvent(hookPath, {
+        hook_event_name: 'Stop', stop_hook_active: true,
+        last_assistant_message: '[code-quality-review:clean]',
+      }));
     } finally {
       removeTempDirectory(directory);
     }
@@ -140,25 +172,30 @@ function assertGeneratedCommand(hookPath, nodePath = NODE_PATH) {
   const command = handler.command;
   assert.equal(typeof command, 'string');
   const normalized = (value) => process.platform === 'win32'
-    ? value.replaceAll('\\', '/')
+    ? value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)
     : value.replaceAll("'", "'\\''");
   assert.ok(command.includes(normalized(nodePath)), 'command must use the running Node executable');
   assert.ok(command.includes(normalized(hookPath)), 'command must use the actual hook path');
 
-  for (const active of [false, true]) {
-    const shell = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
-    const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
+  for (const [active, message, blocks] of [
+    [false, '[code-quality-review:clean]', true],
+    [true, '[code-quality-review:revised]', true],
+    [true, '[code-quality-review:clean]', false],
+  ]) {
+    const shell = process.platform === 'win32'
+      ? (process.env.CODE_QUALITY_REVIEW_TEST_SHELL ?? 'powershell.exe')
+      : '/bin/sh';
+    const args = process.platform === 'win32' ? ['-NoProfile', '-Command', command] : ['-c', command];
     const result = spawnSync(shell, args, {
       encoding: 'utf8',
-      input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: active }),
+      input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: active, last_assistant_message: message }),
       timeout: 10_000,
-      windowsVerbatimArguments: process.platform === 'win32',
       windowsHide: true,
     });
     const output = parseOutput(result);
-    assert.deepEqual(output, active ? {} : {
+    assert.deepEqual(output, blocks ? {
       decision: 'block', reason: readFileSync(join(dirname(hookPath), 'REVIEW.md'), 'utf8').trim(),
-    });
+    } : {});
   }
 }
 
@@ -199,18 +236,57 @@ test('Windows의 공백이 있는 Node 실행 경로에서도 생성된 명령�
   }
 });
 
-test('Windows의 % 포함 스크립트·Node 경로는 잘못된 설정을 생성하지 않는다', {
+test('Windows의 % 포함 스크립트·Node 경로에서도 생성된 명령이 실행된다', {
   skip: process.platform !== 'win32',
 }, () => {
   const { directory, hookPath } = copyHookToTemp({ review: 'temporary review' });
   try {
     const percentHookPath = join(directory, '%QUALITY_REVIEW_TEST%.mjs');
     copyFileSync(HOOK_PATH, percentHookPath);
-    assertConfigError(runHook(percentHookPath, ['--print-config']));
+    assertGeneratedCommand(percentHookPath);
 
     const percentNodePath = join(directory, '%QUALITY_REVIEW_TEST%.exe');
     copyFileSync(NODE_PATH, percentNodePath);
-    assertConfigError(runHook(hookPath, ['--print-config'], '', percentNodePath));
+    assertGeneratedCommand(hookPath, percentNodePath);
+  } finally {
+    removeTempDirectory(directory);
+  }
+});
+
+test('셸 구문처럼 보이는 스크립트 경로도 리터럴로 실행한다', () => {
+  const { directory } = copyHookToTemp({ review: 'temporary review' });
+  try {
+    const hookPath = join(directory, "review'; Write-Output 'INJECTED'; #.mjs");
+    copyFileSync(HOOK_PATH, hookPath);
+    assertGeneratedCommand(hookPath);
+  } finally {
+    removeTempDirectory(directory);
+  }
+});
+
+test('PowerShell 변수·백틱·작은따옴표를 포함한 Node 경로를 리터럴로 실행한다', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const { directory, hookPath } = copyHookToTemp({ review: 'temporary review' });
+  try {
+    const nodePath = join(directory, "node's O’Connor $value`!%QUALITY_REVIEW_TEST% & (x).exe");
+    copyFileSync(NODE_PATH, nodePath);
+    assertGeneratedCommand(hookPath, nodePath);
+  } finally {
+    removeTempDirectory(directory);
+  }
+});
+
+test('PowerShell이 인식하는 곡선형 작은따옴표 경로도 리터럴로 실행한다', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const { directory } = copyHookToTemp({ review: 'temporary review' });
+  try {
+    for (const quote of ['\u2018', '\u2019', '\u201a', '\u201b']) {
+      const hookPath = join(directory, `O${quote}Connor.mjs`);
+      copyFileSync(HOOK_PATH, hookPath);
+      assertGeneratedCommand(hookPath);
+    }
   } finally {
     removeTempDirectory(directory);
   }

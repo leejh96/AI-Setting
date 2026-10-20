@@ -3,15 +3,11 @@ import { fileURLToPath } from 'node:url';
 
 function printConfig() {
   const scriptPath = fileURLToPath(import.meta.url);
-  if (process.platform === 'win32' && /%/.test(process.execPath + scriptPath)) {
-    throw new Error('Unsupported Windows path');
-  }
   const quote = process.platform === 'win32'
-    ? (value) => `"${value.replaceAll('\\', '/')}"`
+    ? (value) => `'${value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)}'`
     : (value) => `'${value.replaceAll("'", "'\\''")}'`;
   const invocation = `${quote(process.execPath)} ${quote(scriptPath)}`;
-  // cmd.exe /s /c strips the outer pair before parsing the quoted executable.
-  const command = process.platform === 'win32' ? `"${invocation}"` : invocation;
+  const command = process.platform === 'win32' ? `& ${invocation}` : invocation;
   process.stdout.write(`${JSON.stringify({
     hooks: {
       Stop: [{ hooks: [{
@@ -27,10 +23,13 @@ function runHook() {
   if (event?.hook_event_name !== 'Stop' || typeof event.stop_hook_active !== 'boolean') {
     throw new Error('Invalid Stop hook event');
   }
-  // Codex marks the continuation so this hook cannot request another pass.
-  if (event.stop_hook_active) return {};
   const reason = readFileSync(new URL('./REVIEW.md', import.meta.url), 'utf8').trim();
   if (!reason) throw new Error('Empty review instructions');
+  // Only a review continuation can finish this gate; initial answers cannot skip it.
+  if (event.stop_hook_active && typeof event.last_assistant_message === 'string'
+      && /(?:^|\r?\n)\[code-quality-review:(clean|skipped|blocked)\]$/.test(event.last_assistant_message.trimEnd())) {
+    return {};
+  }
   return { decision: 'block', reason };
 }
 
@@ -44,7 +43,7 @@ try {
   }
 } catch {
   if (process.argv.includes('--print-config')) {
-    process.stderr.write('코드 품질 검토 훅 설정을 생성하지 못했습니다. 실행 인자를 확인하고, Windows에서는 Node와 스크립트 모두 %가 없는 경로를 사용하세요.\n');
+    process.stderr.write('코드 품질 검토 훅 설정을 생성하지 못했습니다. 실행 인자와 Node·스크립트 경로를 확인하세요.\n');
     process.exitCode = 1;
   } else {
     // A broken hook must be visible, without restarting the turn indefinitely.
