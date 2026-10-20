@@ -107,7 +107,7 @@ node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
           {
             "type": "command",
             "command": "C:/tools/nodejs/node.exe \"C:/repos/ai-setting/hooks/prompt-secret-checker/codex/codex-secret-checker.mjs\"",
-            "timeout": 15
+            "timeout": 45
           }
         ]
       }
@@ -129,7 +129,7 @@ node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
       {
         "type": "command",
         "command": "C:/tools/nodejs/node.exe C:/repos/ai-setting/hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs",
-        "timeout": 15
+        "timeout": 45
       }
     ]
   }

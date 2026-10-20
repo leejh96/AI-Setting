@@ -23,7 +23,7 @@ function printConfig() {
         {
           type: 'command',
           command,
-          timeout: 15,
+          timeout: 45,
         },
       ],
     },

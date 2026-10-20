@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOK_DIRECTORY = dirname(fileURLToPath(import.meta.url));
-const SCAN_TIMEOUT_MS = 5000;
+const SCAN_TIMEOUT_MS = 30000;
 const LEAK_EXIT_CODE = 42;
 
 export function getPromptBlockReason(prompt) {
