@@ -11,9 +11,21 @@ Codex와 Gemini/Antigravity의 `Stop` 훅이 같은 대화에 검토 지시를 �
 | Codex | 전역 `~/.codex/hooks.json`, 프로젝트 `.codex/hooks.json` | `decision: "block"`과 `reason` | `stop_hook_active`, `last_assistant_message` |
 | Gemini/Antigravity | 전역 `~/.gemini/config/hooks.json`, 프로젝트 `.agents/hooks.json` | `decision: "continue"`와 `reason` | 현재 사용자 턴의 transcript 내 검토 요청과 마지막 모델 응답 |
 
-두 도구 모두 첫 종료 시도와 재검토 요청에 짧은 적용 판단 지침과 `REVIEW.md`의 절대 경로만 전달합니다. 모델은 원래 요청과 이후 정정에 따른 이번 작업 전체 내역으로 적용 여부를 판단하며, 코드·스크립트·동작 설정을 변경한 구현·수정 작업에서만 매회 현재 `REVIEW.md`를 읽고 검토합니다. 설명·조사·읽기 전용 리뷰·문서만 변경한 작업 등에서는 상세 지침과 코드 파일을 추가로 읽지 않고 종료합니다. 파일을 읽을 수 없으면 `blocked`로 보고합니다. 상태 파일이나 Git 변경 추적은 사용하지 않습니다.
+Codex는 `UserPromptSubmit`, Antigravity는 현재 사용자 요청의 첫 `PreInvocation`에서 별도의 Node 감시 프로세스를 시작합니다. 준비 완료를 확인한 뒤 작업을 진행하며, 프로젝트 파일 전체 내용이나 해시를 읽지 않습니다. Git 루트와 추적 경로 목록 등 메타데이터는 확인합니다.
 
-일반 대화에도 적용 여부를 판단하는 추가 응답이 한 번 발생할 수 있습니다. 짧은 안내는 비적용 대화에 전달하는 지침량을 줄이는 방식이며, 추가 모델 호출 자체를 없애거나 특정 토큰 절감률을 보장하지 않습니다.
+감시 중 대상 파일 이벤트가 발생하면 `changed`를 true로 기록합니다. 직접 편집·터미널·서브에이전트 중 수정 경로와 관계없이 같은 감시 범위의 이벤트를 받습니다. 같은 내용으로 다시 저장하거나 수정 후 원복한 경우도 수정 발생으로 검토 대상입니다. 기존에 있던 사용자 변경은 감시 시작 전 상태이므로 그것만으로 검토하지 않습니다. 편집 시마다 모델을 호출하지 않습니다.
+
+`Stop`은 로컬 통신으로 감시 상태와 수집된 이벤트 처리를 확인합니다. 정상 감시에서 수정 기록이 없으면 추가 프롬프트나 상태 표식 없이 감시를 종료합니다. 수정 기록이 있으면 짧은 안내와 `REVIEW.md`의 절대 경로를 같은 대화에 전달합니다. 검토 반복 중에는 감시와 수정 상태를 유지하고, 최종 상태에서 감시를 종료합니다.
+
+Git 프로젝트는 저장소 루트, Git이 없으면 작업 폴더를 재귀 감시합니다. 문서(`md/rst/adoc`, README 등), `.git`·`node_modules`·`.venv`·`dist`·`build`·`coverage`·`target` 등 생성/의존성 폴더, Git ignored 경로와 링크 대상의 변경은 제외합니다. Git 추적 경로는 ignore 패턴과 일치해도 포함합니다. 일반 txt·mdx는 대상입니다. 폴더 삭제·이동·교체와 분류가 불명확한 구조 변경은 보수적으로 수정으로 판단할 수 있습니다. 감시 범위 밖의 수정은 감지하지 않으며, 사용자나 다른 프로그램이 같은 범위를 수정한 경우 AI의 수정과 구분하지 못합니다.
+
+준비와 Stop에서 감시 응답성을 확인하기 위해 각 감시 루트에 `.ai-setting-quality-probe-<UUID>.tmp` 임시 파일을 생성·삭제합니다. 이 예약 이름은 모든 감시 프로세스에서 제외합니다. 작업 폴더 쓰기 권한이 필요하며, 예기치 않은 강제 종료 시 임시 파일이 남을 수 있습니다. probe 응답은 감시 연결의 동작 확인이며 OS 이벤트 무손실을 보장하지 않습니다.
+
+감시 시작·오류·종료·root 교체·이벤트 경로 누락·분류 실패·통신 실패는 수정 없음으로 취급하지 않습니다. 감시 실패는 자동 검토 미완료 경고로 남기고 사용자 작업이나 모델을 차단·재개하지 않습니다. Codex는 `systemMessage`, Antigravity는 stderr로 경고하며 실패 때문에 별도 모델 프롬프트나 `blocked` 응답을 요구하지 않습니다. Antigravity 경고의 화면 표시는 호스트에 따라 달라지므로 실행 로그도 확인합니다. 같은 요청의 실패한 감시를 새 기준으로 자동 재시작하지 않습니다. 정상 완료·상한·실패 등 종료 기록이 남은 요청은 반복 Stop이나 Antigravity PreInvocation에서도 재개하지 않습니다. 새 명시적 사용자 요청에서만 새 감시와 예산을 시작합니다. 준비 기록 유실을 새 기준으로 재준비하지 않으며, Antigravity는 현재 요청의 모델 응답이 이미 시작됐다면 기록을 잃어도 새 감시를 만들지 않습니다. 이전 해시 방식의 진행 중 기록도 새 감시로 승계할 수 없으므로 감지 실패로 처리하며 새 사용자 요청부터 감시합니다.
+
+감시는 정상 종료·감지된 실패와 같은 대화의 다음 요청에서 정리합니다. 중단 등으로 종료를 받지 못한 고아 프로세스는 최대 24시간 후 실패 상태를 남기고 종료합니다. 이 제한은 리뷰 통과를 뜻하지 않으며 아래의 별도 리뷰 횟수 상한과 구분합니다. 이벤트 대기열은 2,048개이며 초과는 실패입니다. Windows 감시 실행기는 3초, 감시 준비 대기는 약 4.5초, 통신은 수신 간격이 아닌 전체 요청별 3.5초, probe는 1.5초, Git 분류는 1초 제한입니다. 연속 이벤트 처리와 Stop 확인에도 유한 대기 제한을 두어 백그라운드 ignored 이벤트가 종료를 계속 붙잡지 않게 합니다. 셸·Node 시작과 감시 준비 비용은 남습니다.
+
+상태는 OS 임시 폴더의 `ai-setting-code-quality-review/` 아래에 요청별로 저장합니다. 경로·수정 여부·검토 상태·프로세스 정보와 로컬 통신 인증정보를 담고 원문·프롬프트·프로젝트 파일 해시는 저장하지 않습니다. 상태 파일은 비공개로 취급하고 내용을 로그에 출력하지 마세요. 정상 기록은 7일 후 정리합니다.
 
 응답 마지막 줄의 상태로 다음 동작을 결정합니다.
 
@@ -22,7 +34,7 @@ Codex와 Gemini/Antigravity의 `Stop` 훅이 같은 대화에 검토 지시를 �
 - `[code-quality-review:skipped]`: 비적용 작업으로 종료합니다. 검토 통과를 뜻하지 않습니다.
 - `[code-quality-review:blocked]`: 답변·승인 필요, 검증 실패·실행 불가 등 사유를 보고하고 종료합니다. 검토 통과를 뜻하지 않습니다.
 
-첫 응답의 종료 표식으로 검토를 생략할 수 없습니다. 검토 이후에는 코드 블록 밖의 마지막 독립 줄에 있는 종료 표식만 인정합니다. 닫히지 않은 백틱·물결표 코드 블록 안의 표식이나 표식 누락·revised는 다시 검토를 요청합니다. 횟수 제한은 없으며, 검토·수정·검증이 반복될수록 시간과 모델 사용량이 늘어납니다. 사용자가 중단할 수 있습니다. 다른 Stop 훅의 반복까지 제어하지는 않습니다.
+변경이 확인된 첫 응답의 종료 표식으로 검토를 생략할 수 없습니다. 검토 이후에는 코드 블록 밖의 마지막 독립 줄에 있는 종료 표식만 인정합니다. 닫히지 않은 백틱·물결표 코드 블록 안의 표식이나 표식 누락·revised는 다시 검토를 요청합니다. 자동 검토 프롬프트는 사용자 요청당 최대 5회입니다. 감시 프로세스가 횟수 확인·증가·저장을 직렬로 처리하고 저장 성공을 확인한 경우에만 허가하므로 동시 Stop도 예산을 초과하지 않습니다. 다섯 번째 검토에서 받은 유효한 종료 표식은 인정합니다. 상한에도 종료를 확인하지 못하면 검토 미완료 경고를 남기고 추가 모델 프롬프트 없이 종료하며, 이를 clean으로 바꾸지 않습니다. 이 상한은 훅의 자동 재요청을 제한하며 한 번의 모델 응답 내부 작업 횟수까지 제어하지는 않습니다. 검토·수정·검증이 반복될수록 시간과 모델 사용량이 늘어납니다. 사용자가 중단할 수 있습니다. 다른 Stop 훅의 반복까지 제어하지는 않습니다.
 
 Antigravity는 `fullyIdle: true`이고 정상 종료 사유인 `model_stop` 또는 기존 버전의 `NO_TOOL_CALL`일 때만 검토합니다. 백그라운드 작업이 남았거나 오류·취소·실행 제한으로 종료하면 강제로 재개하지 않습니다. 대화 기록에서 현재 `USER_INPUT/USER_EXPLICIT` 이후 이 훅의 요청 표식을 담은 `SYSTEM_MESSAGE/SYSTEM`과 마지막 `PLANNER_RESPONSE/MODEL`을 확인합니다. 이 기록 형식은 공식 입력 필드처럼 안정성이 보장된 규약이 아니므로 앱 버전이 바뀌면 실제 기록과 반복 종료를 다시 검증해야 합니다.
 
@@ -32,7 +44,7 @@ Antigravity는 `fullyIdle: true`이고 정상 종료 사유인 `model_stop` 또�
 
 검토는 같은 대화의 AI 판단입니다. 특정 모델이나 새 서브에이전트를 훅 자체가 고정 호출하지 않으며, 원래 사용자가 지정한 모델·리뷰어 조건을 따르도록 지시합니다. 상태 표식은 모델의 자기 보고이므로 모든 버그의 발견이나 실제 테스트 결과를 훅 자체가 독립적으로 증명하지는 않습니다.
 
-입력·지침·대화 기록을 읽거나 해석하지 못하면 반복을 멈추며 자동 검토 완료로 간주하지 않습니다. Codex는 `systemMessage` 경고 JSON, Antigravity는 stderr 경고와 빈 JSON을 반환합니다. 클라이언트에 따라 경고가 출력에 나타나지 않을 수 있으므로 문제가 의심되면 훅 실행 로그를 확인합니다. Node나 훅 자체를 시작하지 못하는 오류도 별도로 확인해야 합니다.
+OS의 파일 감시는 네트워크 파일시스템·가상화 환경에서 불안정할 수 있으며 보고되지 않은 이벤트 유실까지 검출한다고 보장하지 않습니다. 이 환경은 별도 검증이 필요합니다. 입력·지침·대화 기록을 읽거나 해석하지 못한 경우에도 자동 검토 완료로 간주하지 않습니다. Codex는 `systemMessage` 경고 JSON, Antigravity는 stderr 경고와 빈 JSON을 반환합니다. 클라이언트에 따라 경고가 출력에 나타나지 않을 수 있습니다. Codex CLI 0.160.0의 `--no-daemon exec --json`에서는 공식 `systemMessage`의 출력 누락을 확인했습니다. 경고 JSON 반환과 실제 화면·CLI 표시는 별도이며, 표시를 확인했다고 주장하지 않습니다. 문제가 의심되면 훅 실행 로그와 비밀 필드를 제외한 실패 상태를 함께 확인합니다. Node나 훅 자체를 시작하지 못하는 오류도 별도로 확인해야 합니다.
 
 ## 파일 구성
 
@@ -47,6 +59,9 @@ hooks/code-quality-review/
 ├── REVIEW.md                            # 공통 검토 지침
 ├── review-request.mjs                   # 공통 적용 판단 안내 생성
 ├── review-status.mjs                    # 공통 종료 표식·코드 펜스 판별
+├── review-changes.mjs                   # 감시 시작·로컬 통신·요청별 상태
+├── watch-worker.mjs                     # 파일 이벤트 감시·분류·프로세스 수명
+├── review-changes.test.mjs              # 실제 파일 이벤트·실패·프로세스 정리 검사
 ├── README.md                            # 공통 동작과 한계
 ├── README.windows.md                    # 두 도구의 Windows 설정
 └── README.macos.md                      # 두 도구의 macOS 설정
@@ -64,9 +79,9 @@ hooks/code-quality-review/
 코드를 변경한 경우 다음 자동 테스트를 실행합니다. 운영체제별 명령 실행과 실제 대화 확인은 각 안내를 따릅니다.
 
 ```sh
-node --test hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
+node --test hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
 ```
 
-해제할 때는 Codex의 해당 Stop 핸들러 또는 Antigravity의 `ai-setting-code-quality-review` 키만 비활성화하거나 제거합니다. 시크릿 검사 등 다른 훅과 기존 기능 설정을 유지합니다.
+해제할 때는 Codex의 해당 UserPromptSubmit·Stop 핸들러 또는 Antigravity의 `ai-setting-code-quality-review` 키만 비활성화하거나 제거합니다. 시크릿 검사 등 다른 훅과 기존 기능 설정을 유지합니다. 이미 비활성화한 설정을 갱신할 때는 해당 상태도 보존합니다.
 
-공식 계약: [Codex Hooks](https://learn.chatgpt.com/docs/hooks), [Antigravity Hooks](https://antigravity.google/docs/hooks).
+공식 계약과 감시 한계: [Node.js fs.watch](https://nodejs.org/api/fs.html#fswatchfilename-options-listener), [Codex Hooks](https://learn.chatgpt.com/docs/hooks), [Antigravity Hooks](https://antigravity.google/docs/hooks).

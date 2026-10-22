@@ -17,7 +17,7 @@ node --version
 node hooks/code-quality-review/codex/codex-code-quality-review.mjs --print-config
 ```
 
-전역 `$env:USERPROFILE\.codex\hooks.json`의 `hooks.Stop`에 출력한 그룹을 병합합니다. 프로젝트만 적용하려면 `.codex/hooks.json`을 사용합니다. 기존 Stop 핸들러와 `UserPromptSubmit` 시크릿 검사 등을 보존하며 전역·프로젝트·인라인 설정에 중복 등록하지 않습니다.
+전역 `$env:USERPROFILE\.codex\hooks.json`의 `hooks.UserPromptSubmit`과 `hooks.Stop`에 출력한 그룹을 모두 병합합니다. 앞 이벤트는 파일 감시 준비를 완료하고 Stop은 수정 기록이 있을 때만 검토를 시작합니다. 프로젝트만 적용하려면 `.codex/hooks.json`을 사용합니다. 기존 Stop 핸들러와 `UserPromptSubmit` 시크릿 검사 등을 보존하며 전역·프로젝트·인라인 설정에 중복 등록하지 않습니다. 비활성화한 품질 훅을 임의로 다시 켜지 않습니다.
 
 생성 명령은 Codex가 PowerShell에서 실행하는 형식입니다. 호출 연산자 `&`와 작은따옴표를 유지합니다. 경로의 공백·작은따옴표·곡선형 작은따옴표·`%`·`$`·백틱을 문자 그대로 전달합니다. cmd용 따옴표 형식으로 바꾸지 마세요.
 
@@ -29,7 +29,7 @@ Codex를 새로 시작하고 CLI `/hooks`에서 활성 상태·출처·명령을
 node hooks/code-quality-review/gemini/gemini-code-quality-review.mjs --print-config
 ```
 
-전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키를 병합합니다. 프로젝트만 적용하려면 `.agents/hooks.json`을 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
+전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`을 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
 Windows 생성 명령은 기본 Windows PowerShell의 `powershell.exe -NoProfile -NonInteractive -EncodedCommand ...` 형식입니다. Antigravity가 경로의 따옴표를 파일명으로 넘기거나 cmd가 `%`를 확장하는 문제를 피하도록, Node와 훅 경로를 인용한 호출문을 UTF-16 Base64로 전달합니다. 인코딩은 비밀값 보호 기능이 아니며 기기 경로만 담습니다. 생성한 명령을 그대로 사용합니다.
 
@@ -46,15 +46,23 @@ Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks
 ## 검증과 갱신
 
 ```powershell
-node --test hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
+node --test hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
 ```
 
 자동 테스트는 도구별 입력·종료 표식·오류 처리와 생성 명령을 검사합니다. Codex 테스트는 기본 `powershell.exe`를 사용합니다. 실제 Codex가 다른 PowerShell을 사용한다면 테스트할 때만 `CODE_QUALITY_REVIEW_TEST_SHELL`에 그 실행 파일 경로를 지정합니다. Antigravity 테스트는 생성한 EncodedCommand를 직접 실행하며, 이는 모델의 전체 검토 반복을 증명하지는 않습니다.
 
-새 대화에서 작은 구현을 요청한 뒤 현재 파일 재읽기, 문제 수정·테스트, `revised` 이후 별도 회차의 `clean` 종료를 확인합니다. 문서만 수정하는 작업·읽기 전용 리뷰·답변 대기에서는 코드 수정 없이 종료해야 합니다. 검증을 실행할 수 없는 상황은 통과로 보고하지 않아야 합니다. CLI와 데스크톱 앱의 확인 결과를 구분합니다.
+새 대화에서 작은 구현을 요청한 뒤 현재 파일 재읽기, 문제 수정·테스트, `revised` 이후 별도 회차의 `clean` 종료를 확인합니다. 터미널·서브에이전트가 작업 폴더 안의 코드를 수정한 경우도 검토해야 합니다. 변경 없는 질문·기존 문서만 수정·읽기 전용 리뷰·답변 대기에서는 추가 검토 프롬프트와 상태 표식 없이 종료해야 합니다. 검증을 실행할 수 없는 상황은 통과로 보고하지 않아야 합니다. CLI와 데스크톱 앱의 확인 결과를 구분합니다.
 
-2026-10-20에 Windows, Node.js 24.14.0, Codex CLI 0.160.0과 Antigravity CLI 1.3.3에서 검증했습니다. Antigravity의 기본 Argon 모델은 할당량 초과(429)로 실행하지 못해 Gemini 3.8 Flash Medium(`gemini-3.8-flash-medium`)을 사용했습니다. Flash에서 설명·구현·문서·읽기 전용 리뷰·답변 대기·검증 실패의 종료를 확인했고, 연속 두 번의 오류 주입에서도 `revised → revised → clean`으로 종료했습니다. 마지막 회차의 현재 파일 재읽기와 테스트·사용자 파일 보존도 확인했습니다. 비대화형 테스트는 해당 호출에만 도구 자동 승인을 허용하고 샌드박스를 유지했습니다. 일상 설정에 자동 승인 옵션을 추가하지 않습니다.
+2026-10-23에 Windows, Node.js 24.14.0, Codex CLI 0.160.0과 Antigravity CLI의 Gemini 3.8 Flash Medium(`gemini-3.8-flash-medium`)에서 파일 감시 방식을 검증했습니다. Codex에서 일반 질문은 검토 요청 없이 종료했고, 실제 서브에이전트가 코드를 수정한 요청은 현재 파일 재읽기·기존 테스트·품질 검토 후 종료했습니다. Flash에서도 무변경 질문의 검토 요청 0회, 코드 수정의 검토 요청 1회와 종료를 확인했습니다. 두 도구 모두 시험용 감시 프로세스 종료를 수정 없음으로 통과시키지 않았고, 실패 상태를 보존하며 추가 검토 프롬프트 없이 원래 작업을 종료했습니다. Flash의 미완료 경고는 실행 로그에서 확인했습니다. 기존 전역 설정과 시크릿 검사 훅은 보존했습니다.
 
-실제 macOS 런타임과 데스크톱 앱의 재시작 후 적용은 이번에 확인하지 않았습니다. 해당 환경에 적용한 뒤 위 대화 검증을 수행하세요.
+Codex는 공식 `systemMessage` 경고를 반환합니다. 다만 Codex CLI 0.160.0의 `--no-daemon exec --json` 검증에서는 감시 실패 경고가 stdout·stderr에 표시되지 않았습니다. 실패 상태 저장과 추가 프롬프트 방지는 확인했으며, CLI 경고 표시 검사는 실패로 따로 기록했습니다. 이 결과를 경고 표시 성공으로 집계하지 않으며 데스크톱 UI 표시도 확인되지 않았습니다.
+
+별도 실제 Codex·Flash 시험에서는 매 검토마다 시험용 오류를 다시 넣어 수정·검증을 5회 수행하게 했습니다. 두 도구 모두 검토 요청 5회 후 `review-limit` 상태로 종료했고 여섯 번째 검토나 `clean` 판정은 발생하지 않았습니다. 감시 기록을 실행 중에 지운 시험에서도 새 기준으로 재준비하지 않고 실패 상태를 남겼으며 원래 답변은 정상 종료했습니다. 자동 테스트 69개 전체 실행과 이후 정리 로직 회귀 테스트 2개를 통과했습니다.
+
+Windows에서는 Node의 detached 실행만으로 감시를 시작하면 PowerShell 종료 뒤에도 출력 파이프가 감시 프로세스에 남아 Antigravity의 `WaitDelay` 오류가 발생하는 경우를 재현했습니다. 감시 시작만 숨겨진 `Start-Process`로 분리했고, 준비 응답·출력 종료 후에도 감시가 살아 있는 자동 검사와 실제 Flash의 준비·종료 훅 오류 부재를 확인했습니다. 워커 준비 응답은 별도로 확인하므로 실행기 종료만으로 감시 성공을 판단하지 않습니다.
+
+자동 테스트는 요청당 5회 제한, 마지막 허용 회차 정상 종료, 동시 허가·저장 실패, 상태 유실 후 예산 초기화 방지, 종료 뒤 재진입과 무변경 요청의 프로젝트 내용 읽기 차단, 같은 내용 저장·원복, 파일·폴더 이동과 삭제, 겹친 감시 범위, Git ignored·추적 경로, 감시 오류·종료·통신 실패, 실패 후 재준비 방지와 프로세스 정리를 검사합니다. 서브에이전트 검증은 대화 기록을 저장하는 일반 Codex CLI 세션에서 수행했습니다. 비대화형 모델 시험의 자동 승인은 해당 호출에만 허용했고 일상 설정에는 추가하지 않았습니다. 이전 해시 방식의 성능 수치는 현재 감시 방식의 성능을 나타내지 않으므로 이 안내에서 제거했습니다.
+
+실제 macOS 런타임과 데스크톱 앱의 재시작 후 적용은 이번에 확인하지 않았습니다. 해당 환경에 적용한 뒤 위 대화 검증을 수행하세요. 위 CLI 테스트 결과만으로 앞서 보고된 요청 타임아웃의 원인이나 해소를 확정할 수는 없습니다.
 
 Node·저장소 경로가 바뀌면 해당 도구의 설정을 다시 생성하고 갱신·등록·검증합니다. 현재 기기의 절대 경로가 든 생성 설정은 저장소에 커밋하지 않습니다.
