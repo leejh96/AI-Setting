@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const watchFailureWarning = '코드 품질 검토 미완료: 파일 변경 감시를 확인하지 못했습니다. 수정 없음이나 검토 통과로 처리하지 않았으며 추가 자동 검토는 중단합니다. 다음 요청에서 감시 준비 상태를 확인하세요.';
+export const watchFailureWarning = '코드 품질 검토 미완료: 파일 변경 감시를 확인하지 못했습니다. 수정 없음이나 검토 통과로 처리하지 않았으며 추가 자동 검토는 중단합니다. 준비 훅의 등록·신뢰 상태와 실행 오류를 확인하세요. 설정을 추가·갱신했다면 앱을 완전히 재시작한 뒤 다음 사용자 요청부터 감시 준비를 확인하세요. 현재 요청 중간에 감시를 시작해 앞선 변경까지 검토됐다고 처리하지 마세요.';
 export const reviewLimitWarning = '코드 품질 검토 미완료: 요청당 자동 검토 5회 상한에 도달했습니다. 검토 통과로 처리하지 않고 자동 반복을 종료합니다. 남은 문제와 검증을 확인하고 필요한 후속 작업을 요청하세요.';
 
 export function terminalWarning(action, failed = false) {
