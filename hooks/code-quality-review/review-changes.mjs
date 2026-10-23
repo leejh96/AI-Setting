@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, opendirSync, lstatSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -9,6 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 export class ChangeWatchError extends Error {}
 export const MAX_REVIEW_REQUESTS = 5;
+const errorCodes = new Set(['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ENOSPC', 'EMFILE', 'ENFILE', 'ENOMEM',
+  'EIO', 'EROFS', 'ENOSYS', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'EEXIST',
+  'EAGAIN', 'ENOBUFS', 'EBADF', 'EINVAL', 'ENAMETOOLONG', 'ENOTEMPTY']);
+export function watchErrorCode(error) {
+  const code = error?.code ?? error?.cause?.code;
+  return errorCodes.has(code) ? code : undefined;
+}
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const terminalActions = new Set(['unchanged', 'review-finished', 'review-limit', 'watch-failed', 'superseded']);
 function isTerminal(state) {
@@ -26,8 +33,13 @@ const terminalResult = (state) => ({ terminal: state.action, failed: !!state.fai
 
 export function saveWatch(path, state) {
   const temp = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
-  renameSync(temp, path);
+  try {
+    writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
+    renameSync(temp, path);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* Preserve the write failure; stale temporary files are cleaned later. */ }
+    throw error;
+  }
 }
 
 function identity(client, session, turn, paths) {
@@ -49,7 +61,7 @@ export function requestWatch(state, command, action) {
       settled = true; clearTimeout(timer); socket.destroy();
       if (error) reject(error); else resolveRequest(value);
     };
-    const fail = () => finish(new ChangeWatchError('Watcher unavailable'));
+    const fail = (error) => finish(new ChangeWatchError('Watcher unavailable', { cause: error }));
     const timer = setTimeout(fail, 3500);
     socket.on('error', fail);
     socket.on('close', () => { if (!settled) fail(); });
@@ -108,24 +120,77 @@ export async function stopChanges(client, session, turn, paths) {
   }
   await finishWatch({ version: 2, endpoint: watch.endpoint, token: watch.token });
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  saveWatch(path, { ...state, version: 2, phase: 'closed', failed: state.failed || 'watch-unavailable', action: 'watch-failed', updatedAt: Date.now() });
+  saveWatch(path, { ...state, version: 2, owner, phase: 'closed', failed: state.failed || 'watch-unavailable', action: 'watch-failed', updatedAt: Date.now() });
 }
 
 async function ready(path) {
   const deadline = Date.now() + 4500;
   while (Date.now() < deadline) {
     let state;
-    try { state = JSON.parse(readFileSync(path, 'utf8')); } catch { throw new ChangeWatchError('Invalid watcher state'); }
+    state = JSON.parse(readFileSync(path, 'utf8'));
     if (state.version !== 2 || state.failed || state.phase === 'closed') throw new ChangeWatchError('Change tracking unavailable');
     try {
       const status = await requestWatch(state, 'status');
       if (status.phase === 'ready') return state;
-    } catch {
-      if (state.phase === 'ready') throw new ChangeWatchError('Watcher stopped');
+    } catch (error) {
+      if (state.phase === 'ready') throw error;
     }
     await delay(25);
   }
   throw new ChangeWatchError('Watcher startup timed out');
+}
+
+function cleanupStates(directory, currentFile, currentOwner) {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const protectedFiles = new Set([currentFile, currentOwner]);
+  const stateName = /^[a-f0-9]{64}\.json$/;
+  const ownerName = /^owner-[a-f0-9]{64}\.json$/;
+  const temporaryName = /^((?:owner-)?[a-f0-9]{64}\.json)\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/;
+  function read(name) {
+    try {
+      const value = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch (error) { if (error.code === 'ENOENT') return undefined; if (error instanceof SyntaxError) return null; throw error; }
+  }
+  function old(name) {
+    try { const stat = lstatSync(join(directory, name)); return stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff; }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  }
+  const current = read(currentOwner);
+  if (stateName.test(current?.file)) protectedFiles.add(current.file);
+  function removeState(name, expectedOwner) {
+    if (protectedFiles.has(name) || !old(name)) return;
+    const state = read(name);
+    if (!state || !isTerminal(state) || !/^[a-f0-9]{64}$/.test(state.owner)) return;
+    const ownerFile = `owner-${state.owner}.json`;
+    if (expectedOwner && ownerFile !== expectedOwner) return;
+    const owner = read(ownerFile);
+    if (owner === null || (owner?.file === name && (protectedFiles.has(ownerFile) || !old(ownerFile)))) return;
+    unlinkSync(join(directory, name));
+    if (owner?.file === name && !protectedFiles.has(ownerFile) && old(ownerFile) && read(ownerFile)?.file === name) {
+      unlinkSync(join(directory, ownerFile));
+    }
+  }
+  const entries = opendirSync(directory);
+  try {
+    for (let count = 0, entry; count < 5000 && (entry = entries.readSync()); count++) {
+      const name = entry.name;
+      if (!(stateName.test(name) || ownerName.test(name) || temporaryName.test(name)) || protectedFiles.has(name) || !old(name)) continue;
+      try {
+        if (stateName.test(name)) removeState(name);
+        else if (ownerName.test(name)) {
+          const owner = read(name);
+          if (stateName.test(owner?.file)) removeState(owner.file, name);
+        } else {
+          const match = name.match(temporaryName);
+          if (!match || protectedFiles.has(match[1])) continue;
+          let target = read(match[1]);
+          if (ownerName.test(match[1]) && stateName.test(target?.file)) target = read(target.file) ?? null;
+          if (target === undefined || (target && isTerminal(target))) unlinkSync(join(directory, name));
+        }
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  } finally { entries.closeSync(); }
 }
 
 async function startChanges(client, session, turn, paths, canStart) {
@@ -145,17 +210,12 @@ async function startChanges(client, session, turn, paths, canStart) {
   }
   if (!canStart) throw new ChangeWatchError('Cannot prepare after the request has started');
   await stopSession(client, session, paths);
-  for (const name of readdirSync(key.directory).slice(0, 5000)) {
-    if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
-    const path = join(key.directory, name);
-    try { if (Date.now() - lstatSync(path).mtimeMs > 7 * 24 * 60 * 60 * 1000) unlinkSync(path); }
-    catch (error) { if (error.code !== 'ENOENT') throw new ChangeWatchError('Watcher state cleanup failed'); }
-  }
+  cleanupStates(key.directory, key.path.split(/[\\/]/).at(-1), `owner-${key.owner}.json`);
   const roots = paths.map((cwd) => {
     const result = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8', windowsHide: true, timeout: 1000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     });
-    if (result.error && result.error.code !== 'ENOENT') throw new ChangeWatchError('Workspace lookup failed');
+    if (result.error && result.error.code !== 'ENOENT') throw result.error;
     return { path: result.status === 0 ? result.stdout.trim() : resolve(cwd), git: result.status === 0 };
   });
   const id = randomUUID();
@@ -164,7 +224,7 @@ async function startChanges(client, session, turn, paths, canStart) {
     roots: [...new Map(roots.map((root) => [root.path, root])).values()],
     changed: false, reviewing: false, reviewRequests: 0, stops: 0, action: 'preparing', updatedAt: Date.now() };
   try { writeFileSync(key.path, JSON.stringify(state), { mode: 0o600, flag: 'wx' }); }
-  catch (error) { if (error.code === 'EEXIST') { await ready(key.path); return; } throw new ChangeWatchError('Watcher state write failed'); }
+  catch (error) { if (error.code === 'EEXIST') { await ready(key.path); return; } throw error; }
   saveWatch(ownerPath, { file: key.path.split(/[\\/]/).at(-1), watch: { version: 2, endpoint: state.endpoint, token: state.token } });
   const worker = fileURLToPath(new URL('./watch-worker.mjs', import.meta.url));
   if (process.platform === 'win32') {
@@ -174,7 +234,7 @@ async function startChanges(client, session, turn, paths, canStart) {
     const launched = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
       stdio: 'ignore', windowsHide: true, timeout: 3000,
     });
-    if (launched.status !== 0) throw new ChangeWatchError('Watcher launch failed');
+    if (launched.status !== 0) throw launched.error ?? new ChangeWatchError('Watcher launch failed');
   } else {
     const child = spawn(process.execPath, [worker, key.path], { detached: true, stdio: 'ignore' });
     child.on('error', () => {});
@@ -186,12 +246,14 @@ async function startChanges(client, session, turn, paths, canStart) {
 export async function prepareChanges(client, session, turn, paths, canStart = true) {
   const key = identity(client, session, turn, paths);
   try { await startChanges(client, session, turn, paths, canStart); }
-  catch {
+  catch (error) {
     try {
       mkdirSync(key.directory, { recursive: true, mode: 0o700 });
-      const state = existsSync(key.path) ? JSON.parse(readFileSync(key.path, 'utf8')) : { version: 2 };
+      let state = existsSync(key.path) ? JSON.parse(readFileSync(key.path, 'utf8')) : { version: 2 };
       await finishWatch(state);
-      saveWatch(key.path, { ...state, phase: 'closed', failed: 'watch-prepare-failed', action: 'watch-failed', updatedAt: Date.now() });
+      if (existsSync(key.path)) state = JSON.parse(readFileSync(key.path, 'utf8'));
+      saveWatch(key.path, { ...state, owner: key.owner, phase: 'closed', failed: state.failed || 'watch-prepare-failed',
+        errorCode: state.errorCode ?? watchErrorCode(error), action: 'watch-failed', updatedAt: Date.now() });
     } catch { /* Missing or invalid state also fails the Stop check. */ }
     throw new ChangeWatchError('Change tracking preparation failed');
   }

@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { saveWatch, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
+import { saveWatch, watchErrorCode, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
 
 const path = process.argv[2];
 const state = JSON.parse(readFileSync(path, 'utf8'));
@@ -15,11 +15,13 @@ let closing = false;
 let generation = 0;
 const roots = [];
 const persist = () => { state.updatedAt = Date.now(); saveWatch(path, state); };
+const markEdited = () => { state.changed = true; state.action = 'edited'; persist(); };
 const view = () => ({ phase: state.phase, failed: !!state.failed, changed: state.changed, reviewing: state.reviewing,
   reviewRequests: state.reviewRequests ?? 0, action: state.action });
-function fail(reason) {
+function fail(reason, error) {
   if (closing || state.failed) return;
   state.failed = reason;
+  state.errorCode = watchErrorCode(error);
   finish('watch-failed');
 }
 function eligible(root, filename, eventType) {
@@ -63,13 +65,15 @@ function flush(root) {
       while (root.pending.size && !state.changed && !state.failed) {
         if (Date.now() > deadline) throw Error('Event drain timeout');
         const names = [...root.pending]; root.pending.clear();
-        const candidates = names.filter((name) => !root.tracked.has(name));
-        const skip = root.git && candidates.length ? await ignored(root, candidates) : new Set();
-        if ([...skip].some((name) => !candidates.includes(name))) throw Error('Invalid ignore output');
-        if (names.some((name) => !skip.has(name))) { state.changed = true; state.action = 'edited'; persist(); }
+        let skip;
+        try { skip = root.git ? await ignored(root, names) : new Set(); }
+        catch (error) { if (closing || state.changed || state.failed) return; throw error; }
+        if (closing || state.changed || state.failed) return;
+        if ([...skip].some((name) => !names.includes(name))) throw Error('Invalid ignore output');
+        if (names.some((name) => !skip.has(name))) markEdited();
       }
       if (state.changed || state.failed) root.pending.clear();
-    } catch { fail('event-filter-failed'); }
+    } catch (error) { fail('event-filter-failed', error); }
   })().finally(() => { root.flushing = null; });
   return root.flushing;
 }
@@ -104,7 +108,7 @@ async function checkpoint() {
 function finish(action) {
   if (closing) return;
   closing = true; state.phase = 'closed'; state.action = action;
-  try { persist(); } catch { state.failed = 'watch-state-write-failed'; }
+  try { persist(); } catch (error) { state.failed ||= 'watch-state-write-failed'; state.errorCode ??= watchErrorCode(error); }
   for (const root of roots) root.watcher?.close();
   server.close(); clearTimeout(expiry);
   setTimeout(() => process.exit(), 100).unref();
@@ -136,14 +140,14 @@ const server = createServer({ allowHalfOpen: true }, (socket) => {
           state.reviewing = true; state.action = request.action; persist();
         } else if (request.command !== 'status') throw Error('Invalid request');
         socket.end(`${JSON.stringify(view())}\n`);
-      } catch { fail('watch-check-failed'); socket.end(`${JSON.stringify(view())}\n`); }
-    }).catch(() => { socket.destroy(); fail('watch-state-failed'); });
+      } catch (error) { fail('watch-check-failed', error); socket.end(`${JSON.stringify(view())}\n`); }
+    }).catch((error) => { socket.destroy(); fail('watch-state-failed', error); });
   });
 });
 const expiry = setTimeout(() => { fail('watch-lifetime-expired'); finish('watch-failed'); }, 24 * 60 * 60 * 1000);
-process.on('uncaughtException', () => { try { fail('worker-exception'); } finally { process.exitCode = 1; } });
-process.on('unhandledRejection', () => fail('worker-rejection'));
-server.on('error', () => { fail('watch-server-failed'); process.exitCode = 1; });
+process.on('uncaughtException', (error) => { try { fail('worker-exception', error); } finally { process.exitCode = 1; } });
+process.on('unhandledRejection', (error) => fail('worker-rejection', error));
+server.on('error', (error) => { fail('watch-server-failed', error); process.exitCode = 1; });
 server.listen(state.endpoint, async () => {
   try {
     state.pid = process.pid;
@@ -154,9 +158,12 @@ server.listen(state.endpoint, async () => {
       roots.push(root);
       root.watcher = watch(root.path, { recursive: true }, (eventType, filename) => {
         try {
+          if (closing || state.failed) return;
           if (root.probes.has(filename)) { root.probes.get(filename)(); return; }
+          if (state.changed) return;
           const rel = eligible(root, filename, eventType);
-          if (rel && !state.changed && !state.failed) {
+          if (rel) {
+            if (root.tracked.has(rel)) { markEdited(); return; }
             generation++;
             root.pending.add(rel);
             if (root.pending.size > 2048) throw Error('Event queue limit');
@@ -165,16 +172,16 @@ server.listen(state.endpoint, async () => {
               setImmediate(() => { root.scheduled = false; flush(root); });
             }
           }
-        } catch { fail('watch-event-failed'); }
+        } catch (error) { fail('watch-event-failed', error); }
       });
-      root.watcher.on('error', () => fail('watch-error'));
+      root.watcher.on('error', (error) => fail('watch-error', error));
       root.watcher.on('close', () => { if (!closing && !state.failed) fail('watch-closed'); });
       if (root.git) {
         const tracked = spawnSync('git', ['-C', root.path, 'ls-files', '--cached', '-z'], {
           encoding: 'utf8', windowsHide: true, timeout: 1000, maxBuffer: 4 * 1024 * 1024,
           env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
         });
-        if (tracked.status !== 0) throw Error('Tracked path lookup failed');
+        if (tracked.status !== 0) throw tracked.error ?? Error('Tracked path lookup failed');
         for (const name of tracked.stdout.split('\0').filter(Boolean)) {
           const parts = name.split('/');
           for (let i = 1; i <= parts.length; i++) root.tracked.add(parts.slice(0, i).join('/'));
@@ -182,5 +189,5 @@ server.listen(state.endpoint, async () => {
       }
     }
     await checkpoint(); if (!closing) { state.phase = 'ready'; state.action = 'prepared'; persist(); }
-  } catch { fail('watch-start-failed'); }
+  } catch (error) { fail('watch-start-failed', error); }
 });

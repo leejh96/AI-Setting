@@ -8,7 +8,7 @@ import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { prepareChanges, checkChanges, stopChanges, stopSession, finishWatch, requestWatch, ChangeWatchError } from './review-changes.mjs';
+import { prepareChanges, checkChanges, stopChanges, stopSession, finishWatch, requestWatch, watchErrorCode, ChangeWatchError } from './review-changes.mjs';
 
 const previous = { TMP: process.env.TMP, TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR, NODE_OPTIONS: process.env.NODE_OPTIONS };
 const originalTmp = tmpdir(), root = mkdtempSync(join(originalTmp, 'quality-watch-test-'));
@@ -117,6 +117,96 @@ test('기존 Git 사용자 변경은 기준에 포함하고 ignored 변경은 �
   assert.equal((await f.check()).changed, false);
 });
 
+test('추적·미추적 혼합 배치는 Git 분류 없이 즉시 수정으로 확정한다', async () => {
+  const f = fixture(), inject = join(root, 'mixed-tracked-batch.mjs'), calls = join(root, 'mixed-ignore-calls');
+  git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+  writeFileSync(join(f.cwd, 'untracked.mjs'), 'untracked');
+  writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='batch.trigger'){listener('change','code.mjs');listener('change','untracked.mjs');}else listener(event,name)});
+const spawn=cp.spawn;cp.spawn=(file,args,...rest)=>{if(file==='git'&&args.includes('check-ignore')){fs.writeFileSync(${JSON.stringify(calls)},'called');throw Error('Injected ignore failure');}return spawn(file,args,...rest)};syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  writeFileSync(join(f.cwd, 'batch.trigger'), 'emit mixed events');
+  assert.equal((await f.check()).changed, true);
+  assert.equal(stateFor(f.cwd).state.failed, undefined);
+  assert.equal(readdirSync(root).includes('mixed-ignore-calls'), false);
+});
+
+test('7일 지난 종료 쌍·임시 파일만 정리하고 활성·불명확 기록은 보존한다', async () => {
+  const closed = fixture(), active = fixture();
+  await closed.prepare(); await closed.check(); await active.prepare();
+  const done = stateFor(closed.cwd), live = stateFor(active.cwd), directory = join(root, 'ai-setting-code-quality-review');
+  const doneOwner = join(directory, `owner-${done.state.owner}.json`), liveOwner = join(directory, `owner-${live.state.owner}.json`);
+  const old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000);
+  const doneTmp = `${done.path}.${randomUUID()}.tmp`, liveTmp = `${live.path}.${randomUUID()}.tmp`;
+  const orphanTmp = join(directory, `${'a'.repeat(64)}.json.${randomUUID()}.tmp`);
+  const unknown = join(directory, `${'b'.repeat(64)}.json`), malformed = join(directory, `${'c'.repeat(64)}.json`);
+  const recentTmp = `${done.path}.${randomUUID()}.tmp`, unrelated = join(directory, 'unrelated.tmp');
+  for (const path of [doneTmp, liveTmp, orphanTmp, recentTmp, unrelated]) writeFileSync(path, '{}');
+  writeFileSync(unknown, JSON.stringify({ version: 2, phase: 'ready' })); writeFileSync(malformed, '{');
+  for (const path of [done.path, doneOwner, live.path, liveOwner, doneTmp, liveTmp, orphanTmp, unknown, malformed, unrelated]) utimesSync(path, old, old);
+  try {
+    await fixture().prepare();
+    for (const path of [done.path, doneOwner, doneTmp, orphanTmp]) assert.throws(() => readFileSync(path), { code: 'ENOENT' });
+    for (const path of [live.path, liveOwner, liveTmp, unknown, malformed, recentTmp, unrelated]) assert.doesNotThrow(() => readFileSync(path));
+    assert.equal((await requestWatch(live.state, 'status')).phase, 'ready');
+  } finally { rmSync(malformed, { force: true }); }
+});
+
+test('정리 중 현재 owner의 오래된 종료·검토 예산 기록은 보존한다', async () => {
+  const f = fixture(); await f.prepare(); writeFileSync(join(f.cwd, 'code.mjs'), 'changed');
+  const gate = await f.check(); await gate.record('review-requested'); await gate.record('review-requested'); await gate.record('review-finished');
+  const previousState = stateFor(f.cwd), directory = join(root, 'ai-setting-code-quality-review');
+  const owner = join(directory, `owner-${previousState.state.owner}.json`), old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000);
+  for (const path of [previousState.path, owner]) utimesSync(path, old, old);
+  await f.prepare('next');
+  assert.equal(JSON.parse(readFileSync(previousState.path, 'utf8')).reviewRequests, 2);
+  assert.equal((await f.check()).terminal, 'review-finished');
+  assert.equal((await f.check('next')).changed, false);
+});
+
+test('원본 기록을 잃은 오래된 owner는 정리하지 않아 같은 요청의 재준비를 막는다', async () => {
+  const f = fixture(); await f.prepare(); const current = stateFor(f.cwd);
+  const owner = join(root, 'ai-setting-code-quality-review', `owner-${current.state.owner}.json`);
+  rmSync(current.path); const old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000); utimesSync(owner, old, old);
+  await fixture().prepare();
+  assert.doesNotThrow(() => readFileSync(owner));
+  await assert.rejects(f.prepare(), ChangeWatchError);
+  await unavailable(f.check());
+});
+
+test('상태 저장 rename 실패는 원본 오류·파일을 보존하고 임시 파일은 지운다', () => {
+  const cwd = mkdtempSync(join(root, 'save-failure-')), target = join(cwd, 'state.json'); writeFileSync(target, 'original');
+  const script = `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';import{saveWatch}from${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};fs.renameSync=()=>{throw Object.assign(Error('original failure'),{code:'EACCES'})};syncBuiltinESMExports();try{saveWatch(${JSON.stringify(target)},{value:2});process.exitCode=1}catch(error){if(error.code!=='EACCES'||error.message!=='original failure')process.exitCode=2}`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { windowsHide: true, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(target, 'utf8'), 'original');
+  assert.deepEqual(readdirSync(cwd), ['state.json']);
+});
+
+test('진단에는 허용된 오류 코드만 남기며 임의 메시지·코드는 저장하지 않는다', () => {
+  assert.equal(watchErrorCode({ code: 'EACCES', message: 'PRIVATE_MESSAGE' }), 'EACCES');
+  assert.equal(watchErrorCode({ code: 'PRIVATE_CODE', message: 'PRIVATE_MESSAGE' }), undefined);
+  assert.equal(watchErrorCode(Error('PRIVATE_MESSAGE')), undefined);
+  assert.equal(watchErrorCode(new ChangeWatchError('safe wrapper', { cause: { code: 'EIO' } })), 'EIO');
+});
+
+for (const mode of ['write', 'git']) {
+  test(`준비 중 원본 오류를 감싸도 허용 OS 코드를 보존한다: ${mode}`, () => {
+    const cwd = mkdtempSync(join(root, 'prepare-code-')), temporary = mkdtempSync(join(root, 'prepare-temp-'));
+    const script = `import fs from 'node:fs';import cp from 'node:child_process';import{join}from'node:path';import{syncBuiltinESMExports}from'node:module';import{prepareChanges,finishWatch}from${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+const write=fs.writeFileSync;let failed=false;fs.writeFileSync=(path,data,options)=>{if(${JSON.stringify(mode)}==='write'&&!failed&&options?.flag==='wx'){failed=true;throw Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'ENOSPC'})}return write(path,data,options)};
+const spawn=cp.spawnSync;cp.spawnSync=(file,args,...rest)=>file==='git'&&${JSON.stringify(mode)}==='git'?{status:null,error:Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'})}:spawn(file,args,...rest);syncBuiltinESMExports();
+try{await prepareChanges('test','diagnostic','turn',[${JSON.stringify(cwd)}]);process.exitCode=1}catch{const dir=join(process.env.TEMP,'ai-setting-code-quality-review'),name=fs.readdirSync(dir).find(n=>/^[a-f0-9]{64}\\.json$/.test(n));const path=join(dir,name),text=fs.readFileSync(path,'utf8'),state=JSON.parse(text);if(state.failed!=='watch-prepare-failed'||state.errorCode!==${JSON.stringify(mode === 'write' ? 'ENOSPC' : 'EIO')}||!(/^[a-f0-9]{64}$/.test(state.owner))||text.includes('PRIVATE_FAILURE_MESSAGE'))process.exitCode=2;
+const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      windowsHide: true, encoding: 'utf8', env: { ...process.env, TMP: temporary, TEMP: temporary, TMPDIR: temporary },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
+}
+
 test('하위 cwd도 Git 최상위 형제 폴더 변경과 ignored 패턴의 추적 폴더 삭제를 감지한다', async () => {
   const f = fixture(); git(f.cwd, 'init', '--quiet');
   mkdirSync(join(f.cwd, 'src')); mkdirSync(join(f.cwd, 'other'));
@@ -212,11 +302,14 @@ test('감시 프로세스 종료·준비 기록 누락·구버전 상태를 무�
 
 test('준비 실패는 같은 요청의 재시도에서 초기화하지 않는다', async () => {
   const f = fixture(), inject = join(root, 'fail-watch.mjs');
-  writeFileSync(inject, "import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';fs.watch=()=>{throw Error('Injected watch failure')};syncBuiltinESMExports();");
+  writeFileSync(inject, "import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';fs.watch=()=>{throw Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EACCES'})};syncBuiltinESMExports();");
   process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
   try { await assert.rejects(f.prepare(), ChangeWatchError); }
   finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
   const pid = stateFor(f.cwd).state.pid;
+  assert.equal(stateFor(f.cwd).state.failed, 'watch-start-failed');
+  assert.equal(stateFor(f.cwd).state.errorCode, 'EACCES');
+  assert.equal(readFileSync(stateFor(f.cwd).path, 'utf8').includes('PRIVATE_FAILURE_MESSAGE'), false);
   if (pid) {
     let alive = true;
     for (let i = 0; i < 50 && alive; i++) {
@@ -228,6 +321,8 @@ test('준비 실패는 같은 요청의 재시도에서 초기화하지 않는�
   writeFileSync(join(f.cwd, 'code.mjs'), 'changed during failure');
   await f.prepare();
   assert.equal(stateFor(f.cwd).state.pid, pid);
+  assert.equal(stateFor(f.cwd).state.failed, 'watch-start-failed');
+  assert.equal(stateFor(f.cwd).state.errorCode, 'EACCES');
   await unavailable(f.check());
 });
 
@@ -236,6 +331,19 @@ test('root 교체와 잘못된 작업 ID는 감시 실패로 처리한다', asyn
   renameSync(f.cwd, f.cwd + '-moved'); mkdirSync(f.cwd);
   await unavailable(f.check());
   await assert.rejects(prepareChanges('test', '', '', [f.cwd]), ChangeWatchError);
+});
+
+test('Git 추적 목록 조회 실패의 원본 OS 코드도 보존한다', async () => {
+  const f = fixture(), inject = join(root, 'fail-tracked-lookup.mjs'); git(f.cwd, 'init', '--quiet');
+  writeFileSync(inject, `import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawnSync;cp.spawnSync=(file,args,...rest)=>file==='git'&&args.includes('ls-files')?{status:null,error:Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'})}:spawn(file,args,...rest);syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await assert.rejects(f.prepare(), ChangeWatchError); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  const current = stateFor(f.cwd);
+  assert.equal(current.state.phase, 'closed');
+  assert.equal(current.state.failed, 'watch-start-failed');
+  assert.equal(current.state.errorCode, 'EIO');
+  assert.equal(readFileSync(current.path, 'utf8').includes('PRIVATE_FAILURE_MESSAGE'), false);
 });
 
 test('잘못된 RPC 인증·응답은 무변경 응답으로 인정하지 않는다', async () => {
@@ -257,6 +365,83 @@ test('이벤트 경로 누락과 probe 무응답은 준비 실패로 고정한�
   }
 });
 
+for (const mode of ['metadata', 'missing-name', 'empty-name', 'native-error']) {
+  test(`수정 감지 후 불필요한 분류를 멈추고 실제 감시 오류는 유지한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `after-edit-${mode}.mjs`), calls = join(root, `metadata-${mode}.log`);
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).replaceAll('\\\\','/').endsWith('/noise.mjs')){fs.appendFileSync(${JSON.stringify(calls)},'stat\\n');if(${JSON.stringify(mode)}==='metadata')throw Object.assign(Error('Injected metadata failure'),{code:'EPERM'});}return stat(path,...args)};
+const watch=fs.watch;fs.watch=(path,options,listener)=>{const watcher=watch(path,options,(event,filename)=>{if(filename==='noise.mjs'){if(${JSON.stringify(mode)}==='native-error'){watcher.emit('error',Error('Injected native watcher failure'));return;}if(${JSON.stringify(mode)}==='missing-name')filename=null;if(${JSON.stringify(mode)}==='empty-name')filename='';}listener(event,filename)});return watcher};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'code.mjs'), 'changed');
+    for (let i = 0; i < 100 && !stateFor(f.cwd).state.changed; i++) await delay(10);
+    assert.equal(stateFor(f.cwd).state.changed, true);
+    writeFileSync(join(f.cwd, 'noise.mjs'), 'later event');
+    await delay(100);
+    if (mode === 'native-error') {
+      assert.equal(stateFor(f.cwd).state.failed, 'watch-error');
+      await unavailable(f.check());
+    } else {
+      assert.equal((await f.check()).changed, true);
+      assert.equal(stateFor(f.cwd).state.failed, undefined);
+      assert.equal(readdirSync(root).includes(`metadata-${mode}.log`), false, 'classified an event after the edit was already known');
+    }
+  });
+}
+
+test('수정 판단 전의 파일 정보 조회 실패는 무변경으로 숨기지 않는다', async () => {
+  const f = fixture(), inject = join(root, 'metadata-before-edit.mjs');
+  writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).replaceAll('\\\\','/').endsWith('/noise.mjs'))throw Object.assign(Error('Injected metadata failure'),{code:'EPERM'});return stat(path,...args)};syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  writeFileSync(join(f.cwd, 'noise.mjs'), 'unknown event');
+  await delay(100);
+  assert.equal(stateFor(f.cwd).state.failed, 'watch-event-failed');
+  await unavailable(f.check());
+});
+
+test('같은 root의 Git 분류가 진행 중이어도 추적 파일의 수정은 즉시 확정한다', async () => {
+  const f = fixture(); git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+  const marker = join(root, 'same-root-ignore-started'), inject = join(root, 'same-root-delayed-ignore.mjs');
+  writeFileSync(inject, `import cp from 'node:child_process';import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includes('check-ignore')){fs.writeFileSync(${JSON.stringify(marker)},'started');return spawn(process.execPath,['-e','process.stdin.resume();setTimeout(()=>process.exit(2),300)'],options);}return spawn(file,args,options)};syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  writeFileSync(join(f.cwd, 'untracked.mjs'), 'pending');
+  for (let i = 0; i < 100 && !readdirSync(root).includes('same-root-ignore-started'); i++) await delay(10);
+  assert.equal(readdirSync(root).includes('same-root-ignore-started'), true);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'confirmed tracked edit');
+  assert.equal((await f.check()).changed, true);
+  assert.equal(stateFor(f.cwd).state.failed, undefined);
+});
+
+for (const edited of [false, true]) {
+  test(`여러 root의 진행 중 Git 분류 실패는 확정 변경 유무를 따른다: ${edited}`, async () => {
+    const first = fixture(), second = fixture(), paths = [first.cwd, second.cwd];
+    for (const cwd of paths) { git(cwd, 'init', '--quiet'); git(cwd, 'add', 'code.mjs'); }
+    const marker = join(root, `ignore-started-${edited}`), inject = join(root, `delayed-ignore-${edited}.mjs`);
+    writeFileSync(inject, `import cp from 'node:child_process';import fs from 'node:fs';import{resolve}from'node:path';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includes('check-ignore')&&resolve(args[1])===${JSON.stringify(resolve(first.cwd))}){fs.writeFileSync(${JSON.stringify(marker)},'started');return spawn(process.execPath,['-e','process.stdin.resume();setTimeout(()=>process.exit(2),300)'],options);}return spawn(file,args,options)};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await prepareChanges('test', first.cwd, 'turn', paths); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(first.cwd, 'untracked.mjs'), 'pending classification');
+    for (let i = 0; i < 100 && !readdirSync(root).includes(`ignore-started-${edited}`); i++) await delay(10);
+    assert.equal(readdirSync(root).includes(`ignore-started-${edited}`), true);
+    if (edited) writeFileSync(join(second.cwd, 'code.mjs'), 'confirmed tracked edit');
+    await delay(500);
+    const result = await checkChanges('test', first.cwd, 'turn', paths);
+    if (edited) {
+      assert.equal(result.changed, true);
+      assert.equal(stateFor(first.cwd).state.failed, undefined);
+    } else {
+      assert.equal(result.failed, true);
+      assert.equal(stateFor(first.cwd).state.failed, 'event-filter-failed');
+    }
+  });
+}
+
 test('동시 검토 허가도 저장된 요청당 예산 5회를 넘지 않는다', async () => {
   const f = fixture(); await f.prepare(); writeFileSync(join(f.cwd, 'code.mjs'), 'changed');
   const gate = await f.check();
@@ -267,6 +452,17 @@ test('동시 검토 허가도 저장된 요청당 예산 5회를 넘지 않는�
   assert.equal(state.phase, 'closed'); assert.equal(state.action, 'review-limit'); assert.equal(state.reviewRequests, 5);
   await f.prepare(); assert.equal(stateFor(f.cwd).state.action, 'review-limit');
   assert.deepEqual(await f.check(), { terminal: 'review-limit', failed: false });
+});
+
+test('첫 수정 기록의 저장 실패도 감시 실패로 보존한다', async () => {
+  const f = fixture(), inject = join(root, 'fail-edit-save.mjs');
+  writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const old=fs.renameSync;fs.renameSync=(a,b)=>{if(JSON.parse(fs.readFileSync(a,'utf8')).action==='edited')throw Error('Injected edit state write failure');return old(a,b)};syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); } finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  writeFileSync(join(f.cwd, 'code.mjs'), 'changed');
+  await delay(150);
+  await unavailable(f.check());
+  assert.equal(stateFor(f.cwd).state.failed, 'event-filter-failed');
 });
 
 test('검토 예산 저장 실패는 continuation 허가로 반환하지 않는다', async () => {
