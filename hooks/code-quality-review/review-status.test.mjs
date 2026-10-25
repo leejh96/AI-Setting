@@ -55,3 +55,33 @@ test('긴 일반 응답에서도 마지막 독립 표식과 열린 펜스를 구
     assert.equal(hasTerminalReviewStatus(body + '```text\n' + marker), false);
   }
 });
+
+test('최상위 코드 펜스는 선행 탭·공백과 후행 탭을 구분해 닫는다', () => {
+  const cases = [
+    ['```text', '```\t\t', true],
+    ['```text', ' ``` \t', true],
+    ['```text', '   ````\t', true],
+    ['```text', '    ```', false],
+    ['```text', '\t```', false],
+    ['```text', ' \t```', false],
+    ['```text', '```\ttext', false],
+    ['```text', '~~~\t', false],
+    ['````text', '```\t', false],
+    ['~~~text', '  ~~~~\t\t', true],
+    ['~~~text', '  \t~~~', false],
+  ];
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    for (const [opener, closer, expected] of cases) {
+      assert.equal(hasTerminalReviewStatus(`${opener}\n\tcode\tvalue\n\n${closer}\n[code-quality-review:${status}]`), expected);
+    }
+  }
+});
+
+test('긴 탭 포함 코드 블록에서도 열린 펜스의 표식은 거부하고 닫힌 뒤의 표식만 인정한다', () => {
+  const body = '\tconst value\t=\t42;\n'.repeat(20000);
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    assert.equal(hasTerminalReviewStatus('```js\n' + body + marker), false);
+    assert.equal(hasTerminalReviewStatus('```js\n' + body + '```\t\n' + marker), true);
+  }
+});

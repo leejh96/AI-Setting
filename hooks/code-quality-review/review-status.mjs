@@ -39,6 +39,11 @@ export function hasTerminalReviewStatus(message) {
   let paragraphOpen = false;
   let fence = null;
   for (const rawLine of text.split(/\r?\n/)) {
+    if (fence?.ownerIndent === 0) {
+      // A leading tab expands beyond the three-space closing-fence limit.
+      if (closesFence(rawLine, fence)) fence = null;
+      continue;
+    }
     // Markdown indentation uses four-column tab stops.
     let extra = 0;
     const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/\t/g, (_, offset) => {
@@ -49,7 +54,7 @@ export function hasTerminalReviewStatus(message) {
     const blank = /^ *$/.test(line);
     const indent = /^ */.exec(line)[0].length;
     if (fence) {
-      if (fence.ownerIndent === 0 || blank || indent >= fence.ownerIndent) {
+      if (blank || indent >= fence.ownerIndent) {
         if (closesFence(line.slice(fence.ownerIndent), fence)) fence = null;
         continue;
       }
