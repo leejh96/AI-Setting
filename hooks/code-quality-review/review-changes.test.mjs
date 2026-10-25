@@ -396,6 +396,51 @@ syncBuiltinESMExports();`);
   });
 }
 
+for (const mode of ['ignored', 'unexpected']) {
+  test(`분할된 UTF-8 Git 출력에서도 요청 경로와 잘못된 응답을 구분한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `unicode-ignore-${mode}.mjs`), helper = inject + '.worker.mjs', ack = inject + '.ack';
+    const name = '한글😀.mjs';
+    git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+    writeFileSync(join(f.cwd, '.gitignore'), '한글*.mjs\n'); writeFileSync(join(f.cwd, name), 'before');
+    writeFileSync(helper, `import fs from 'node:fs';import{spawnSync}from'node:child_process';const chunks=[];process.stdin.on('data',chunk=>chunks.push(chunk));process.stdin.on('end',()=>{const result=spawnSync('git',process.argv.slice(2),{input:Buffer.concat(chunks),windowsHide:true});if(result.status!==0){process.exitCode=result.status??2;return;}const output=${JSON.stringify(mode)}==='unexpected'?Buffer.from('다른😀.mjs'+String.fromCharCode(0)):result.stdout;process.stdout.write(output.subarray(0,1));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(ack)}+'-'+process.pid)){clearInterval(timer);process.stdout.end(output.subarray(1));}},5);});`);
+    writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file!=='git'||!args.includes('check-ignore'))return spawn(file,args,options);const child=spawn(process.execPath,[${JSON.stringify(helper)},...args],options),push=child.stdout.push;child.stdout.push=function(chunk,...rest){if(chunk?.length)fs.writeFileSync(${JSON.stringify(ack)}+'-'+child.pid,'received');return push.call(this,chunk,...rest)};return child};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, name), 'after');
+    if (mode === 'unexpected') {
+      await unavailable(f.check()); assert.equal(stateFor(f.cwd).state.failed, 'event-filter-failed');
+    } else {
+      assert.equal((await f.check()).changed, false);
+      assert.equal(stateFor(f.cwd).state.failed, undefined);
+    }
+  });
+}
+
+for (const mode of ['ignored', 'mixed']) {
+  test(`Git 분류 중 들어온 이벤트를 다음 스냅샷에서 빠짐없이 처리한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `queued-ignore-${mode}.mjs`), helper = inject + '.worker.mjs', trace = inject + '.log';
+    const next = mode === 'ignored' ? 'ignored-b.mjs' : 'untracked-b.mjs';
+    git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+    writeFileSync(join(f.cwd, '.gitignore'), 'ignored-*.mjs\n');
+    writeFileSync(join(f.cwd, 'ignored-a.mjs'), 'before'); writeFileSync(join(f.cwd, next), 'before'); writeFileSync(trace, '');
+    writeFileSync(helper, `import fs from 'node:fs';import{spawnSync}from'node:child_process';const chunks=[];process.stdin.on('data',chunk=>chunks.push(chunk));process.stdin.on('end',()=>{const input=Buffer.concat(chunks),names=input.toString('utf8').split(String.fromCharCode(0)).filter(Boolean);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({pid:process.pid,names})+'\\n');const result=spawnSync('git',process.argv.slice(2),{input,windowsHide:true});setTimeout(()=>{if(result.stdout)process.stdout.write(result.stdout);process.exitCode=result.status??2;},200);});`);
+    writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';const seen=new Set(),watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='first.trigger'||name==='second.trigger'){if(!seen.has(name)){seen.add(name);listener('change',name==='first.trigger'?'ignored-a.mjs':${JSON.stringify(next)})}return}listener(event,name)});const spawn=cp.spawn;cp.spawn=(file,args,options)=>file==='git'&&args.includes('check-ignore')?spawn(process.execPath,[${JSON.stringify(helper)},...args],options):spawn(file,args,options);syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    const requests = () => readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    writeFileSync(join(f.cwd, 'first.trigger'), 'start first batch');
+    for (let i = 0; i < 100 && !requests().length; i++) await delay(10);
+    assert.equal(requests().length, 1); assert.doesNotThrow(() => process.kill(requests()[0].pid, 0));
+    writeFileSync(join(f.cwd, 'second.trigger'), 'queue next event');
+    assert.equal((await f.check()).changed, mode === 'mixed');
+    assert.deepEqual(requests().map(request => request.names), [['ignored-a.mjs'], [next]]);
+    for (const request of requests()) assert.throws(() => process.kill(request.pid, 0), { code: 'ESRCH' });
+    assert.equal(stateFor(f.cwd).state.failed, undefined);
+  });
+}
+
 test('7일 지난 종료 쌍·임시 파일만 정리하고 활성·불명확 기록은 보존한다', async () => {
   const closed = fixture(), active = fixture();
   await closed.prepare(); await closed.check(); await active.prepare();

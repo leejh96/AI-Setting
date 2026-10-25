@@ -68,6 +68,7 @@ function ignored(root, names) {
       windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['pipe', 'pipe', 'pipe'],
     });
     root.ignoreChild = child;
+    child.stdout.setEncoding('utf8');
     let stdout = ''; const timer = setTimeout(() => { child.kill(); reject(Error('Ignore check timeout')); }, 1000);
     child.on('error', (error) => { clearTimeout(timer); reject(error); });
     child.stdout.on('data', (data) => { stdout += data; if (stdout.length > 1024 * 1024) { child.kill(); reject(Error('Ignore output limit')); } });
@@ -89,14 +90,14 @@ function flush(root) {
     try {
       while (root.pending.size && !state.changed && !state.failed) {
         if (Date.now() > deadline) throw Error('Event drain timeout');
-        const names = [...root.pending]; root.pending.clear();
+        const requested = root.pending; root.pending = new Set();
+        const names = [...requested];
         let skip;
         try { skip = root.git ? await ignored(root, names) : new Set(); }
         catch (error) { if (closing || state.changed || state.failed) return; throw error; }
         if (closing || state.changed || state.failed) return;
-        const requested = new Set(names);
-        if ([...skip].some((name) => !requested.has(name))) throw Error('Invalid ignore output');
-        if (names.some((name) => !skip.has(name))) markEdited();
+        for (const name of skip) if (!requested.has(name)) throw Error('Invalid ignore output');
+        if (skip.size < requested.size) markEdited();
       }
       if (state.changed || state.failed) root.pending.clear();
     } catch (error) { fail('event-filter-failed', error); }
