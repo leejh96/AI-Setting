@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { saveWatch, watchErrorCode, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
+import { saveWatch, watchErrorCode, readGitMetadata, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
 
 const path = process.argv[2];
 const state = JSON.parse(readFileSync(path, 'utf8'));
@@ -14,6 +14,7 @@ const probePattern = /^\.ai-setting-quality-probe-[a-f0-9-]{36}\.tmp$/;
 let closing = false;
 let generation = 0;
 const roots = [];
+const startup = new AbortController();
 const persist = () => { state.updatedAt = Date.now(); saveWatch(path, state); };
 const markEdited = () => {
   state.changed = true; state.action = 'edited'; persist();
@@ -84,7 +85,7 @@ function ignored(root, names) {
 }
 function flush(root) {
   if (root.flushing) return root.flushing;
-  if (!root.pending.size || state.changed || state.failed) { root.pending.clear(); return Promise.resolve(); }
+  if (closing || !root.pending.size || state.changed || state.failed) { root.pending.clear(); return Promise.resolve(); }
   root.flushing = (async () => {
     const deadline = Date.now() + 2000;
     try {
@@ -92,6 +93,7 @@ function flush(root) {
         if (Date.now() > deadline) throw Error('Event drain timeout');
         const requested = root.pending; root.pending = new Set();
         const names = [...requested];
+        if (state.phase === 'starting' && names.some(name => root.tracked.has(name))) { markEdited(); break; }
         let skip;
         try { skip = root.git ? await ignored(root, names) : new Set(); }
         catch (error) { if (closing || state.changed || state.failed) return; throw error; }
@@ -136,6 +138,7 @@ async function checkpoint() {
 function finish(action) {
   if (closing) return;
   closing = true; state.phase = 'closed'; state.action = action;
+  startup.abort();
   try { persist(); } catch (error) {
     state.failed ||= 'watch-state-write-failed'; state.errorCode ??= watchErrorCode(error);
     state.action = 'watch-failed';
@@ -199,10 +202,11 @@ server.listen(state.endpoint, async () => {
           if (state.changed) return;
           const rel = eligible(root, filename, eventType);
           if (rel) {
-            if (root.tracked.has(rel)) { markEdited(); return; }
+            if (state.phase !== 'starting' && root.tracked.has(rel)) { markEdited(); return; }
             generation++;
             root.pending.add(rel);
             if (root.pending.size > 2048) throw Error('Event queue limit');
+            if (state.phase === 'starting') return;
             if (!root.git) { flush(root); return; }
             if (!root.scheduled) {
               root.scheduled = true;
@@ -213,13 +217,23 @@ server.listen(state.endpoint, async () => {
       });
       root.watcher.on('error', (error) => fail('watch-error', error));
       root.watcher.on('close', () => { if (!closing && !state.failed) fail('watch-closed'); });
-      if (root.git) {
-        const tracked = spawnSync('git', ['-C', root.path, 'ls-files', '--cached', '-z'], {
-          encoding: 'utf8', windowsHide: true, timeout: 1000, maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
-        });
-        if (tracked.status !== 0) throw tracked.error ?? Error('Tracked path lookup failed');
-        for (const name of tracked.stdout.split('\0')) {
+    }
+    const gitRoots = roots.filter(root => root.git);
+    for (let index = 0; index < gitRoots.length; index += 2) {
+      const batch = await Promise.allSettled(gitRoots.slice(index, index + 2).map(async root => {
+        let tracked;
+        if (gitRoots.length === 1) {
+          const result = spawnSync('git', ['-C', root.path, 'ls-files', '--cached', '-z'], {
+            encoding: 'utf8', windowsHide: true, timeout: 1000, maxBuffer: 4 * 1024 * 1024,
+            env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+          });
+          if (result.status !== 0) throw result.error ?? Error('Tracked path lookup failed');
+          tracked = result.stdout;
+        } else {
+          tracked = (await readGitMetadata(root.path, ['ls-files', '--cached', '-z'], 4 * 1024 * 1024, startup.signal)).toString('utf8');
+          if (closing) return;
+        }
+        for (const name of tracked.split('\0')) {
           if (!name) continue;
           root.tracked.add(name);
           for (let end = name.lastIndexOf('/'); end !== -1; end = name.lastIndexOf('/', end - 1)) {
@@ -228,7 +242,9 @@ server.listen(state.endpoint, async () => {
             root.tracked.add(parent);
           }
         }
-      }
+      }));
+      for (const result of batch) if (result.status === 'rejected') throw result.reason;
+      if (closing) return;
     }
     await checkpoint(); if (!closing) { state.phase = 'ready'; state.action = 'prepared'; persist(); }
   } catch (error) { fail('watch-start-failed', error); }

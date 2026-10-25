@@ -202,36 +202,48 @@ function cleanupStates(directory, currentFile, currentOwner) {
   saveWatch(marker, { version: 1, completedAt: Date.now() });
 }
 
+export function readGitMetadata(cwd, args, maxBuffer, signal) {
+  return new Promise((resolveOutput, reject) => {
+    let outputBytes = 0, overflow = false;
+    const child = execFile('git', ['-C', cwd, ...args], {
+      encoding: 'buffer', windowsHide: true, timeout: 1000, killSignal: 'SIGKILL', maxBuffer, signal,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    }, async (error, stdout) => {
+      await closed;
+      if (error || overflow) {
+        const code = overflow || error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'ENOBUFS'
+          : error?.killed ? 'ETIMEDOUT' : error?.code;
+        reject(Object.assign(new Error('Git metadata lookup failed'), { code, signal: error?.signal }));
+        return;
+      }
+      resolveOutput(stdout);
+    });
+    const closed = new Promise(resolveClosed => child.once('close', resolveClosed));
+    // spawnSync limits the combined raw output; execFile limits each stream separately.
+    const countOutput = chunk => {
+      outputBytes += chunk.length;
+      if (!overflow && outputBytes > maxBuffer) {
+        overflow = true;
+        if (!child.killed) child.kill('SIGKILL');
+      }
+    };
+    child.stdout.on('data', countOutput); child.stderr.on('data', countOutput);
+  });
+}
+
 async function discoverRoots(paths) {
   const roots = [];
   for (let index = 0; index < paths.length; index += 2) {
-    const batch = await Promise.allSettled(paths.slice(index, index + 2).map(cwd => new Promise((resolveRoot, reject) => {
-      let outputBytes = 0, overflow = false;
-      const child = execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-        encoding: 'buffer', windowsHide: true, timeout: 1000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
-      }, (error, stdout) => {
-        if (error || overflow) {
-          const code = overflow || error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'ENOBUFS'
-            : error?.killed ? 'ETIMEDOUT' : error?.code;
-          const processExit = typeof code === 'number' || (code === null && typeof error.signal === 'string');
-          if (code !== 'ENOENT' && !processExit) {
-            reject(Object.assign(new Error('Git root lookup failed'), { code }));
-            return;
-          }
-        }
-        resolveRoot({ path: error ? resolve(cwd) : stdout.toString('utf8').trim(), git: !error });
-      });
-      // spawnSync limits the combined raw output; execFile limits each stream separately.
-      const countOutput = chunk => {
-        outputBytes += chunk.length;
-        if (!overflow && outputBytes > 1024 * 1024) {
-          overflow = true;
-          if (!child.killed) child.kill('SIGKILL');
-        }
-      };
-      child.stdout.on('data', countOutput); child.stderr.on('data', countOutput);
-    })));
+    const batch = await Promise.allSettled(paths.slice(index, index + 2).map(async cwd => {
+      try {
+        const stdout = await readGitMetadata(cwd, ['rev-parse', '--show-toplevel'], 1024 * 1024);
+        return { path: stdout.toString('utf8').trim(), git: true };
+      } catch (error) {
+        const processExit = typeof error.code === 'number' || (error.code === null && typeof error.signal === 'string');
+        if (error.code !== 'ENOENT' && !processExit) throw error;
+        return { path: resolve(cwd), git: false };
+      }
+    }));
     for (const result of batch) {
       if (result.status === 'rejected') throw result.reason;
       roots.push(result.value);

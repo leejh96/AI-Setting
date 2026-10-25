@@ -1,6 +1,6 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import childProcess, { spawn, spawnSync } from 'node:child_process';
@@ -53,6 +53,127 @@ async function unavailable(promise) {
   await promise.then((result) => { assert.equal(result.failed, true); assert.equal('changed' in result, false); },
     (error) => assert.ok(error instanceof ChangeWatchError));
 }
+
+function trackedLookup(mode, firstPath) {
+  const inject = join(root, `tracked-lookup-${randomUUID()}.mjs`), helper = inject + '.worker.mjs';
+  const trace = inject + '.log', ack = inject + '.ack';
+  writeFileSync(trace, '');
+  writeFileSync(helper, `import fs from 'node:fs';import{spawnSync}from'node:child_process';import{resolve}from'node:path';
+const args=process.argv.slice(2),mode=${JSON.stringify(mode)},primary=resolve(args[1])===resolve(${JSON.stringify(firstPath)});
+if(primary&&mode==='timeout'){setInterval(()=>{},1000);}else if(primary&&mode.endsWith('-limit')){
+  const bytes=mode==='combined-limit'?2300*1024:4*1024*1024+1;
+  if(mode!=='stderr-limit')process.stdout.write(Buffer.alloc(bytes,65));
+  if(mode!=='stdout-limit')process.stderr.write(Buffer.alloc(bytes,66));
+  setInterval(()=>{},1000);
+}else{
+  const result=spawnSync('git',args,{windowsHide:true});
+  fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({read:process.pid})+'\\n');
+  const send=()=>{if(result.stdout)process.stdout.write(result.stdout);if(primary&&mode==='combined-safe'){process.stdout.write(Buffer.alloc(1536*1024,65));process.stdout.write(String.fromCharCode(0));process.stderr.write(Buffer.alloc(1536*1024,66));}process.exitCode=primary&&mode==='nonzero'?2:result.status??2;};
+  if(mode.startsWith('event-')||mode==='cancel'){const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(ack)})){clearInterval(timer);send();}},5);}else setTimeout(send,60);
+}`);
+  writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{resolve}from'node:path';import{syncBuiltinESMExports}from'node:module';
+const exec=cp.execFile;cp.execFile=(file,args,options,callback)=>{
+  if(file!=='git'||!args.includes('ls-files'))return exec(file,args,options,callback);
+  const child=exec(process.execPath,[${JSON.stringify(helper)},...args],options,(error,stdout,stderr)=>callback(${JSON.stringify(mode)}==='EIO'&&resolve(args[1])===resolve(${JSON.stringify(firstPath)})?Object.assign(Error('PRIVATE_INDEX_FAILURE'),{code:'EIO'}):error,stdout,stderr));
+  fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({started:child.pid,cwd:args[1],timeout:options.timeout,maxBuffer:options.maxBuffer,encoding:options.encoding,killSignal:options.killSignal,windowsHide:options.windowsHide,optionalLocks:options.env.GIT_OPTIONAL_LOCKS,signal:!!options.signal})+'\\n');
+  child.once('close',()=>fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({closed:child.pid})+'\\n'));return child;
+};
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{
+  listener(event,name);
+  if(resolve(path)===resolve(${JSON.stringify(firstPath)})&&['code.mjs','ignored.mjs','new.mjs'].includes(name)){fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({watchEvent:name})+'\\n');fs.writeFileSync(${JSON.stringify(ack)},'event received');}
+});syncBuiltinESMExports();`);
+  return { inject, ack, read: () => readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) };
+}
+
+for (const mode of ['normal', 'EIO', 'nonzero', 'timeout', 'stdout-limit', 'stderr-limit', 'combined-limit', 'combined-safe']) {
+  test(`추적 목록은 최대 두 개씩 읽고 제한·실패·프로세스 정리를 유지한다: ${mode}`, async () => {
+    const fixtures = [fixture(), fixture(), fixture()], paths = fixtures.map(f => f.cwd);
+    for (const cwd of paths) { git(cwd, 'init', '--quiet'); git(cwd, 'add', 'code.mjs'); }
+    const lookup = trackedLookup(mode, paths[0]);
+    const failed = !['normal', 'combined-safe'].includes(mode);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(lookup.inject).href}`;
+    try {
+      if (failed) await assert.rejects(prepareChanges('test', paths[0], 'turn', paths), ChangeWatchError);
+      else await prepareChanges('test', paths[0], 'turn', paths);
+    } finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    const events = lookup.read(), starts = events.filter(event => event.started);
+    assert.deepEqual(starts.map(event => resolve(event.cwd)), (failed ? paths.slice(0, 2) : paths).map(cwd => resolve(cwd)));
+    let active = 0, peak = 0;
+    for (const event of events) { if (event.started) { active++; peak = Math.max(peak, active); } if (event.closed) active--; }
+    assert.equal(peak, 2); assert.equal(active, 0);
+    for (const event of starts) {
+      assert.equal(event.timeout, 1000); assert.equal(event.maxBuffer, 4 * 1024 * 1024);
+      assert.equal(event.encoding, 'buffer'); assert.equal(event.killSignal, 'SIGKILL');
+      assert.equal(event.windowsHide, true); assert.equal(event.optionalLocks, '0'); assert.equal(event.signal, true);
+      assert.throws(() => process.kill(event.started, 0), { code: 'ESRCH' });
+    }
+    const { state } = stateFor(paths[0]);
+    if (failed) {
+      assert.equal(state.failed, 'watch-start-failed');
+      assert.equal(state.errorCode, mode === 'EIO' ? 'EIO' : mode === 'timeout' ? 'ETIMEDOUT' : mode.endsWith('-limit') ? 'ENOBUFS' : undefined);
+      assert.ok(!JSON.stringify(state).includes('PRIVATE_INDEX_FAILURE'));
+      await prepareChanges('test', paths[0], 'turn', paths);
+      assert.equal(lookup.read().filter(event => event.started).length, 2);
+      assert.equal((await checkChanges('test', paths[0], 'turn', paths)).failed, true);
+    } else {
+      assert.equal(state.failed, undefined);
+      assert.equal((await checkChanges('test', paths[0], 'turn', paths)).changed, false);
+    }
+  });
+}
+
+for (const mode of ['event-tracked', 'event-ignored', 'event-untracked', 'cancel']) {
+  test(`추적 목록 준비 중 이벤트와 종료 요청을 보존한다: ${mode}`, async () => {
+    const first = fixture(), second = fixture(), paths = [first.cwd, second.cwd];
+    for (const cwd of paths) { git(cwd, 'init', '--quiet'); git(cwd, 'add', 'code.mjs'); }
+    writeFileSync(join(first.cwd, '.gitignore'), 'code.mjs\nignored.mjs\n');
+    writeFileSync(join(first.cwd, 'ignored.mjs'), 'before');
+    const lookup = trackedLookup(mode, first.cwd);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(lookup.inject).href}`;
+    const preparation = prepareChanges('test', first.cwd, 'turn', paths).then(() => null, error => error);
+    try {
+      for (let i = 0; i < 150 && !lookup.read().some(event => event.read); i++) await delay(10);
+      assert.ok(lookup.read().some(event => event.read));
+      if (mode === 'cancel') {
+        await finishWatch(stateFor(first.cwd).state);
+        assert.ok(await preparation instanceof ChangeWatchError);
+      } else {
+        const name = mode === 'event-tracked' ? 'code.mjs' : mode === 'event-ignored' ? 'ignored.mjs' : 'new.mjs';
+        writeFileSync(join(first.cwd, name), 'changed during initialization');
+        assert.equal(await preparation, null);
+        const events = lookup.read(), eventIndex = events.findIndex(event => event.watchEvent === name);
+        assert.ok(eventIndex !== -1); assert.ok(events.findIndex(event => event.closed) > eventIndex);
+        assert.equal((await checkChanges('test', first.cwd, 'turn', paths)).changed, mode !== 'event-ignored');
+      }
+      for (const event of lookup.read()) if (event.started) assert.throws(() => process.kill(event.started, 0), { code: 'ESRCH' });
+    } finally {
+      writeFileSync(lookup.ack, 'release'); await preparation;
+      if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS;
+    }
+  });
+}
+
+test('종료 뒤 남은 예약 작업은 Git 분류를 새로 시작하지 않는다', async () => {
+  const f = fixture(), inject = join(root, `closed-flush-${randomUUID()}.mjs`);
+  const waiting = inject + '.waiting', release = inject + '.release', drained = inject + '.drained', calls = inject + '.calls';
+  git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+  writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';
+globalThis.setImmediate=(callback,...args)=>{fs.writeFileSync(${JSON.stringify(waiting)},'scheduled');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);callback(...args);fs.writeFileSync(${JSON.stringify(drained)},'drained');}},5);return timer;};
+const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includes('check-ignore')){fs.writeFileSync(${JSON.stringify(calls)},'classification started');return spawn(process.execPath,['-e',''],options)}return spawn(file,args,options)};syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  try {
+    writeFileSync(join(f.cwd, 'queued.mjs'), 'untracked event');
+    for (let i = 0; i < 100 && !existsSync(waiting); i++) await delay(10);
+    assert.ok(existsSync(waiting));
+    await finishWatch(stateFor(f.cwd).state);
+    writeFileSync(release, 'release deferred callback');
+    for (let i = 0; i < 100 && !existsSync(drained); i++) await delay(10);
+    assert.ok(existsSync(drained)); assert.equal(existsSync(calls), false);
+    assert.equal(stateFor(f.cwd).state.phase, 'closed');
+  } finally { writeFileSync(release, 'release'); }
+});
 
 for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO', 'unknown-error', 'timeout', 'stdout-limit', 'stderr-limit', 'combined-limit']) {
   test(`Git 루트 조회의 병렬 상한·범위·실패 분류·프로세스 정리를 유지한다: ${mode}`, async () => {
