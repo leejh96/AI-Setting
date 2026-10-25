@@ -85,3 +85,23 @@ test('긴 탭 포함 코드 블록에서도 열린 펜스의 표식은 거부하
     assert.equal(hasTerminalReviewStatus('```js\n' + body + '```\t\n' + marker), true);
   }
 });
+
+test('일반 문단 뒤에도 번호 목록·빈 줄·인용과 펜스의 소유 범위를 유지한다', () => {
+  const cases = [
+    ['plain\n2. ```text\n   code\n   ```\n', false],
+    ['plain\n1. ```text\n   code\n   ```\n', true],
+    ['plain\n\t\n2. ```text\n   code\n   ```\n', true],
+    ['- item\n\nplain\n  ```text\n  code\n', false],
+    ['- item\nplain\n  ```text\n  code\n', true],
+    ['> quote\nplain\n2. ```text\n   code\n   ```\n', false],
+    ['# heading\nplain\n2. ```text\n   code\n   ```\n', false],
+    ['plain\n---\n2. ```text\n   code\n   ```\n', true],
+  ];
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const [prefix, expected] of cases) assert.equal(hasTerminalReviewStatus(prefix + marker), expected);
+    for (const text of ['검토\t내용', '😀\tvalue', '[link](url)', '<tag>', '\\escape']) {
+      assert.equal(hasTerminalReviewStatus(`${text}\n2. \`\`\`text\n   code\n   \`\`\`\n${marker}`), false);
+    }
+  }
+});

@@ -44,6 +44,10 @@ export function hasTerminalReviewStatus(message) {
       if (closesFence(rawLine, fence)) fence = null;
       continue;
     }
+    if (!fence && !listIndents.length && rawLine && !/^[-+*`~>#_ \t0-9]/.test(rawLine)) {
+      paragraphOpen = true;
+      continue;
+    }
     // Markdown indentation uses four-column tab stops.
     let extra = 0;
     const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/\t/g, (_, offset) => {
