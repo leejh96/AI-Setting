@@ -70,6 +70,21 @@ test('블록 경계를 넘는 UTF-8 입력과 CRLF·빈 줄·마지막 개행 �
   assert.deepEqual(run(user('')).trace.filter((entry) => entry.hash), [{ hash: hash('') }]);
 });
 
+test('파일 처음의 UTF-8 사용자 입력도 읽기 크기 경계와 마지막 개행에 관계없이 검사한다', () => {
+  const prefix = '처음 입력😀', overhead = Buffer.byteLength(user(prefix));
+  for (const size of [1024, 64 * 1024, 64 * 1024 + 1]) {
+    const input = prefix + 'a'.repeat(size - overhead);
+    const record = user(input);
+    assert.equal(Buffer.byteLength(record), size);
+    for (const ending of ['', '\n', '\r\n']) {
+      const result = run(record + ending);
+      assert.deepEqual(result.output, { injectSteps: [] });
+      assert.deepEqual(result.trace.filter(entry => entry.hash), [{ hash: hash(input) }]);
+      assert.equal(result.trace.filter(entry => entry.closed).length, 1);
+    }
+  }
+});
+
 test('합성 시크릿·검사 오류는 원문 없이 경고하며 최신 입력 이전의 손상 기록은 읽지 않는다', () => {
   for (const overrides of [{}, { SCAN_STATUS: '1' }]) {
     const result = run(`malformed old history\n${user('fixture-secret latest')}`, overrides);
@@ -91,7 +106,7 @@ test('완성된 짧은 줄과 여러 청크에 걸친 줄이 섞여도 최신 UT
 });
 
 test('사용자 입력 없음과 최신 입력 뒤의 파싱 오류는 기존 빈 응답 정책을 유지한다', () => {
-  for (const transcript of ['', '\n{}\n', '\n\n\n', '{}\n \n', `${user('fixture-secret')}\nmalformed`, `${user('fixture-secret')}\nnull`]) {
+  for (const transcript of ['', '{}', 'malformed', 'null', '\n{}\n', '\n\n\n', '{}\n \n', `${user('fixture-secret')}\nmalformed`, `${user('fixture-secret')}\nnull`]) {
     const result = run(transcript);
     assert.deepEqual(result.output, { injectSteps: [] });
     assert.equal(result.trace.filter((entry) => entry.hash).length, 0);

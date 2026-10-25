@@ -59,7 +59,7 @@ function latestUserInput(path) {
         reusable = undefined;
       }
     }
-    const line = Buffer.concat(pending.reverse()).toString('utf8').trim();
+    const line = (pending.length === 1 ? pending[0] : Buffer.concat(pending.reverse())).toString('utf8').trim();
     if (line) {
       const entry = JSON.parse(line);
       if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') return entry.content;
