@@ -65,6 +65,46 @@ test('무변경·문서·제외 폴더는 내용 읽기 없이 종료하고 감�
   assert.equal(stateFor(f.cwd).state.phase, 'closed');
 });
 
+for (const [name, paths, expected] of [
+  ['제외 경로와 링크 내부', cwd => ['node_modules/pkg/generated.mjs', './node_modules/pkg/generated.mjs',
+    'src/../node_modules/pkg/generated.mjs', 'node_modules//pkg/generated.mjs', 'docs/README.md',
+    join(cwd, 'node_modules', 'pkg', 'generated.mjs'), 'linked/code.mjs'], 'ignored'],
+  ['일반 상대 경로', () => ['src/code.mjs'], 'edited'],
+  ['점 경로', () => ['./src/code.mjs'], 'edited'],
+  ['제외 폴더에서 상위 이동', () => ['node_modules/../src/code.mjs'], 'edited'],
+  ['절대 내부 경로', cwd => [join(cwd, 'src', 'code.mjs')], 'edited'],
+  ['혼합 구분자', () => ['src\\../src/code.mjs'], 'edited'],
+  ['역슬래시의 OS별 의미', () => ['.git\\generated.mjs'], process.platform === 'win32' ? 'ignored' : 'edited'],
+  ['상위 폴더의 제외 경로', () => ['../node_modules/generated.mjs'], 'failed'],
+  ['절대 외부 제외 경로', cwd => [join(cwd, '..', 'node_modules', 'generated.mjs')], 'failed'],
+  ['루트 자체', () => ['.'], 'failed'],
+  ...(process.platform === 'win32'
+    ? [['같은 드라이브의 상대 제외 경로', cwd => [cwd.slice(0, 2) + 'node_modules\\generated.mjs'], 'ignored'],
+      ['다른 드라이브의 상대 경로', cwd => [(cwd[0].toLowerCase() === 'c' ? 'D:' : 'C:') + 'node_modules\\generated.mjs'], 'failed']] : []),
+]) {
+  test(`경로 계산을 생략해도 제외·정규화·루트 경계 처리를 유지한다: ${name}`, async () => {
+    const f = fixture(), inject = join(root, `event-path-${randomUUID()}.mjs`);
+    mkdirSync(join(f.cwd, 'src')); writeFileSync(join(f.cwd, 'src', 'code.mjs'), 'source');
+    if (name === '제외 경로와 링크 내부') {
+      const target = mkdtempSync(join(root, 'outside-event-path-'));
+      writeFileSync(join(target, 'code.mjs'), 'outside');
+      symlinkSync(target, join(f.cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='batch.trigger'){for(const filename of ${JSON.stringify(paths(f.cwd))})listener('change',filename);return}listener(event,name)});syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'batch.trigger'), 'emit paths');
+    if (expected === 'failed') {
+      await unavailable(f.check());
+      assert.equal(stateFor(f.cwd).state.failed, 'watch-event-failed');
+    } else {
+      assert.equal((await f.check()).changed, expected === 'edited');
+      assert.equal(stateFor(f.cwd).state.failed, undefined);
+    }
+  });
+}
+
 for (const mode of ['normal', 'fail-once', 'fail-always']) {
   test(`무변경 Stop은 종료 상태를 한 번 저장하고 저장 오류는 실패로 보고한다: ${mode}`, async () => {
     const f = fixture(), inject = join(root, `unchanged-save-${mode}.mjs`), trace = join(root, `unchanged-save-${mode}.log`);

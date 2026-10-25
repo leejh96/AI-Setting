@@ -32,11 +32,20 @@ function fail(reason, error) {
 }
 function eligible(root, filename, eventType) {
   if (typeof filename !== 'string' || !filename) throw Error('Missing event filename');
-  const full = resolve(root.path, filename), rel = relative(root.path, full), parts = rel.split(sep);
+  let full, rel, parts;
+  const nativeParts = filename.split(sep === '\\' ? /[\\/]/ : sep);
+  // Windows drive-relative paths such as C:foo are not absolute.
+  if (!isAbsolute(filename) && !(sep === '\\' && /^[a-z]:/i.test(filename))
+      && nativeParts.every(part => part && part !== '.' && part !== '..')) {
+    parts = nativeParts; rel = parts.join(sep);
+  } else {
+    full = resolve(root.path, filename); rel = relative(root.path, full); parts = rel.split(sep);
+  }
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw Error('Invalid event path');
   if (parts.some((part) => excluded.has(part) || probePattern.test(part))
       || /\.(md|rst|adoc)$/i.test(rel)
       || /^(readme|changelog|license|licence|notice|authors|contributing)(\..*)?$/i.test(parts.at(-1))) return null;
+  full ??= resolve(root.path, rel);
   const stateRel = relative(dirname(path), full);
   if (!stateRel.startsWith(`..${sep}`) && stateRel !== '..' && !isAbsolute(stateRel)) return null;
   let current = root.path, fullStat;
