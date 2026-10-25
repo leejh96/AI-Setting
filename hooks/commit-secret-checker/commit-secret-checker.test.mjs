@@ -30,7 +30,7 @@ writeFileSync(batchWorker, `let input = '';process.stdin.setEncoding('utf8');pro
 process.stdin.on('end',()=>{
   const ids=input.trim().split('\\n'),id=ids[0],mode=process.env.BATCH_MODE;
   if(mode?.startsWith('header-')){const size=mode.includes('over-limit')?257:256,prefix=id+' blob ';process.stdout.write(prefix+'9'.repeat(size-prefix.length)+'\\n');return;}
-  if(mode==='packed'||mode==='packed-fragmented'){
+  if(mode?.startsWith('packed')){
     const bodies=[Buffer.alloc(0),Buffer.from('한글😀\\0\\r\\n'),Buffer.alloc(32000,65),Buffer.from([0xff,0xfe,0,10,65]),Buffer.from('last body')];
     process.stdout.write(Buffer.concat(ids.map((value,index)=>Buffer.concat([Buffer.from(value+' blob '+bodies[index].length+'\\n'),bodies[index],Buffer.from('\\n')]))));return;
   }
@@ -40,6 +40,9 @@ process.stdin.on('end',()=>{
   if(mode==='wrong-type'){process.stdout.write(id+' tree 0\\n\\n');return;}
   if(mode==='truncated'){process.stdout.write(id+' blob 20\\nshort');return;}
   if(mode==='missing-newline'){process.stdout.write(id+' blob 1\\nx!');return;}
+  if(mode==='boundary-truncated'){process.stdout.write(id+' blob 20\\nshort');return;}
+  if(mode==='boundary-missing-separator'){process.stdout.write(id+' blob 1\\nx');return;}
+  if(mode==='boundary-wrong-separator'){process.stdout.write(id+' blob 1\\nx!');return;}
   const body=Buffer.from(mode==='leak-hold'?'fixture-secret':mode==='fragmented'?'한글😀\\n\\0':'clean');
   const frame=Buffer.concat([Buffer.from(id+' blob '+body.length+'\\n'),body,Buffer.from('\\n')]);
   if(mode==='fragmented'){let i=0;const send=()=>{if(i<frame.length){process.stdout.write(frame.subarray(i,i+1));i++;setTimeout(send,1);}};send();return;}
@@ -67,12 +70,21 @@ cp.spawn = (program, args, options) => {
       :process.env.BATCH_MODE?spawn(process.execPath,[process.env.BATCH_WORKER],options):spawn(program,args,options);
     appendFileSync(process.env.SCAN_TRACE,JSON.stringify({batchPid:child.pid})+'\\n');
     const batchMode=process.env.BATCH_MODE;
-    if(batchMode==='packed'||batchMode==='packed-fragmented'||batchMode?.startsWith('header-')){
+    if(batchMode?.startsWith('packed')||batchMode?.startsWith('boundary-')||batchMode?.startsWith('header-')){
       const iterate=child.stdout[Symbol.asyncIterator].bind(child.stdout);
       child.stdout[Symbol.asyncIterator]=async function*(){
         const chunks=[];for await(const chunk of {[Symbol.asyncIterator]:iterate})chunks.push(chunk);
         const bytes=Buffer.concat(chunks);
-        if(!batchMode.endsWith('fragmented'))yield bytes;
+        if(batchMode==='packed-body-boundary'||batchMode.startsWith('boundary-')){
+          for(let start=0;start<bytes.length;){
+            const end=bytes.indexOf(10,start)+1,header=bytes.subarray(start,end).toString('utf8');
+            yield bytes.subarray(start,end);start=end;
+            const size=Number(header.trim().split(' ').at(-1));
+            if(size){const end=Math.min(start+size,bytes.length);yield bytes.subarray(start,end);start=end;}
+            if(start<bytes.length)yield bytes.subarray(start,++start);
+          }
+        }
+        else if(!batchMode.endsWith('fragmented'))yield bytes;
         else {const size=batchMode.startsWith('header-')?7:1031;for(let start=0;start<bytes.length;start+=size)yield bytes.subarray(start,start+size);}
       };
     }
@@ -246,7 +258,7 @@ test('정상 UTF-8과 잘못된 UTF-8 모두 기존 검사 입력 바이트를 �
     contents.map(content => createHash('sha256').update(content.toString('utf8')).digest('hex')).sort());
 });
 
-for (const mode of ['packed', 'packed-fragmented']) {
+for (const mode of ['packed', 'packed-fragmented', 'packed-body-boundary']) {
   test(`하나의 수신 버퍼에 여러 파일이 있거나 본문이 나뉘어도 검사 입력을 보존한다: ${mode}`, () => {
     const f = fixture();
     for (let index = 0; index < 5; index++) f.write(`packed-${index}.bin`, `distinct fixture ${index}`);
@@ -281,7 +293,7 @@ test('분할된 배치 헤더와 UTF-8·NUL·개행이 포함된 내용을 파�
     createHash('sha256').update('한글😀\n\0').digest('hex'));
 });
 
-for (const mode of ['invalid-header', 'wrong-object', 'wrong-type', 'truncated', 'missing-newline', 'extra-data', 'nonzero', 'spawn-error', 'expired', 'expired-after-scan', 'stall', 'leak-hold']) {
+for (const mode of ['invalid-header', 'wrong-object', 'wrong-type', 'truncated', 'missing-newline', 'boundary-truncated', 'boundary-missing-separator', 'boundary-wrong-separator', 'extra-data', 'nonzero', 'spawn-error', 'expired', 'expired-after-scan', 'stall', 'leak-hold']) {
   test(`배치 오류·시간 초과·조기 차단은 커밋을 막고 하위 프로세스를 정리한다: ${mode}`, () => {
     const f = fixture(); f.write('code.js', 'fixture'); f.git('add', 'code.js');
     const before = [f.git('rev-parse', 'HEAD'), f.git('write-tree')];

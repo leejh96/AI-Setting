@@ -58,6 +58,7 @@ async function* readBlobs(objectIds, deadline, signal) {
     }
   }
   async function readBytes(size) {
+    if (size && offset === chunk.length) await refill();
     if (size <= chunk.length - offset) {
       const content = chunk.subarray(offset, offset + size);
       offset += size;
