@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { isUtf8 } from 'node:buffer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,7 +80,7 @@ async function* readBlobs(objectIds, deadline, signal) {
       }
       const content = await readBytes(size);
       if ((await readBytes(1))[0] !== 10) throw readFailure();
-      yield content.toString('utf8');
+      yield isUtf8(content) ? content : content.toString('utf8');
     }
     check();
     if (offset !== chunk.length || !(await output.next()).done) throw readFailure();

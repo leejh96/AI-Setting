@@ -17,7 +17,10 @@ const roots = [];
 const persist = () => { state.updatedAt = Date.now(); saveWatch(path, state); };
 const markEdited = () => {
   state.changed = true; state.action = 'edited'; persist();
-  for (const root of roots) root.tracked.clear();
+  for (const root of roots) {
+    root.tracked.clear();
+    root.ignoreChild?.kill('SIGKILL');
+  }
 };
 const view = () => ({ phase: state.phase, failed: !!state.failed, changed: state.changed, reviewing: state.reviewing,
   reviewRequests: state.reviewRequests ?? 0, action: state.action });
@@ -55,11 +58,17 @@ function ignored(root, names) {
     const child = spawn('git', ['-C', root.path, 'check-ignore', '--stdin', '-z'], {
       windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['pipe', 'pipe', 'pipe'],
     });
+    root.ignoreChild = child;
     let stdout = ''; const timer = setTimeout(() => { child.kill(); reject(Error('Ignore check timeout')); }, 1000);
     child.on('error', (error) => { clearTimeout(timer); reject(error); });
     child.stdout.on('data', (data) => { stdout += data; if (stdout.length > 1024 * 1024) { child.kill(); reject(Error('Ignore output limit')); } });
     child.stderr.resume(); child.stdin.on('error', reject);
-    child.on('close', (code) => { clearTimeout(timer); if (![0, 1].includes(code)) reject(Error('Ignore check failed')); else resolveIgnored(new Set(stdout.split('\0').filter(Boolean))); });
+    child.on('close', (code) => {
+      if (root.ignoreChild === child) root.ignoreChild = undefined;
+      clearTimeout(timer);
+      if (![0, 1].includes(code)) reject(Error('Ignore check failed'));
+      else resolveIgnored(new Set(stdout.split('\0').filter(Boolean)));
+    });
     child.stdin.end(names.join('\0') + '\0');
   });
 }
@@ -121,7 +130,10 @@ function finish(action) {
     state.action = 'watch-failed';
     try { persist(); } catch { /* The failed RPC response still prevents a successful completion. */ }
   }
-  for (const root of roots) root.watcher?.close();
+  for (const root of roots) {
+    root.ignoreChild?.kill('SIGKILL');
+    root.watcher?.close();
+  }
   server.close(); clearTimeout(expiry);
   setTimeout(() => process.exit(), 100).unref();
 }
@@ -180,6 +192,7 @@ server.listen(state.endpoint, async () => {
             generation++;
             root.pending.add(rel);
             if (root.pending.size > 2048) throw Error('Event queue limit');
+            if (!root.git) { flush(root); return; }
             if (!root.scheduled) {
               root.scheduled = true;
               setImmediate(() => { root.scheduled = false; flush(root); });

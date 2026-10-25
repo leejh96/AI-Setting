@@ -23,11 +23,11 @@ function parse(result) {
   return JSON.parse(result.stdout);
 }
 
-function run(script, input, args = []) {
+function run(script, input, args = [], env = {}) {
   return spawnSync(process.execPath, [script, ...args], {
     input: typeof input === 'string' ? input : JSON.stringify(input),
     encoding: 'utf8', windowsHide: true, timeout: 15_000,
-    env: TEST_ENV,
+    env: { ...TEST_ENV, ...env },
   });
 }
 
@@ -148,6 +148,31 @@ test('정확한 청크 경계와 긴 UTF-8 사용자 입력·미완성 마지막
     warns(run(script, event));
   });
 });
+
+for (const mode of ['snapshot', 'stat-error', 'read-error', 'parse-error']) {
+  test(`버퍼 읽기의 시작 크기·짧은 읽기·실패 시 파일 닫기를 보장한다: ${mode}`, async () => {
+    await fixture(({ root, script, transcriptPath, event }) => {
+      const preload = join(root, `buffer-${mode}.mjs`), trace = preload + '.log';
+      if (mode === 'parse-error') writeFileSync(transcriptPath, JSON.stringify(user) + '\nPRIVATE_INVALID_TRANSCRIPT');
+      writeFileSync(preload, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const path=${JSON.stringify(transcriptPath)},trace=${JSON.stringify(trace)},mode=${JSON.stringify(mode)};let descriptor;
+const log=value=>fs.appendFileSync(trace,JSON.stringify(value)+'\\n');
+const open=fs.openSync;fs.openSync=(p,...args)=>{const fd=open(p,...args);if(p===path)descriptor=fd;return fd};
+const stat=fs.fstatSync;fs.fstatSync=fd=>{if(fd!==descriptor)return stat(fd);if(mode==='stat-error')throw Error('PRIVATE_STAT_FAILURE');const value=stat(fd);if(mode==='snapshot')fs.appendFileSync(path,'\\n'+${JSON.stringify(JSON.stringify(user))});return value};
+const read=fs.readSync;fs.readSync=(fd,buffer,offset,length,position)=>{if(fd!==descriptor)return read(fd,buffer,offset,length,position);log({read:length});if(mode==='read-error')throw Error('PRIVATE_READ_FAILURE');return read(fd,buffer,offset,Math.min(length,31),position)};
+const close=fs.closeSync;fs.closeSync=fd=>{const result=close(fd);if(fd===descriptor){descriptor=undefined;log({closed:true})}return result};syncBuiltinESMExports();`);
+      const result = run(script, event, [], { NODE_OPTIONS: `${TEST_ENV.NODE_OPTIONS || ''} --import=${pathToFileURL(preload).href}`.trim() });
+      if (mode === 'snapshot') continues(parse(result));
+      else { warns(result); assert.ok(!result.stderr.includes('PRIVATE_')); }
+      const events = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.equal(events.filter(entry => entry.closed).length, 1);
+      if (mode !== 'stat-error') {
+        assert.ok(events.some(entry => entry.read));
+        assert.ok(events.filter(entry => entry.read).every(entry => entry.read <= 64 * 1024));
+      }
+    });
+  });
+}
 
 test('현재 턴 이전의 잘못된 JSON도 경고하며 검토 완료로 처리하지 않는다', async () => {
   await fixture(({ script, transcriptPath, event }) => {

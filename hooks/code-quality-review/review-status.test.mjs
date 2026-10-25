@@ -35,6 +35,10 @@ test('탭이 있는 줄과 없는 줄이 섞여도 들여쓰기와 펜스 경계
     ['\t설명😀\n```text\nexample\n```\n', true],
     ['```text\n\t```\n', false],
     ['- item\n\t```text\n\texample\n\t```\n\n', true],
+    ['```text\n설명😀\t값\t예시\n```\t\t\n', true],
+    ['```text\n\t```\t\t\n', false],
+    ['- \t```text\n\t설명😀\t값\n\t```\t\t\n\n', true],
+    ['- item\n\t~~~\ttext\n\t예시\t😀\n\t~~~\t\t\n\n', true],
   ];
   for (const status of ['clean', 'skipped', 'blocked']) {
     for (const [prefix, expected] of cases) {

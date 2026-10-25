@@ -40,11 +40,11 @@ export function hasTerminalReviewStatus(message) {
   let fence = null;
   for (const rawLine of text.split(/\r?\n/)) {
     // Markdown indentation uses four-column tab stops.
-    let column = 0;
-    const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/[^\t]|\t/g, char => {
-      const width = char === '\t' ? 4 - column % 4 : 1;
-      column += width;
-      return char === '\t' ? ' '.repeat(width) : char;
+    let extra = 0;
+    const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/\t/g, (_, offset) => {
+      const width = 4 - (offset + extra) % 4;
+      extra += width - 1;
+      return ' '.repeat(width);
     });
     const blank = /^ *$/.test(line);
     const indent = /^ */.exec(line)[0].length;

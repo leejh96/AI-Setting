@@ -16,8 +16,8 @@ after(() => {
 });
 const preload = join(root, 'scanner.mjs');
 const scannerWorker = join(root, 'scanner-worker.mjs');
-writeFileSync(scannerWorker, `import{appendFileSync,readFileSync}from'node:fs';import{createHash}from'node:crypto';let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{
-appendFileSync(process.env.SCAN_TRACE,JSON.stringify({scanner:createHash('sha256').update(input).digest('hex')})+'\\n');
+writeFileSync(scannerWorker, `import{appendFileSync,readFileSync}from'node:fs';import{createHash}from'node:crypto';const chunks=[];process.stdin.on('data',chunk=>chunks.push(chunk));process.stdin.on('end',()=>{
+const bytes=Buffer.concat(chunks),input=bytes.toString('utf8');appendFileSync(process.env.SCAN_TRACE,JSON.stringify({scanner:createHash('sha256').update(bytes).digest('hex')})+'\\n');
 const code=Number(process.env.SCAN_STATUS||(input.includes('fixture-secret')?42:0)),mode=process.env.SCANNER_MODE;
 if(mode==='hang'){setInterval(()=>{},1000);return;}
 if(mode==='leak-peer'||mode==='error-peer'){
@@ -216,6 +216,19 @@ test('합계가 10MiB를 넘어도 파일별 제한을 적용하고 빈 파일·
   assert.equal(hashes.length, 4);
   for (const input of ['', binary.toString('utf8')]) assert.ok(hashes.includes(createHash('sha256').update(input).digest('hex')));
   assert.equal(result.trace.filter((entry) => entry.git === 'cat-file').length, 1);
+});
+
+test('정상 UTF-8과 잘못된 UTF-8 모두 기존 검사 입력 바이트를 유지한다', () => {
+  const f = fixture();
+  const contents = [Buffer.from('plain ASCII\n'), Buffer.from('\ufeff한글😀\0\r\n'),
+    Buffer.from([0xc0, 0xaf, 0xed, 0xa0, 0x80, 0xf4, 0x90, 0x80, 0x80]),
+    Buffer.from([0xe2, 0x82]), Buffer.from('한글😀'.repeat(1024 * 1024))];
+  const names = contents.map((content, index) => { const name = `encoding-${index}.bin`; f.write(name, content); return name; });
+  f.git('add', '--', ...names);
+  const result = f.scan();
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.trace.filter(entry => entry.scanner).map(entry => entry.scanner).sort(),
+    contents.map(content => createHash('sha256').update(content.toString('utf8')).digest('hex')).sort());
 });
 
 test('분할된 배치 헤더와 UTF-8·NUL·개행이 포함된 내용을 파일 단위로 읽는다', () => {

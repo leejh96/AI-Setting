@@ -1,4 +1,5 @@
-import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { openSync, fstatSync, readSync, closeSync, readFileSync } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { createReviewRequest, watchFailureWarning, terminalWarning } from '../review-request.mjs';
 import { hasTerminalReviewStatus } from '../review-status.mjs';
@@ -31,7 +32,7 @@ function printConfig() {
   }, null, 2)}\n`);
 }
 
-async function currentTurn(event) {
+function currentTurn(event) {
   let userIndex = -1;
   let index = 0;
   let stopHookActive = false;
@@ -59,19 +60,29 @@ async function currentTurn(event) {
     }
   };
   let fragments = [];
-  const size = statSync(event.transcriptPath).size;
-  if (!size) throw new Error('Missing user turn');
-  for await (const chunk of createReadStream(event.transcriptPath, { encoding: 'utf8', end: size - 1 })) {
-    let start = 0;
-    let end;
-    while ((end = chunk.indexOf('\n', start)) !== -1) {
-      const line = chunk.slice(start, end);
-      consume(fragments.length ? fragments.join('') + line : line);
-      fragments = [];
-      start = end + 1;
+  const descriptor = openSync(event.transcriptPath, 'r');
+  try {
+    const size = fstatSync(descriptor).size;
+    if (!size) throw new Error('Missing user turn');
+    const buffer = Buffer.allocUnsafe(64 * 1024), decoder = new StringDecoder('utf8');
+    let position = 0;
+    while (position < size) {
+      const bytes = readSync(descriptor, buffer, 0, Math.min(buffer.length, size - position), position);
+      if (!bytes) break;
+      position += bytes;
+      const chunk = decoder.write(buffer.subarray(0, bytes));
+      let start = 0;
+      let end;
+      while ((end = chunk.indexOf('\n', start)) !== -1) {
+        const line = chunk.slice(start, end);
+        consume(fragments.length ? fragments.join('') + line : line);
+        fragments = [];
+        start = end + 1;
+      }
+      if (start < chunk.length) fragments.push(chunk.slice(start));
     }
-    if (start < chunk.length) fragments.push(chunk.slice(start));
-  }
+    fragments.push(decoder.end());
+  } finally { closeSync(descriptor); }
   consume(fragments.join(''));
   if (userIndex === -1) throw new Error('Missing user turn');
   return { stopHookActive, lastAssistantMessage, hasModelResponse, key: String(userIndex) };
@@ -79,7 +90,7 @@ async function currentTurn(event) {
 
 async function prepareHook() {
   const event = JSON.parse(readFileSync(0, 'utf8'));
-  const turn = await currentTurn(event);
+  const turn = currentTurn(event);
   await prepareChanges('gemini', event.conversationId, turn.key, event.workspacePaths, !turn.stopHookActive && !turn.hasModelResponse);
   return { injectSteps: [] };
 }
@@ -93,7 +104,7 @@ async function runHook() {
   if (!event.fullyIdle || !['model_stop', 'NO_TOOL_CALL'].includes(event.terminationReason)) {
     return {};
   }
-  const { stopHookActive, lastAssistantMessage, key } = await currentTurn(event);
+  const { stopHookActive, lastAssistantMessage, key } = currentTurn(event);
   let changes;
   try { changes = await checkChanges('gemini', event.conversationId, key, event.workspacePaths); }
   catch (error) {

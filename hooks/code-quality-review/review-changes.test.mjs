@@ -115,6 +115,23 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event
   assert.ok(counts.every(count => count === 1), JSON.stringify(counts));
 });
 
+for (const mode of ['repeat', 'distinct']) {
+  test(`Git 없는 폴더는 첫 변경을 즉시 확정해 나머지 배치를 분류하지 않는다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `nongit-batch-${mode}.mjs`), trace = inject + '.log';
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';let active=false,count=0;
+const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(active&&String(path).startsWith(${JSON.stringify(f.cwd + sep)}))count++;return stat(path,...args)};
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='batch.trigger'){active=true;count=0;listener('change','code.mjs');for(let i=1;i<4096;i++)listener('change',${JSON.stringify(mode)}==='repeat'?'code.mjs':'extra-'+i+'.mjs');active=false;fs.appendFileSync(${JSON.stringify(trace)},count+'\\n');return}listener(event,name)});syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'batch.trigger'), 'emit burst');
+    assert.equal((await f.check()).changed, true);
+    const counts = readFileSync(trace, 'utf8').trim().split('\n').map(Number);
+    assert.equal(counts.reduce((total, count) => total + count, 0), 1);
+    assert.equal(stateFor(f.cwd).state.failed, undefined);
+  });
+}
+
 test('Windows PowerShell 준비 명령의 출력 파이프는 살아 있는 감시와 독립적으로 닫힌다', { skip: process.platform !== 'win32' }, async () => {
   const f = fixture(), script = join(root, 'prepare-through-powershell.mjs');
   writeFileSync(script, `import{prepareChanges}from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};await prepareChanges('test',${JSON.stringify(f.cwd)},'turn',[${JSON.stringify(f.cwd)}]);console.log('prepared');`);
@@ -576,6 +593,38 @@ test('수정 판단 전의 파일 정보 조회 실패는 무변경으로 숨기
   assert.equal(stateFor(f.cwd).state.failed, 'watch-event-failed');
   await unavailable(f.check());
 });
+
+for (const action of ['tracked', 'untracked', 'finish']) {
+  test(`불필요해진 진행 중 Git 분류를 모든 루트에서 종료한다: ${action}`, async () => {
+    const first = fixture(), second = fixture(), third = fixture(), paths = [first.cwd, second.cwd, third.cwd];
+    for (const cwd of paths.slice(0, 2)) { git(cwd, 'init', '--quiet'); git(cwd, 'add', 'code.mjs'); }
+    const inject = join(root, `cancel-ignore-${action}.mjs`), trace = inject + '.log';
+    writeFileSync(trace, '');
+    writeFileSync(inject, `import cp from 'node:child_process';import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const log=value=>fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(value)+'\\n');
+const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includes('check-ignore')){const child=spawn(process.execPath,['-e','process.stdin.resume();setInterval(()=>{},1000)'],options);log({started:child.pid});const kill=child.kill.bind(child);child.kill=signal=>{log({killed:child.pid,signal});return kill(signal)};child.once('close',()=>log({closed:child.pid}));return child}return spawn(file,args,options)};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await prepareChanges('test', first.cwd, 'turn', paths); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    const events = () => readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    for (const cwd of paths.slice(0, 2)) writeFileSync(join(cwd, 'untracked.mjs'), 'pending classification');
+    for (let i = 0; i < 100 && events().filter(entry => entry.started).length < 2; i++) await delay(10);
+    const pids = events().filter(entry => entry.started).map(entry => entry.started);
+    assert.equal(pids.length, 2); for (const pid of pids) assert.doesNotThrow(() => process.kill(pid, 0));
+    if (action === 'finish') {
+      await stopSession('test', first.cwd, paths);
+      assert.equal((await checkChanges('test', first.cwd, 'turn', paths)).terminal, 'superseded');
+    } else {
+      writeFileSync(join(action === 'tracked' ? first.cwd : third.cwd, 'code.mjs'), 'confirmed edit');
+      assert.equal((await checkChanges('test', first.cwd, 'turn', paths)).changed, true);
+    }
+    for (let i = 0; i < 100 && events().filter(entry => entry.closed).length < 2; i++) await delay(10);
+    assert.deepEqual(events().filter(entry => entry.killed).map(entry => entry.signal), ['SIGKILL', 'SIGKILL']);
+    assert.equal(events().filter(entry => entry.closed).length, 2);
+    for (const pid of pids) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.equal(stateFor(first.cwd).state.failed, undefined);
+  });
+}
 
 test('같은 root의 Git 분류가 진행 중이어도 추적 파일의 수정은 즉시 확정한다', async () => {
   const f = fixture(); git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
