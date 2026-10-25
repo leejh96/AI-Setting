@@ -12,10 +12,17 @@ function printConfig() {
     ? (value) => `'${value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)}'`
     : (value) => `'${value.replaceAll("'", "'\\''")}'`;
   const invocation = `${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))}`;
-  // Keep paths out of Antigravity's Windows command tokenizer and cmd expansion.
-  const command = (prepare = false) => process.platform === 'win32'
-    ? `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`& ${invocation}${prepare ? ' --prepare' : ''}`, 'utf16le').toString('base64')}`
-    : `${invocation}${prepare ? ' --prepare' : ''}`;
+  const paths = [process.execPath, fileURLToPath(import.meta.url)].map(value => value.replaceAll('\\', '/'));
+  const directInvocation = process.platform === 'win32'
+    && paths.every(value => /^[a-z]:\//i.test(value) && !/[^\w:./-]/.test(value)) ? paths.join(' ') : undefined;
+  // Quoted Windows paths need the encoded wrapper for Antigravity's command tokenizer.
+  const command = (prepare = false) => {
+    const args = prepare ? ' --prepare' : '';
+    if (directInvocation) return directInvocation + args;
+    return process.platform === 'win32'
+      ? `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`& ${invocation}${args}`, 'utf16le').toString('base64')}`
+      : invocation + args;
+  };
 
   process.stdout.write(`${JSON.stringify({
     'ai-setting-code-quality-review': {

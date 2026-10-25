@@ -33,14 +33,20 @@ node hooks/code-quality-review/gemini/gemini-code-quality-review.mjs --print-con
 
 전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`을 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
-Windows 생성 명령은 기본 Windows PowerShell의 `powershell.exe -NoProfile -NonInteractive -EncodedCommand ...` 형식입니다. Antigravity가 경로의 따옴표를 파일명으로 넘기거나 cmd가 `%`를 확장하는 문제를 피하도록, Node와 훅 경로를 인용한 호출문을 UTF-16 Base64로 전달합니다. 인코딩은 비밀값 보호 기능이 아니며 기기 경로만 담습니다. 생성한 명령을 그대로 사용합니다.
+Windows에서는 Node와 훅의 경로가 공백·셸 특수문자·비ASCII 문자 없는 단순 드라이브 절대 경로이면 Node를 직접 실행합니다. 그 외 경로는 기존 `powershell.exe -NoProfile -NonInteractive -EncodedCommand ...` 형식을 사용합니다. Antigravity가 따옴표를 파일명으로 넘기거나 cmd가 `%`를 확장하는 문제를 피하도록, 인용한 호출문을 UTF-16 Base64로 전달합니다. 인코딩은 비밀값 보호 기능이 아니며 기기 경로만 담습니다. 생성한 명령을 그대로 사용합니다. 감시 프로세스는 계속 숨겨진 `Start-Process`로 분리합니다.
 
-등록 전 실제 경로를 확인하려면 다음처럼 호출문을 디코딩합니다.
+이미 등록한 명령에는 저장소 코드 변경만으로 이 실행기 선택이 반영되지 않습니다. 설정을 다시 생성해 해당 훅의 `PreInvocation`·`Stop` 명령만 갱신하고 다른 훅과 활성화 상태는 보존합니다.
+
+등록 전 실제 명령과 경로를 확인하려면 직접 명령은 그대로 출력하고, 인코딩된 호출문만 디코딩합니다.
 
 ```powershell
 $qualityConfig = node hooks/code-quality-review/gemini/gemini-code-quality-review.mjs --print-config | ConvertFrom-Json
 $qualityCommand = $qualityConfig.'ai-setting-code-quality-review'.Stop[0].command
-[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(($qualityCommand -split ' ')[-1]))
+if ($qualityCommand.StartsWith('powershell.exe ')) {
+    [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(($qualityCommand -split ' ')[-1]))
+} else {
+    $qualityCommand
+}
 ```
 
 Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 해당 훅의 활성 상태를 확인합니다. 명령이 등록됐다는 사실만으로 검토와 반복 종료가 확인된 것은 아닙니다.

@@ -361,7 +361,7 @@ test('잘못된 실행 인자는 경고, 잘못된 설정 생성 인자는 설�
   assert.match(result.stderr, /설정을 생성하지 못했습니다/);
 });
 
-function generated(script, node = process.execPath) {
+function generated(script, node = process.execPath, event = 'Stop') {
   const result = spawnSync(node, [script, '--print-config'], { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
   const config = parse(result)['ai-setting-code-quality-review'];
   assert.equal(config.enabled, true);
@@ -370,7 +370,7 @@ function generated(script, node = process.execPath) {
   assert.equal(config.Stop[0].timeout, 30);
   assert.equal(config.PreInvocation[0].timeout, 10);
   assert.equal(config.PreInvocation[0].type, 'command');
-  return config.Stop[0].command;
+  return config[event][0].command;
 }
 
 function assertCommand(script, event, node = process.execPath) {
@@ -379,11 +379,18 @@ function assertCommand(script, event, node = process.execPath) {
   if (process.platform === 'win32') {
     // Antigravity can split the command without treating quotes as shell syntax.
     const [exe, ...args] = command.split(' ');
-    assert.equal(exe, 'powershell.exe');
-    const decoded = Buffer.from(args.at(-1), 'base64').toString('utf16le');
-    const quote = (value) => value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char);
-    assert.ok(decoded.includes(quote(node)));
-    assert.ok(decoded.includes(quote(script)));
+    if (exe === 'powershell.exe') {
+      const decoded = Buffer.from(args.at(-1), 'base64').toString('utf16le');
+      const quote = (value) => value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char);
+      assert.ok(decoded.includes(quote(node)));
+      assert.ok(decoded.includes(quote(script)));
+    } else {
+      assert.equal(exe, node.replaceAll('\\', '/'));
+      assert.deepEqual(args, [script.replaceAll('\\', '/')]);
+      continues(parse(spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
+        input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV,
+      })), join(dirname(script), '..', 'REVIEW.md'));
+    }
     result = spawnSync(exe, args, { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV });
   } else {
     result = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', timeout: 15_000, env: TEST_ENV });
@@ -393,6 +400,39 @@ function assertCommand(script, event, node = process.execPath) {
 
 test('현재 Node와 훅 경로로 생성한 설정 명령이 셸 해석에 의존하지 않고 실행된다', async () => {
   await fixture(({ script, event }) => assertCommand(script, event));
+});
+
+test('단순 Windows 경로의 직접 준비 명령도 출력을 닫고 살아 있는 감시로 검토한다', {
+  skip: process.platform !== 'win32'
+    || ![process.execPath, TEST_ROOT].every(path => /^[a-z]:[\\/][a-z0-9_./\\-]+$/i.test(path)),
+}, async () => {
+  await fixture(({ script, transcriptPath, event }) => {
+    const command = generated(script, process.execPath, 'PreInvocation');
+    assert.equal(command, `${process.execPath.replaceAll('\\', '/')} ${script.replaceAll('\\', '/')} --prepare`);
+    writeFileSync(transcriptPath, [user, model('이전 응답'), user].map(JSON.stringify).join('\n'));
+    const [exe, ...args] = command.split(' ');
+    const result = spawnSync(exe, args, { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV });
+    assert.deepEqual(parse(result), { injectSteps: [] });
+    const directory = join(TEST_ROOT, 'ai-setting-code-quality-review');
+    const state = readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+      .map(name => JSON.parse(readFileSync(join(directory, name), 'utf8')))
+      .find(state => state.phase === 'ready' && state.roots.some(root => root.path === event.workspacePaths[0]));
+    assert.ok(state); assert.doesNotThrow(() => process.kill(state.pid, 0));
+    writeFileSync(join(event.workspacePaths[0], 'code.mjs'), 'changed after direct preparation');
+    assertCommand(script, event);
+  }, { changed: false });
+});
+
+test('Windows 경로의 공백·특수문자·비ASCII 문자는 인코딩된 실행기를 유지한다', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  await fixture(({ directory, script }) => {
+    for (const name of ['space hook.mjs', "quote'hook.mjs", 'value$hook.mjs', 'percent%LITERAL%.mjs',
+      'bang!hook.mjs', 'amp&hook.mjs', 'caret^hook.mjs', 'round(x).mjs', 'square[x].mjs', '한글.mjs']) {
+      const target = join(directory, name); copyFileSync(script, target);
+      assert.match(generated(target), /^powershell\.exe -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/);
+    }
+  }, { changed: false });
 });
 
 test('공백·작은따옴표·셸 구문처럼 보이는 훅 경로도 리터럴로 실행한다', async () => {
