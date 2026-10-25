@@ -208,7 +208,8 @@ server.listen(state.endpoint, async () => {
           env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
         });
         if (tracked.status !== 0) throw tracked.error ?? Error('Tracked path lookup failed');
-        for (const name of tracked.stdout.split('\0').filter(Boolean)) {
+        for (const name of tracked.stdout.split('\0')) {
+          if (!name) continue;
           root.tracked.add(name);
           for (let end = name.lastIndexOf('/'); end !== -1; end = name.lastIndexOf('/', end - 1)) {
             const parent = name.slice(0, end);
