@@ -19,11 +19,12 @@ writeFileSync(preload, `import cp from 'node:child_process';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-const open = fs.openSync, read = fs.readSync, readFile = fs.readFileSync;
+const open = fs.openSync, read = fs.readSync, readFile = fs.readFileSync, close = fs.closeSync;
 let transcriptDescriptor;
 fs.openSync = (path, ...args) => { const fd = open(path, ...args); if (path === process.env.TRANSCRIPT) transcriptDescriptor = fd; return fd; };
 fs.readFileSync = (path, ...args) => { if (path === process.env.TRANSCRIPT) throw Error('Unexpected whole transcript read'); return readFile(path, ...args); };
-fs.readSync = (fd, ...args) => { const size = read(fd, ...args); if (fd === transcriptDescriptor) fs.appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ read: size }) + '\\n'); return size; };
+fs.readSync = (fd, ...args) => { if (fd === transcriptDescriptor && process.env.TRANSCRIPT_SHORT_READ === '1') args[2] = Math.max(0, args[2] - 1); const size = read(fd, ...args); if (fd === transcriptDescriptor) fs.appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ read: size }) + '\\n'); return size; };
+fs.closeSync = fd => { const result = close(fd); if (fd === transcriptDescriptor) { transcriptDescriptor = undefined; fs.appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ closed: true }) + '\\n'); } return result; };
 const spawn = cp.spawnSync;
 cp.spawnSync = (program, args, options) => {
   if (program !== 'fixture-scanner') return spawn(program, args, options);
@@ -95,4 +96,29 @@ test('사용자 입력 없음과 최신 입력 뒤의 파싱 오류는 기존 �
     assert.deepEqual(result.output, { injectSteps: [] });
     assert.equal(result.trace.filter((entry) => entry.hash).length, 0);
   }
+});
+
+for (const mode of ['many-short', 'mixed']) {
+  test(`여러 읽기 버퍼의 줄 조각을 보존해 최신 입력과 손상 기록을 구분한다: ${mode}`, () => {
+    const input = '최근 입력😀'.repeat(20000);
+    const short = Array.from({ length: 6000 }, (_, index) => JSON.stringify({ type: 'PLANNER_RESPONSE', content: `${index} 답변😀` }));
+    const long = JSON.stringify({ type: 'PLANNER_RESPONSE', content: '한글😀'.repeat(40000) });
+    const suffix = (mode === 'mixed' ? [...short, long, ...short] : short).join('\r\n');
+    const result = run(`${user('fixture-secret old')}\r\n${user(input)}\r\n${suffix}`);
+    assert.deepEqual(result.output, { injectSteps: [] });
+    assert.deepEqual(result.trace.filter(entry => entry.hash), [{ hash: hash(input) }]);
+    assert.ok(result.trace.filter(entry => entry.read).length > 8);
+    assert.equal(result.trace.filter(entry => entry.closed).length, 1);
+    const malformed = run(`${user('fixture-secret current')}\r\nmalformed\r\n${suffix}`);
+    assert.deepEqual(malformed.output, { injectSteps: [] });
+    assert.equal(malformed.trace.filter(entry => entry.hash).length, 0);
+    assert.equal(malformed.trace.filter(entry => entry.closed).length, 1);
+  });
+}
+
+test('짧게 읽힌 기록은 검사기에 보내지 않고 파일을 닫아 기존 빈 응답으로 종료한다', () => {
+  const result = run(user('fixture-secret current'), { TRANSCRIPT_SHORT_READ: '1' });
+  assert.deepEqual(result.output, { injectSteps: [] });
+  assert.equal(result.trace.filter(entry => entry.hash).length, 0);
+  assert.equal(result.trace.filter(entry => entry.closed).length, 1);
 });

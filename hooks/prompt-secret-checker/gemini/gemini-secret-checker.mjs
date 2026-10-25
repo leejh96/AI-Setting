@@ -35,10 +35,11 @@ function latestUserInput(path) {
   try {
     let position = fstatSync(descriptor).size;
     let pending = [];
+    let reusable;
     while (position > 0) {
       const length = Math.min(position, 64 * 1024);
       position -= length;
-      const chunk = Buffer.allocUnsafe(length);
+      const chunk = reusable?.length === length ? reusable : Buffer.allocUnsafe(length);
       if (readSync(descriptor, chunk, 0, length, position) !== length) throw new Error('Transcript changed');
       let end = chunk.length;
       for (let index = chunk.lastIndexOf(10); index >= 0; index = index === 0 ? -1 : chunk.lastIndexOf(10, index - 1)) {
@@ -50,7 +51,13 @@ function latestUserInput(path) {
         const entry = JSON.parse(line);
         if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') return entry.content;
       }
-      pending.push(chunk.subarray(0, end));
+      if (position > 0 && end < chunk.length) {
+        pending.push(Buffer.from(chunk.subarray(0, end)));
+        reusable = chunk;
+      } else {
+        pending.push(chunk.subarray(0, end));
+        reusable = undefined;
+      }
     }
     const line = Buffer.concat(pending.reverse()).toString('utf8').trim();
     if (line) {
