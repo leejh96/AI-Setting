@@ -95,7 +95,19 @@ cp.spawn = (program, args, options) => {
 if(process.env.BATCH_MODE==='stall'||process.env.SCANNER_MODE==='hang'){const timer=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timer(fn,ms>50000?250:ms,...args);}
 cp.spawnSync = (program, args, options) => {
   if (program === 'git') appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ git: args[0] }) + '\\n');
-  return original(program, args, options);
+  const result=original(program,args,options);
+  if(program==='git'&&args[0]==='diff'&&process.env.RAW_MODE){
+    const parts=result.stdout.split(String.fromCharCode(0));
+    switch(process.env.RAW_MODE){
+      case 'missing-final-nul':result.stdout=result.stdout.slice(0,-1);break;
+      case 'missing-path':result.stdout=parts[0]+String.fromCharCode(0);break;
+      case 'empty-path':parts[1]='';result.stdout=parts.join(String.fromCharCode(0));break;
+      case 'invalid-mode':result.stdout=result.stdout.replace(/^:[0-7]{6}/,':x00644');break;
+      case 'invalid-object':parts[0]=parts[0].replace(/ [a-f0-9]+ ([ACMT])$/,' invalid-object $1');result.stdout=parts.join(String.fromCharCode(0));break;
+      case 'extra-nul':result.stdout+=String.fromCharCode(0);break;
+    }
+  }
+  return result;
 };
 syncBuiltinESMExports();`);
 
@@ -145,6 +157,19 @@ test('빈 인덱스와 아직 HEAD가 없는 첫 커밋도 검사한다', () => 
   f.write('first.js', 'fixture-secret first commit');
   f.git('add', 'first.js');
   assert.equal(f.scan().status, 1);
+});
+
+test('불완전한 메타데이터·빈 경로·잘못된 필드는 검사 전에 차단하고 인덱스를 보존한다', () => {
+  const f = fixture(); f.write('code.js', 'clean fixture'); f.git('add', 'code.js');
+  const before = [f.git('rev-parse', 'HEAD'), f.git('write-tree')];
+  for (const mode of ['missing-final-nul', 'missing-path', 'empty-path', 'invalid-mode', 'invalid-object', 'extra-nul']) {
+    const result = f.scan({ RAW_MODE: mode });
+    assert.equal(result.status, 1, mode);
+    assert.match(result.stderr, /Git 인덱스를 읽지 못해/);
+    assert.deepEqual(result.trace.filter(entry => entry.git).map(entry => entry.git), ['diff']);
+    assert.equal(result.trace.filter(entry => entry.scannerStart).length, 0);
+    assert.deepEqual([f.git('rev-parse', 'HEAD'), f.git('write-tree')], before);
+  }
 });
 
 test('작업 파일 대신 staged 전체 내용을 검사하고 차단 시 HEAD와 인덱스를 보존한다', () => {

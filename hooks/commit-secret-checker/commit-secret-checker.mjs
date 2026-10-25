@@ -187,14 +187,17 @@ async function getCommitBlockReason() {
     if (changed.status !== 0) return '커밋할 파일 목록을 읽지 못해 명령 실행을 차단했습니다.';
     const gitleaksBin = process.env.AI_SETTING_GITLEAKS_BIN
       || (existsSync('/opt/homebrew/bin/gitleaks') ? '/opt/homebrew/bin/gitleaks' : 'gitleaks');
-    const records = changed.stdout.split('\0');
-    if (records.at(-1) !== '' || records.length % 2 !== 1) return 'Git 인덱스를 읽지 못해 커밋을 차단했습니다.';
+    const output = changed.stdout;
     const objectIds = new Set();
-    for (let index = 0; index < records.length - 1; index += 2) {
-      const entry = /^:[0-7]{6} ([0-7]{6}) [a-f0-9]+ ([a-f0-9]+) [ACMT]$/.exec(records[index]);
-      if (!entry || !records[index + 1]) return 'Git 인덱스를 읽지 못해 커밋을 차단했습니다.';
+    for (let index = 0; index < output.length;) {
+      const end = output.indexOf('\0', index);
+      const pathEnd = end === -1 ? -1 : output.indexOf('\0', end + 1);
+      if (end === -1 || pathEnd <= end + 1) return 'Git 인덱스를 읽지 못해 커밋을 차단했습니다.';
+      const entry = /^:[0-7]{6} ([0-7]{6}) [a-f0-9]+ ([a-f0-9]+) [ACMT]$/.exec(output.slice(index, end));
+      if (!entry) return 'Git 인덱스를 읽지 못해 커밋을 차단했습니다.';
       const [, mode, objectId] = entry;
       if (mode !== '160000') objectIds.add(objectId);
+      index = pathEnd + 1;
     }
     if (!objectIds.size) return null;
     return await scanBlobs(objectIds, gitleaksBin, deadline);
