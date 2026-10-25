@@ -33,13 +33,17 @@ function eligible(root, filename, eventType) {
       || /^(readme|changelog|license|licence|notice|authors|contributing)(\..*)?$/i.test(parts.at(-1))) return null;
   const stateRel = relative(dirname(path), full);
   if (!stateRel.startsWith(`..${sep}`) && stateRel !== '..' && !isAbsolute(stateRel)) return null;
-  let current = root.path;
+  let current = root.path, fullStat;
   for (const part of parts) {
     current = join(current, part);
-    try { if (lstatSync(current).isSymbolicLink()) return current === full ? rel.replaceAll(sep, '/') : null; }
+    try {
+      const stat = lstatSync(current);
+      if (current === full) fullStat = stat;
+      if (stat.isSymbolicLink()) return current === full ? rel.replaceAll(sep, '/') : null;
+    }
     catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') break; throw error; }
   }
-  try { if (eventType === 'change' && lstatSync(full).isDirectory()) return null; }
+  try { if (eventType === 'change' && (fullStat ?? lstatSync(full)).isDirectory()) return null; }
   catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
   return rel.replaceAll(sep, '/');
 }
@@ -109,7 +113,11 @@ async function checkpoint() {
 function finish(action) {
   if (closing) return;
   closing = true; state.phase = 'closed'; state.action = action;
-  try { persist(); } catch (error) { state.failed ||= 'watch-state-write-failed'; state.errorCode ??= watchErrorCode(error); }
+  try { persist(); } catch (error) {
+    state.failed ||= 'watch-state-write-failed'; state.errorCode ??= watchErrorCode(error);
+    state.action = 'watch-failed';
+    try { persist(); } catch { /* The failed RPC response still prevents a successful completion. */ }
+  }
   for (const root of roots) root.watcher?.close();
   server.close(); clearTimeout(expiry);
   setTimeout(() => process.exit(), 100).unref();
@@ -130,8 +138,9 @@ const server = createServer({ allowHalfOpen: true }, (socket) => {
         if (request.command === 'check') {
           if (state.phase === 'closed') { socket.end(`${JSON.stringify(view())}\n`); return; }
           if (state.phase !== 'ready') throw Error('Not ready');
-          await checkpoint(); state.stops++; state.action = state.changed ? 'review-required' : 'unchanged'; persist();
+          await checkpoint(); state.stops++;
           if (!state.changed) { finish('unchanged'); socket.end(`${JSON.stringify(view())}\n`); return; }
+          state.action = 'review-required'; persist();
         } else if (request.command === 'record') {
           if (state.phase === 'closed') { socket.end(`${JSON.stringify(view())}\n`); return; }
           if (request.action !== 'review-requested' || state.phase !== 'ready'
@@ -184,8 +193,12 @@ server.listen(state.endpoint, async () => {
         });
         if (tracked.status !== 0) throw tracked.error ?? Error('Tracked path lookup failed');
         for (const name of tracked.stdout.split('\0').filter(Boolean)) {
-          const parts = name.split('/');
-          for (let i = 1; i <= parts.length; i++) root.tracked.add(parts.slice(0, i).join('/'));
+          root.tracked.add(name);
+          for (let end = name.lastIndexOf('/'); end !== -1; end = name.lastIndexOf('/', end - 1)) {
+            const parent = name.slice(0, end);
+            if (root.tracked.has(parent)) break;
+            root.tracked.add(parent);
+          }
         }
       }
     }

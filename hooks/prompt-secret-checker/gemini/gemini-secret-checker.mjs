@@ -42,7 +42,8 @@ function latestUserInput(path) {
       if (readSync(descriptor, chunk, 0, length, position) !== length) throw new Error('Transcript changed');
       let end = chunk.length;
       for (let index = chunk.lastIndexOf(10); index >= 0; index = index === 0 ? -1 : chunk.lastIndexOf(10, index - 1)) {
-        const line = Buffer.concat([chunk.subarray(index + 1, end), ...pending.reverse()]).toString('utf8').trim();
+        const segment = chunk.subarray(index + 1, end);
+        const line = (pending.length ? Buffer.concat([segment, ...pending.reverse()]) : segment).toString('utf8').trim();
         pending = [];
         end = index;
         if (!line) continue;

@@ -62,6 +62,56 @@ test('무변경·문서·제외 폴더는 내용 읽기 없이 종료하고 감�
   assert.equal(stateFor(f.cwd).state.phase, 'closed');
 });
 
+for (const mode of ['normal', 'fail-once', 'fail-always']) {
+  test(`무변경 Stop은 종료 상태를 한 번 저장하고 저장 오류는 실패로 보고한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `unchanged-save-${mode}.mjs`), trace = join(root, `unchanged-save-${mode}.log`);
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const rename=fs.renameSync;let failed=false;
+fs.renameSync=(from,to)=>{if(String(to).endsWith('.json')&&!String(to).split(/[\\\\/]/).at(-1).startsWith('owner-')){const state=JSON.parse(fs.readFileSync(from,'utf8'));if(state.action==='unchanged'||state.failed){fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({phase:state.phase,action:state.action})+'\\n');if(${JSON.stringify(mode)}==='fail-always'||(${JSON.stringify(mode)}==='fail-once'&&!failed)){failed=true;throw Object.assign(Error('PRIVATE_WRITE_FAILURE'),{code:'EACCES'});}}}return rename(from,to)};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    if (mode === 'normal') {
+      assert.equal((await f.check()).changed, false);
+      assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse), [{ phase: 'closed', action: 'unchanged' }]);
+      const state = stateFor(f.cwd).state;
+      assert.equal(state.phase, 'closed'); assert.equal(state.action, 'unchanged'); assert.equal(state.stops, 1);
+      assert.deepEqual(await f.check(), { terminal: 'unchanged', failed: false, changed: false });
+    } else {
+      await unavailable(f.check());
+      const state = stateFor(f.cwd).state;
+      if (mode === 'fail-once') {
+        assert.equal(state.action, 'watch-failed'); assert.equal(state.failed, 'watch-state-write-failed');
+        assert.equal(state.errorCode, 'EACCES');
+        assert.ok(!JSON.stringify(state).includes('PRIVATE_WRITE_FAILURE'));
+        await unavailable(f.check());
+      } else {
+        assert.equal(state.phase, 'ready');
+        await stopChanges('test', f.cwd, 'turn', [f.cwd]);
+        assert.equal(stateFor(f.cwd).state.action, 'watch-failed');
+        await unavailable(f.check());
+      }
+    }
+  });
+}
+
+test('같은 파일의 메타데이터는 이벤트마다 한 번 조회하고 이전 이벤트 결과는 재사용하지 않는다', async () => {
+  const f = fixture(), inject = join(root, 'event-stat-count.mjs'), trace = join(root, 'event-stat-count.log');
+  git(f.cwd, 'init', '--quiet');
+  writeFileSync(join(f.cwd, 'sample.mjs'), 'ignored content');
+  writeFileSync(join(f.cwd, '.gitignore'), 'sample.mjs\n');
+  writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const stat=fs.lstatSync;let active=false,count=0;
+fs.lstatSync=(path,...args)=>{if(active&&String(path).replaceAll('\\\\','/').endsWith('/sample.mjs'))count++;return stat(path,...args)};
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='batch.trigger'){for(let i=0;i<2;i++){active=true;count=0;try{listener('change','sample.mjs')}finally{active=false;fs.appendFileSync(${JSON.stringify(trace)},count+'\\n');}}}else listener(event,name)});syncBuiltinESMExports();`);
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+  try { await f.prepare(); }
+  finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+  writeFileSync(join(f.cwd, 'batch.trigger'), 'emit repeated events');
+  assert.equal((await f.check()).changed, false);
+  const counts = readFileSync(trace, 'utf8').trim().split('\n').map(Number);
+  assert.ok(counts.length >= 2);
+  assert.ok(counts.every(count => count === 1), JSON.stringify(counts));
+});
+
 test('Windows PowerShell 준비 명령의 출력 파이프는 살아 있는 감시와 독립적으로 닫힌다', { skip: process.platform !== 'win32' }, async () => {
   const f = fixture(), script = join(root, 'prepare-through-powershell.mjs');
   writeFileSync(script, `import{prepareChanges}from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};await prepareChanges('test',${JSON.stringify(f.cwd)},'turn',[${JSON.stringify(f.cwd)}]);console.log('prepared');`);
@@ -132,6 +182,27 @@ const spawn=cp.spawn;cp.spawn=(file,args,...rest)=>{if(file==='git'&&args.includ
   assert.equal(stateFor(f.cwd).state.failed, undefined);
   assert.equal(readdirSync(root).includes('mixed-ignore-calls'), false);
 });
+
+for (const target of ['packages/shared/src/second.mjs', 'packages/shared/src', 'packages/unique']) {
+  test(`공유 부모 경로의 색인 생성을 생략해도 파일과 상위 폴더 수정을 즉시 감지한다: ${target}`, async () => {
+    const f = fixture(), inject = join(root, `tracked-parent-${randomUUID()}.mjs`);
+    git(f.cwd, 'init', '--quiet');
+    for (const directory of ['packages/shared/src', 'packages/unique/deep']) mkdirSync(join(f.cwd, directory), { recursive: true });
+    for (const name of ['packages/shared/src/first.mjs', 'packages/shared/src/second.mjs', 'packages/unique/deep/code.mjs']) {
+      writeFileSync(join(f.cwd, name), 'tracked content');
+    }
+    git(f.cwd, 'add', 'packages');
+    writeFileSync(join(f.cwd, '.gitignore'), 'packages/\n');
+    writeFileSync(inject, `import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawn;cp.spawn=(file,args,...rest)=>{if(file==='git'&&args.includes('check-ignore'))throw Error('Unexpected ignore classification');return spawn(file,args,...rest)};syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    if (target.endsWith('.mjs')) writeFileSync(join(f.cwd, target), 'changed tracked sibling');
+    else renameSync(join(f.cwd, target), join(f.cwd, target + '-moved'));
+    assert.equal((await f.check()).changed, true);
+    assert.equal(stateFor(f.cwd).state.failed, undefined);
+  });
+}
 
 for (const mode of ['ignored', 'mixed', 'unexpected']) {
   test(`대량 미추적 이벤트의 ignore 분류와 응답 검증을 유지한다: ${mode}`, async () => {

@@ -78,6 +78,17 @@ test('합성 시크릿·검사 오류는 원문 없이 경고하며 최신 입�
   }
 });
 
+test('완성된 짧은 줄과 여러 청크에 걸친 줄이 섞여도 최신 UTF-8 입력을 선택한다', () => {
+  const input = '최근 입력😀';
+  const longModel = JSON.stringify({ type: 'PLANNER_RESPONSE', content: '한글😀'.repeat(20000) });
+  const shortModel = JSON.stringify({ type: 'PLANNER_RESPONSE', content: '짧은 응답😀' });
+  for (const suffix of [shortModel, `${longModel}\r\n \r\n${shortModel}`]) {
+    const result = run(`${user('fixture-secret old')}\n${user(input)}\r\n${suffix}\r\n`);
+    assert.deepEqual(result.output, { injectSteps: [] });
+    assert.deepEqual(result.trace.filter((entry) => entry.hash), [{ hash: hash(input) }]);
+  }
+});
+
 test('사용자 입력 없음과 최신 입력 뒤의 파싱 오류는 기존 빈 응답 정책을 유지한다', () => {
   for (const transcript of ['', '\n{}\n', '\n\n\n', '{}\n \n', `${user('fixture-secret')}\nmalformed`, `${user('fixture-secret')}\nnull`]) {
     const result = run(transcript);
