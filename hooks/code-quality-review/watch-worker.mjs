@@ -15,7 +15,10 @@ let closing = false;
 let generation = 0;
 const roots = [];
 const persist = () => { state.updatedAt = Date.now(); saveWatch(path, state); };
-const markEdited = () => { state.changed = true; state.action = 'edited'; persist(); };
+const markEdited = () => {
+  state.changed = true; state.action = 'edited'; persist();
+  for (const root of roots) root.tracked.clear();
+};
 const view = () => ({ phase: state.phase, failed: !!state.failed, changed: state.changed, reviewing: state.reviewing,
   reviewRequests: state.reviewRequests ?? 0, action: state.action });
 function fail(reason, error) {

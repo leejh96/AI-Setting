@@ -186,6 +186,41 @@ const spawn=cp.spawn;cp.spawn=(file,args,...rest)=>{if(file==='git'&&args.includ
   assert.equal(readdirSync(root).includes('mixed-ignore-calls'), false);
 });
 
+for (const target of ['release-index.mjs', 'new.mjs']) {
+  test(`첫 수정 저장 후 모든 루트의 추적 인덱스를 해제하고 검토를 유지한다: ${target}`, async () => {
+    const first = fixture(), second = fixture(), paths = [first.cwd, second.cwd];
+    for (const cwd of paths) {
+      git(cwd, 'init', '--quiet');
+      writeFileSync(join(cwd, 'release-index.mjs'), 'tracked'); git(cwd, 'add', '.');
+    }
+    const inject = join(root, `release-index-${randomUUID()}.mjs`), trace = inject + '.log';
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const indexes=[],add=Set.prototype.add,clear=Set.prototype.clear;let saved=false;
+const log=value=>fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(value)+'\\n');
+Set.prototype.add=function(value){if(value==='release-index.mjs'&&!indexes.includes(this))indexes.push(this);return add.call(this,value)};
+Set.prototype.clear=function(){const size=this.size,result=clear.call(this);if(indexes.includes(this))log({event:'released',before:size,after:this.size,saved});return result};
+const rename=fs.renameSync;fs.renameSync=(from,to)=>{const edited=JSON.parse(fs.readFileSync(from,'utf8')).action==='edited';const result=rename(from,to);if(edited)saved=true;return result};
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='inspect.trigger'){log({event:'snapshot',sizes:indexes.map(index=>index.size)});return}listener(event,name)});syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await prepareChanges('test', first.cwd, 'turn', paths); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(first.cwd, 'inspect.trigger'), 'inspect indexes before edit');
+    for (let i = 0; i < 100 && !readdirSync(root).includes(trace.slice(root.length + 1)); i++) await delay(10);
+    const before = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(before.every(entry => entry.event === 'snapshot' && entry.sizes.length === 2 && entry.sizes.every(size => size > 0)));
+    writeFileSync(join(first.cwd, target), 'implementation changed');
+    const gate = await checkChanges('test', first.cwd, 'turn', paths);
+    assert.equal(gate.changed, true);
+    const released = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse).filter(entry => entry.event === 'released');
+    assert.equal(released.length, 2);
+    assert.ok(released.every(entry => entry.saved && entry.before > 0 && entry.after === 0));
+    await gate.record('review-requested');
+    assert.equal((await checkChanges('test', first.cwd, 'turn', paths)).reviewing, true);
+    await gate.record('review-finished');
+    assert.equal(stateFor(first.cwd).state.action, 'review-finished');
+  });
+}
+
 for (const target of ['packages/shared/src/second.mjs', 'packages/shared/src', 'packages/unique']) {
   test(`공유 부모 경로의 색인 생성을 생략해도 파일과 상위 폴더 수정을 즉시 감지한다: ${target}`, async () => {
     const f = fixture(), inject = join(root, `tracked-parent-${randomUUID()}.mjs`);
