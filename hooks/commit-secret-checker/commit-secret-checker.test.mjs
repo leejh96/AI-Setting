@@ -28,7 +28,11 @@ setTimeout(()=>{process.exitCode=code;},mode==='parallel'?150:0);
 const batchWorker = join(root, 'batch-worker.mjs');
 writeFileSync(batchWorker, `let input = '';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);
 process.stdin.on('end',()=>{
-  const id=input.trim().split('\\n')[0],mode=process.env.BATCH_MODE;
+  const ids=input.trim().split('\\n'),id=ids[0],mode=process.env.BATCH_MODE;
+  if(mode==='packed'||mode==='packed-fragmented'){
+    const bodies=[Buffer.alloc(0),Buffer.from('한글😀\\0\\r\\n'),Buffer.alloc(32000,65),Buffer.from([0xff,0xfe,0,10,65]),Buffer.from('last body')];
+    process.stdout.write(Buffer.concat(ids.map((value,index)=>Buffer.concat([Buffer.from(value+' blob '+bodies[index].length+'\\n'),bodies[index],Buffer.from('\\n')]))));return;
+  }
   if(mode==='stall'){setInterval(()=>{},1000);return;}
   if(mode==='invalid-header'){process.stdout.write(id+' missing\\n');return;}
   if(mode==='wrong-object'){process.stdout.write('0'.repeat(id.length)+' blob 1\\nx\\n');return;}
@@ -61,6 +65,15 @@ cp.spawn = (program, args, options) => {
     const child=process.env.BATCH_MODE==='spawn-error'?spawn(process.env.BATCH_WORKER+'-missing',[],options)
       :process.env.BATCH_MODE?spawn(process.execPath,[process.env.BATCH_WORKER],options):spawn(program,args,options);
     appendFileSync(process.env.SCAN_TRACE,JSON.stringify({batchPid:child.pid})+'\\n');
+    if(process.env.BATCH_MODE==='packed'||process.env.BATCH_MODE==='packed-fragmented'){
+      const iterate=child.stdout[Symbol.asyncIterator].bind(child.stdout);
+      child.stdout[Symbol.asyncIterator]=async function*(){
+        const chunks=[];for await(const chunk of {[Symbol.asyncIterator]:iterate})chunks.push(chunk);
+        const bytes=Buffer.concat(chunks);
+        if(process.env.BATCH_MODE==='packed')yield bytes;
+        else for(let start=0;start<bytes.length;start+=1031)yield bytes.subarray(start,start+1031);
+      };
+    }
     return child;
   }
   return spawn(program,args,options);
@@ -230,6 +243,21 @@ test('정상 UTF-8과 잘못된 UTF-8 모두 기존 검사 입력 바이트를 �
   assert.deepEqual(result.trace.filter(entry => entry.scanner).map(entry => entry.scanner).sort(),
     contents.map(content => createHash('sha256').update(content.toString('utf8')).digest('hex')).sort());
 });
+
+for (const mode of ['packed', 'packed-fragmented']) {
+  test(`하나의 수신 버퍼에 여러 파일이 있거나 본문이 나뉘어도 검사 입력을 보존한다: ${mode}`, () => {
+    const f = fixture();
+    for (let index = 0; index < 5; index++) f.write(`packed-${index}.bin`, `distinct fixture ${index}`);
+    f.git('add', '--all');
+    const result = f.scan({ BATCH_MODE: mode, SCANNER_MODE: 'parallel' });
+    assert.equal(result.status, 0, result.stderr);
+    const contents = [Buffer.alloc(0), Buffer.from('한글😀\0\r\n'), Buffer.alloc(32000, 65),
+      Buffer.from([0xff, 0xfe, 0, 10, 65]), Buffer.from('last body')];
+    assert.deepEqual(result.trace.filter(entry => entry.scanner).map(entry => entry.scanner).sort(),
+      contents.map(content => createHash('sha256').update(content.toString('utf8')).digest('hex')).sort());
+    assert.equal(result.trace.filter(entry => entry.git === 'cat-file').length, 1);
+  });
+}
 
 test('분할된 배치 헤더와 UTF-8·NUL·개행이 포함된 내용을 파일 단위로 읽는다', () => {
   const f = fixture(); f.write('code.js', 'fixture'); f.git('add', 'code.js');
