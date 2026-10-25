@@ -133,6 +133,31 @@ const spawn=cp.spawn;cp.spawn=(file,args,...rest)=>{if(file==='git'&&args.includ
   assert.equal(readdirSync(root).includes('mixed-ignore-calls'), false);
 });
 
+for (const mode of ['ignored', 'mixed', 'unexpected']) {
+  test(`대량 미추적 이벤트의 ignore 분류와 응답 검증을 유지한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `ignore-batch-${mode}.mjs`);
+    git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs');
+    writeFileSync(join(f.cwd, '.gitignore'), 'ignored-*.mjs\n');
+    const names = Array.from({ length: 1024 }, (_, index) => `ignored-${index}.mjs`);
+    if (mode === 'mixed') names.push('untracked.mjs');
+    writeFileSync(inject, `import fs from 'node:fs';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(name==='batch.trigger'){for(const file of ${JSON.stringify(names)})listener('change',file);}else listener(event,name)});
+${mode === 'unexpected' ? `const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includes('check-ignore'))return spawn(process.execPath,['-e',"process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('not-requested.mjs'+String.fromCharCode(0)));"],options);return spawn(file,args,options)};` : ''}
+syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'batch.trigger'), 'emit untracked events');
+    if (mode === 'unexpected') {
+      await unavailable(f.check());
+      assert.equal(stateFor(f.cwd).state.failed, 'event-filter-failed');
+    } else {
+      assert.equal((await f.check()).changed, mode === 'mixed');
+      assert.equal(stateFor(f.cwd).state.failed, undefined);
+    }
+  });
+}
+
 test('7일 지난 종료 쌍·임시 파일만 정리하고 활성·불명확 기록은 보존한다', async () => {
   const closed = fixture(), active = fixture();
   await closed.prepare(); await closed.check(); await active.prepare();
@@ -380,7 +405,8 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>{const watcher=watch(path
     writeFileSync(join(f.cwd, 'noise.mjs'), 'later event');
     await delay(100);
     if (mode === 'native-error') {
-      assert.equal(stateFor(f.cwd).state.failed, 'watch-error');
+      const state = stateFor(f.cwd).state;
+      assert.equal(state.failed, 'watch-error', `OS error code: ${state.errorCode ?? 'none'}`);
       await unavailable(f.check());
     } else {
       assert.equal((await f.check()).changed, true);

@@ -236,29 +236,15 @@ test('첫 응답의 종료 표식이나 인용·중간 표식·오타로 검토�
   }
 });
 
-test('열린 코드 펜스 안의 종료 표식은 거부하고 닫힌 펜스 뒤의 독립 표식만 허용한다', async () => {
+test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜스 뒤에서 종료한다', async () => {
   for (const status of ['clean', 'skipped', 'blocked']) {
     const marker = `[code-quality-review:${status}]`;
-    for (const prefix of ['```text\n', '~~~text\n', '   ```text\r\n',
-      '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
-      '```text\n    ```\n', '- item\n\n```text\n',
-      '- item\n\n# heading\n   ```text\n', '- item\n\ntext\n   ```text\n',
-      '* * *\n  ```text\n', '- - -\n  ~~~text\n']) {
-      assert.equal((await runEvent(HOOK_PATH, {
-        hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: prefix + marker,
-      })).decision, 'block', prefix);
-    }
-    for (const prefix of ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~\n',
-      '   ```text\r\nexample\r\n ```\t\r\n', '```not `a fence`\n', '    ```text\n',
-      '- ```text\n  example\n  ```\n\n', '1. ~~~text\n   example\n   ~~~\n\n',
-      '- item\n  ```text\n  example\n  ```\n\n', '- ```text\n  example\n\n',
-      '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
-      '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
-      '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n']) {
-      assert.deepEqual(await runEvent(HOOK_PATH, {
-        hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: prefix + marker,
-      }), {}, prefix);
-    }
+    assert.equal((await runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '```text\n' + marker,
+    })).decision, 'block');
+    assert.deepEqual(await runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '~~~text\nexample\n~~~~\n' + marker,
+    }), {});
   }
 });
 

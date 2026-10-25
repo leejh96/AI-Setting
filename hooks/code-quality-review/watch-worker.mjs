@@ -69,7 +69,8 @@ function flush(root) {
         try { skip = root.git ? await ignored(root, names) : new Set(); }
         catch (error) { if (closing || state.changed || state.failed) return; throw error; }
         if (closing || state.changed || state.failed) return;
-        if ([...skip].some((name) => !names.includes(name))) throw Error('Invalid ignore output');
+        const requested = new Set(names);
+        if ([...skip].some((name) => !requested.has(name))) throw Error('Invalid ignore output');
         if (names.some((name) => !skip.has(name))) markEdited();
       }
       if (state.changed || state.failed) root.pending.clear();

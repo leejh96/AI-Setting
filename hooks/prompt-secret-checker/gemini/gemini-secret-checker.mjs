@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getPromptBlockReason } from '../secret-checker.mjs';
 
@@ -30,6 +30,38 @@ function printConfig() {
   }, null, 2)}\n`);
 }
 
+function latestUserInput(path) {
+  const descriptor = openSync(path, 'r');
+  try {
+    let position = fstatSync(descriptor).size;
+    let pending = [];
+    while (position > 0) {
+      const length = Math.min(position, 64 * 1024);
+      position -= length;
+      const chunk = Buffer.allocUnsafe(length);
+      if (readSync(descriptor, chunk, 0, length, position) !== length) throw new Error('Transcript changed');
+      let end = chunk.length;
+      for (let index = chunk.lastIndexOf(10); index >= 0; index = index === 0 ? -1 : chunk.lastIndexOf(10, index - 1)) {
+        const line = Buffer.concat([chunk.subarray(index + 1, end), ...pending.reverse()]).toString('utf8').trim();
+        pending = [];
+        end = index;
+        if (!line) continue;
+        const entry = JSON.parse(line);
+        if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') return entry.content;
+      }
+      pending.push(chunk.subarray(0, end));
+    }
+    const line = Buffer.concat(pending.reverse()).toString('utf8').trim();
+    if (line) {
+      const entry = JSON.parse(line);
+      if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') return entry.content;
+    }
+    return null;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 function runHook() {
   let event;
   try {
@@ -43,16 +75,8 @@ function runHook() {
     let warning = null;
     if (event.transcriptPath && existsSync(event.transcriptPath)) {
       try {
-        const transcriptLines = readFileSync(event.transcriptPath, 'utf8').trim().split('\n');
-        for (let i = transcriptLines.length - 1; i >= 0; i--) {
-          const line = transcriptLines[i].trim();
-          if (!line) continue;
-          const entry = JSON.parse(line);
-          if (entry.type === 'USER_INPUT' && typeof entry.content === 'string') {
-            warning = getPromptBlockReason(entry.content);
-            break;
-          }
-        }
+        const input = latestUserInput(event.transcriptPath);
+        if (input !== null) warning = getPromptBlockReason(input);
       } catch {
         // 대화 기록 파싱 오류 시 정상 진행
       }

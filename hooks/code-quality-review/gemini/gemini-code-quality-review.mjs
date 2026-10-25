@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createReviewRequest, watchFailureWarning, terminalWarning } from '../review-request.mjs';
 import { hasTerminalReviewStatus } from '../review-status.mjs';
@@ -31,13 +31,23 @@ function printConfig() {
   }, null, 2)}\n`);
 }
 
-function analyzeTurn(entries) {
-  const userIndex = entries.findLastIndex((entry) => entry?.type === 'USER_INPUT' && entry.source === 'USER_EXPLICIT');
-  if (userIndex === -1) throw new Error('Missing user turn');
+async function currentTurn(event) {
+  let userIndex = -1;
+  let index = 0;
   let stopHookActive = false;
   let hasModelResponse = false;
   let lastAssistantMessage = '';
-  for (const entry of entries.slice(userIndex + 1)) {
+  const consume = (line) => {
+    if (!line.trim()) return;
+    const entry = JSON.parse(line);
+    if (entry?.type === 'USER_INPUT' && entry.source === 'USER_EXPLICIT') {
+      userIndex = index;
+      stopHookActive = false;
+      hasModelResponse = false;
+      lastAssistantMessage = '';
+    }
+    index++;
+    if (userIndex === -1) return;
     if (entry?.source === 'SYSTEM' && entry.type === 'SYSTEM_MESSAGE'
         && typeof entry.content === 'string' && entry.content.includes('[code-quality-review:request]\n')) {
       stopHookActive = true;
@@ -47,20 +57,29 @@ function analyzeTurn(entries) {
       hasModelResponse = true;
       lastAssistantMessage = typeof entry.content === 'string' ? entry.content : '';
     }
+  };
+  let fragments = [];
+  const size = statSync(event.transcriptPath).size;
+  if (!size) throw new Error('Missing user turn');
+  for await (const chunk of createReadStream(event.transcriptPath, { encoding: 'utf8', end: size - 1 })) {
+    let start = 0;
+    let end;
+    while ((end = chunk.indexOf('\n', start)) !== -1) {
+      const line = chunk.slice(start, end);
+      consume(fragments.length ? fragments.join('') + line : line);
+      fragments = [];
+      start = end + 1;
+    }
+    if (start < chunk.length) fragments.push(chunk.slice(start));
   }
-
-  return { stopHookActive, lastAssistantMessage, hasModelResponse, userIndex };
-}
-
-function currentTurn(event) {
-  const entries = readFileSync(event.transcriptPath, 'utf8').split(/\r?\n/).filter((line) => line.trim()).map(JSON.parse);
-  const turn = analyzeTurn(entries);
-  return { ...turn, key: String(turn.userIndex) };
+  consume(fragments.join(''));
+  if (userIndex === -1) throw new Error('Missing user turn');
+  return { stopHookActive, lastAssistantMessage, hasModelResponse, key: String(userIndex) };
 }
 
 async function prepareHook() {
   const event = JSON.parse(readFileSync(0, 'utf8'));
-  const turn = currentTurn(event);
+  const turn = await currentTurn(event);
   await prepareChanges('gemini', event.conversationId, turn.key, event.workspacePaths, !turn.stopHookActive && !turn.hasModelResponse);
   return { injectSteps: [] };
 }
@@ -74,7 +93,7 @@ async function runHook() {
   if (!event.fullyIdle || !['model_stop', 'NO_TOOL_CALL'].includes(event.terminationReason)) {
     return {};
   }
-  const { stopHookActive, lastAssistantMessage, key } = currentTurn(event);
+  const { stopHookActive, lastAssistantMessage, key } = await currentTurn(event);
   let changes;
   try { changes = await checkChanges('gemini', event.conversationId, key, event.workspacePaths); }
   catch (error) {

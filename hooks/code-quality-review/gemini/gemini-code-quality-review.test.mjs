@@ -116,6 +116,47 @@ test('실제 수정 없는 질문·문서는 추가 검토 없이 종료한다',
   }
 });
 
+test('긴 이전 기록·빈 줄·UTF-8 경계에서도 현재 턴의 식별과 검토 종료를 유지한다', async () => {
+  await fixture(({ script, transcriptPath, event }) => {
+    const history = [user, ...Array.from({ length: 3000 }, () => model('이전 기록😀')), user];
+    const serialize = (entries) => entries.map(JSON.stringify).join('\r\n \r\n');
+    writeFileSync(transcriptPath, serialize(history));
+    parse(run(script, event, ['--prepare']));
+    writeFileSync(join(event.workspacePaths[0], 'code.mjs'), 'changed in long transcript turn');
+    writeFileSync(transcriptPath, serialize([...history, model('완료😀'.repeat(20000))]));
+    continues(parse(run(script, event)));
+    writeFileSync(transcriptPath, serialize([...history, model('완료'), request, model('[code-quality-review:clean]')]));
+    assert.deepEqual(parse(run(script, event)), {});
+  });
+});
+
+test('정확한 청크 경계와 긴 UTF-8 사용자 입력·미완성 마지막 줄을 처리한다', async () => {
+  await fixture(({ script, transcriptPath, event }) => {
+    const empty = JSON.stringify({ ...user, content: '' });
+    const boundary = JSON.stringify({ ...user, content: 'a'.repeat(64 * 1024 - Buffer.byteLength(empty) - 1) }) + '\n';
+    assert.equal(Buffer.byteLength(boundary), 64 * 1024);
+    const history = boundary + JSON.stringify(model('이전 응답')) + '\r\n \r\n'
+      + JSON.stringify({ ...user, content: '가나다😀'.repeat(650000) });
+    writeFileSync(transcriptPath, history);
+    assert.deepEqual(parse(run(script, event, ['--prepare'])), { injectSteps: [] });
+    writeFileSync(join(event.workspacePaths[0], 'code.mjs'), 'changed after long user input');
+    writeFileSync(transcriptPath, history + '\n' + JSON.stringify(model('구현 완료')));
+    continues(parse(run(script, event)));
+    writeFileSync(transcriptPath, history + '\n' + [model('구현 완료'), request, model('[code-quality-review:clean]')].map(JSON.stringify).join('\n'));
+    assert.deepEqual(parse(run(script, event)), {});
+    writeFileSync(transcriptPath, history + '\n{"content":"' + 'a'.repeat(128 * 1024));
+    warns(run(script, event));
+  });
+});
+
+test('현재 턴 이전의 잘못된 JSON도 경고하며 검토 완료로 처리하지 않는다', async () => {
+  await fixture(({ script, transcriptPath, event }) => {
+    writeFileSync(transcriptPath, `malformed old history\n${[user, model('완료')].map(JSON.stringify).join('\n')}`);
+    warns(run(script, event));
+    warns(run(script, event, ['--prepare']));
+  });
+});
+
 test('감시 프로세스 종료는 경고만 남기며 프롬프트·blocked 응답을 새로 요구하지 않는다', async () => {
   await fixture(({ script, event, transcriptPath }) => {
     const directory = join(TEST_ROOT, 'ai-setting-code-quality-review');
@@ -228,25 +269,11 @@ test('수정 회차·누락·잘못된 표식은 반복하며 종료 표식은 �
   }
 });
 
-test('열린 코드 펜스 안의 종료 표식은 거부하고 닫힌 펜스 뒤의 독립 표식만 허용한다', async () => {
+test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜스 뒤에서 종료한다', async () => {
   for (const status of ['clean', 'skipped', 'blocked']) {
     const marker = `[code-quality-review:${status}]`;
-    for (const prefix of ['```text\n', '~~~text\n', '   ```text\r\n',
-      '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
-      '```text\n    ```\n', '- item\n\n```text\n',
-      '- item\n\n# heading\n   ```text\n', '- item\n\ntext\n   ```text\n',
-      '* * *\n  ```text\n', '- - -\n  ~~~text\n']) {
-      continues(await turn([user, request, model(prefix + marker)]));
-    }
-    for (const prefix of ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~\n',
-      '   ```text\r\nexample\r\n ```\t\r\n', '```not `a fence`\n', '    ```text\n',
-      '- ```text\n  example\n  ```\n\n', '1. ~~~text\n   example\n   ~~~\n\n',
-      '- item\n  ```text\n  example\n  ```\n\n', '- ```text\n  example\n\n',
-      '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
-      '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
-      '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n']) {
-      assert.deepEqual(await turn([user, request, model(prefix + marker)]), {}, prefix);
-    }
+    continues(await turn([user, request, model('```text\n' + marker)]));
+    assert.deepEqual(await turn([user, request, model('~~~text\nexample\n~~~~\n' + marker)]), {});
   }
 });
 

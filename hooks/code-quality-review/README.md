@@ -44,6 +44,8 @@ Git 프로젝트는 저장소 루트, Git이 없으면 작업 폴더를 재귀 �
 
 Antigravity는 `fullyIdle: true`이고 정상 종료 사유인 `model_stop` 또는 기존 버전의 `NO_TOOL_CALL`일 때만 검토합니다. 백그라운드 작업이 남았거나 오류·취소·실행 제한으로 종료하면 강제로 재개하지 않습니다. 대화 기록에서 현재 `USER_INPUT/USER_EXPLICIT` 이후 이 훅의 요청 표식을 담은 `SYSTEM_MESSAGE/SYSTEM`과 마지막 `PLANNER_RESPONSE/MODEL`을 확인합니다. 이 기록 형식은 공식 입력 필드처럼 안정성이 보장된 규약이 아니므로 앱 버전이 바뀌면 실제 기록과 반복 종료를 다시 검증해야 합니다.
 
+Antigravity 대화 기록은 작은 청크로 순차 읽고 현재 턴 판별에 필요한 상태만 유지합니다. 긴 줄은 조각으로 보관하다 줄이 완성되면 합쳐 해석하며, 이미 읽은 부분을 청크마다 다시 검색하지 않습니다. 이전 기록의 JSON 검증과 빈 줄을 제외한 사용자 입력 위치에 따른 턴 식별은 유지하므로, 이전 기록이 손상된 경우에도 검토 완료로 처리하지 않습니다.
+
 ## 검토 범위와 한계
 
 상세 기준은 [REVIEW.md](REVIEW.md) 한곳에서 관리합니다. 이번 요청의 변경과 필요한 관련 코드만 검토하며 기존 사용자 작업을 보존합니다. 요구사항 변경으로 남은 코드·테스트·설정도 승인 범위와 참조·계약을 확인한 뒤 정리합니다. `AGENTS.md`의 원래 승인·업무 규칙을 유지하며, 훅이 새 권한을 부여하지 않습니다.
@@ -65,6 +67,7 @@ hooks/code-quality-review/
 ├── REVIEW.md                            # 공통 검토 지침
 ├── review-request.mjs                   # 공통 적용 판단 안내 생성
 ├── review-status.mjs                    # 공통 종료 표식·코드 펜스 판별
+├── review-status.test.mjs               # 종료 표식의 전체 코드 펜스 조합 검사
 ├── review-changes.mjs                   # 감시 시작·로컬 통신·요청별 상태
 ├── watch-worker.mjs                     # 파일 이벤트 감시·분류·프로세스 수명
 ├── review-changes.test.mjs              # 실제 파일 이벤트·실패·프로세스 정리 검사
@@ -85,8 +88,10 @@ hooks/code-quality-review/
 코드를 변경한 경우 다음 자동 테스트를 실행합니다. 운영체제별 명령 실행과 실제 대화 확인은 각 안내를 따릅니다.
 
 ```sh
-node --test hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
+node --test hooks/code-quality-review/review-status.test.mjs hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
 ```
+
+종료 표식과 코드 펜스의 전체 조합은 공통 판별 함수를 직접 검사합니다. Codex·Antigravity의 실제 훅 테스트도 열린 펜스에서 재검토하고 닫힌 펜스 뒤에서 종료하는지 세 종료 상태별로 확인합니다.
 
 해제할 때는 Codex의 해당 UserPromptSubmit·Stop 핸들러 또는 Antigravity의 `ai-setting-code-quality-review` 키만 비활성화하거나 제거합니다. 시크릿 검사 등 다른 훅과 기존 기능 설정을 유지합니다. 이미 비활성화한 설정을 갱신할 때는 해당 상태도 보존합니다.
 

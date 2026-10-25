@@ -41,7 +41,7 @@ export function hasTerminalReviewStatus(message) {
   for (const rawLine of text.split(/\r?\n/)) {
     // Markdown indentation uses four-column tab stops.
     let column = 0;
-    const line = rawLine.replace(/[^\t]|\t/g, char => {
+    const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/[^\t]|\t/g, char => {
       const width = char === '\t' ? 4 - column % 4 : 1;
       column += width;
       return char === '\t' ? ' '.repeat(width) : char;
