@@ -29,6 +29,7 @@ const batchWorker = join(root, 'batch-worker.mjs');
 writeFileSync(batchWorker, `let input = '';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);
 process.stdin.on('end',()=>{
   const ids=input.trim().split('\\n'),id=ids[0],mode=process.env.BATCH_MODE;
+  if(mode?.startsWith('header-')){const size=mode.includes('over-limit')?257:256,prefix=id+' blob ';process.stdout.write(prefix+'9'.repeat(size-prefix.length)+'\\n');return;}
   if(mode==='packed'||mode==='packed-fragmented'){
     const bodies=[Buffer.alloc(0),Buffer.from('한글😀\\0\\r\\n'),Buffer.alloc(32000,65),Buffer.from([0xff,0xfe,0,10,65]),Buffer.from('last body')];
     process.stdout.write(Buffer.concat(ids.map((value,index)=>Buffer.concat([Buffer.from(value+' blob '+bodies[index].length+'\\n'),bodies[index],Buffer.from('\\n')]))));return;
@@ -65,13 +66,14 @@ cp.spawn = (program, args, options) => {
     const child=process.env.BATCH_MODE==='spawn-error'?spawn(process.env.BATCH_WORKER+'-missing',[],options)
       :process.env.BATCH_MODE?spawn(process.execPath,[process.env.BATCH_WORKER],options):spawn(program,args,options);
     appendFileSync(process.env.SCAN_TRACE,JSON.stringify({batchPid:child.pid})+'\\n');
-    if(process.env.BATCH_MODE==='packed'||process.env.BATCH_MODE==='packed-fragmented'){
+    const batchMode=process.env.BATCH_MODE;
+    if(batchMode==='packed'||batchMode==='packed-fragmented'||batchMode?.startsWith('header-')){
       const iterate=child.stdout[Symbol.asyncIterator].bind(child.stdout);
       child.stdout[Symbol.asyncIterator]=async function*(){
         const chunks=[];for await(const chunk of {[Symbol.asyncIterator]:iterate})chunks.push(chunk);
         const bytes=Buffer.concat(chunks);
-        if(process.env.BATCH_MODE==='packed')yield bytes;
-        else for(let start=0;start<bytes.length;start+=1031)yield bytes.subarray(start,start+1031);
+        if(!batchMode.endsWith('fragmented'))yield bytes;
+        else {const size=batchMode.startsWith('header-')?7:1031;for(let start=0;start<bytes.length;start+=size)yield bytes.subarray(start,start+size);}
       };
     }
     return child;
@@ -256,6 +258,18 @@ for (const mode of ['packed', 'packed-fragmented']) {
     assert.deepEqual(result.trace.filter(entry => entry.scanner).map(entry => entry.scanner).sort(),
       contents.map(content => createHash('sha256').update(content.toString('utf8')).digest('hex')).sort());
     assert.equal(result.trace.filter(entry => entry.git === 'cat-file').length, 1);
+  });
+}
+
+for (const mode of ['header-boundary', 'header-boundary-fragmented', 'header-over-limit', 'header-over-limit-fragmented']) {
+  test(`헤더 직접 해석도 256바이트 제한과 파일 크기 검증을 유지한다: ${mode}`, () => {
+    const f = fixture(); f.write('code.js', 'fixture'); f.git('add', 'code.js');
+    const result = f.scan({ BATCH_MODE: mode });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, mode.includes('over-limit') ? /파일 내용을 읽지 못해/ : /10MiB/);
+    assert.equal(result.trace.filter(entry => entry.scannerStart).length, 0);
+    const pid = result.trace.find(entry => entry.batchPid)?.batchPid;
+    assert.ok(pid); assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   });
 }
 

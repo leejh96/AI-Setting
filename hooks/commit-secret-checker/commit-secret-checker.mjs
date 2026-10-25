@@ -54,7 +54,7 @@ async function* readBlobs(objectIds, deadline, signal) {
       if (length > 256) throw readFailure();
       parts.push(part);
       offset = newline === -1 ? end : end + 1;
-      if (newline !== -1) return Buffer.concat(parts).toString('utf8');
+      if (newline !== -1) return (parts.length === 1 ? part : Buffer.concat(parts)).toString('utf8');
     }
   }
   async function readBytes(size) {
