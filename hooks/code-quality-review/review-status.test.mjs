@@ -31,6 +31,21 @@ test('인용문의 이어지는 문단은 종료 표식으로 인정하지 않�
   }
 });
 
+test('인용문 밑줄 제목 뒤의 종료 표식만 허용하고 깊이·목록·들여쓰기 경계를 보존한다', () => {
+  const accepted = ['> heading\n> ===\n', '> heading\n> -\n', '> heading\n> --\n',
+    '> heading\n>   ===\t\n', '> > heading\n> > ===\n', '> - heading\n>   ===\n',
+    '> 1000. heading\n>       ===\n', '> first\n> second\n> ===\n',
+    '> 1000. first\n> - second\n>   ===\n'];
+  const rejected = ['> ===\n', '> heading\n===\n', '> > heading\n> ===\n',
+    '> - heading\n> ===\n', '> heading\n>     ===\n', '> heading\n> = =\n', '> - ===\n',
+    '> > heading\n> 2. item\n> ===\n'];
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const prefix of accepted) assert.equal(hasTerminalReviewStatus(prefix + marker), true, prefix);
+    for (const prefix of rejected) assert.equal(hasTerminalReviewStatus(prefix + marker), false, prefix);
+  }
+});
+
 for (const status of ['clean', 'skipped', 'blocked']) {
   const marker = `[code-quality-review:${status}]`;
   test(`열린 코드 펜스의 ${status} 표식은 종료로 인정하지 않는다`, () => {

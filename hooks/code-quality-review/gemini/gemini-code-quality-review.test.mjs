@@ -335,11 +335,12 @@ test('수정 회차·누락·잘못된 표식은 반복하며 종료 표식은 �
   }
 });
 
-test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜스 뒤에서 종료한다', async () => {
+test('실제 훅은 코드 펜스와 인용문 제목의 종료 경계를 구분한다', async () => {
   for (const status of ['clean', 'skipped', 'blocked']) {
     const marker = `[code-quality-review:${status}]`;
     continues(await turn([user, request, model('```text\r\n\tcode\tvalue\n' + marker)]));
     assert.deepEqual(await turn([user, request, model('~~~text\n\tcode\tvalue\r\n~~~~\t\r\n' + marker)]), {});
+    assert.deepEqual(await turn([user, request, model('> 검토 결과\n> ===\n' + marker)]), {});
   }
 });
 

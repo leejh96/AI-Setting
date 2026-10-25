@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { saveWatch, watchErrorCode, readGitMetadata, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
+import { saveWatch, watchErrorCode, readGitMetadata, ownsWatch, verifyAliases, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
 
 const path = process.argv[2];
 const state = JSON.parse(readFileSync(path, 'utf8'));
@@ -134,6 +134,8 @@ async function checkpoint() {
     await Promise.all(roots.map(flush));
   } while (seen !== generation || roots.some((root) => root.pending.size || root.flushing));
   if (state.failed) throw Error('Watcher failed');
+  verifyAliases(state.aliases);
+  if (!ownsWatch(path, state)) throw Error('Watcher superseded');
 }
 function finish(action) {
   if (closing) return;
@@ -164,6 +166,7 @@ const server = createServer({ allowHalfOpen: true }, (socket) => {
       let request;
       try { request = JSON.parse(input); if (request.token !== state.token) { socket.end('{}\n'); return; }
         if (request.command === 'finish') { finish(request.action); socket.end(`${JSON.stringify(view())}\n`); return; }
+        if (!ownsWatch(path, state)) { finish('superseded'); socket.end(`${JSON.stringify(view())}\n`); return; }
         if (request.command === 'check') {
           if (state.phase === 'closed') { socket.end(`${JSON.stringify(view())}\n`); return; }
           if (state.phase !== 'ready') throw Error('Not ready');
@@ -189,6 +192,8 @@ process.on('unhandledRejection', (error) => fail('worker-rejection', error));
 server.on('error', (error) => { fail('watch-server-failed', error); process.exitCode = 1; });
 server.listen(state.endpoint, async () => {
   try {
+    if (!ownsWatch(path, state)) { finish('superseded'); return; }
+    verifyAliases(state.aliases);
     state.pid = process.pid;
     for (const info of state.roots) {
       const stat = lstatSync(info.path);

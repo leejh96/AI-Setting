@@ -236,7 +236,7 @@ test('첫 응답의 종료 표식이나 인용·중간 표식·오타로 검토�
   }
 });
 
-test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜스 뒤에서 종료한다', async () => {
+test('실제 훅은 코드 펜스와 인용문 제목의 종료 경계를 구분한다', async () => {
   for (const status of ['clean', 'skipped', 'blocked']) {
     const marker = `[code-quality-review:${status}]`;
     assert.equal((await runEvent(HOOK_PATH, {
@@ -244,6 +244,9 @@ test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜
     })).decision, 'block');
     assert.deepEqual(await runEvent(HOOK_PATH, {
       hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '~~~text\n\tcode\tvalue\r\n~~~~\t\r\n' + marker,
+    }), {});
+    assert.deepEqual(await runEvent(HOOK_PATH, {
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '> 검토 결과\n> ===\n' + marker,
     }), {});
   }
 });

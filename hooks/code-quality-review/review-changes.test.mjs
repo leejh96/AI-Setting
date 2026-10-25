@@ -50,65 +50,181 @@ function expireCleanup() {
   writeFileSync(join(root, 'ai-setting-code-quality-review', 'cleanup-completed.json'), JSON.stringify({ version: 1, completedAt: 0 }));
 }
 
-for (const ownerRead of [1, 2]) {
-  test(`같은 턴의 준비가 owner 조회 ${ownerRead} 전에 완료되어도 기존 감시를 재사용한다`, async () => {
-    const f = fixture(), originalExists = fs.existsSync;
-    let reads = 0, token;
-    fs.existsSync = (path) => {
-      if (/owner-[a-f0-9]{64}\.json$/.test(String(path)) && ++reads === ownerRead) {
-        const script = `import { prepareChanges } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
-await prepareChanges('test', ${JSON.stringify(f.cwd)}, 'turn', [${JSON.stringify(f.cwd)}]);`;
-        const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-          encoding: 'utf8', windowsHide: true, timeout: 15000,
-        });
-        assert.equal(result.status, 0, result.stderr);
-        token = stateFor(f.cwd).state.token;
-      }
-      return originalExists(path);
-    };
-    syncBuiltinESMExports();
-    try { await f.prepare(); }
-    finally { fs.existsSync = originalExists; syncBuiltinESMExports(); }
-    assert.ok(token);
-    assert.equal(stateFor(f.cwd).state.token, token);
-    assert.equal(stateFor(f.cwd).state.failed, undefined);
-    writeFileSync(join(f.cwd, 'code.mjs'), 'edited after overlapping preparation');
-    assert.equal((await f.check()).changed, true);
-  });
-}
+test('같은 턴의 동시 준비는 감시와 검토 횟수를 재사용한다', async () => {
+  const f = fixture();
+  await Promise.all([f.prepare(), f.prepare()]);
+  const token = stateFor(f.cwd).state.token;
+  writeFileSync(join(f.cwd, 'code.mjs'), 'edited after overlapping preparation');
+  const changes = await f.check(); assert.equal(changes.changed, true);
+  await changes.record('review-requested');
+  await Promise.all([f.prepare(), f.prepare()]);
+  assert.equal(stateFor(f.cwd).state.token, token);
+  assert.equal(stateFor(f.cwd).state.reviewRequests, 1);
+});
+
 async function unavailable(promise) {
   await promise.then((result) => { assert.equal(result.failed, true); assert.equal('changed' in result, false); },
     (error) => assert.ok(error instanceof ChangeWatchError));
 }
 
 for (const action of ['unchanged', 'review-finished', 'review-limit']) {
-test(`동시 준비의 감시가 먼저 종료되어도 종료 기록을 실패로 덮어쓰지 않는다: ${action}`, async () => {
-  const f = fixture(), originalWrite = fs.writeFileSync;
-  let token;
-  fs.writeFileSync = (path, content, options) => {
-    if (options?.flag === 'wx' && /[a-f0-9]{64}\.json$/.test(String(path))) {
-      const script = `import { prepareChanges, checkChanges, MAX_REVIEW_REQUESTS } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+  test(`동시 준비의 감시가 먼저 종료되어도 종료 기록을 실패로 덮어쓰지 않는다: ${action}`, async () => {
+    const f = fixture(); await f.prepare();
+    const { path, state } = stateFor(f.cwd), originalRead = fs.readFileSync;
+    let intercepted = false;
+    fs.readFileSync = (target, ...args) => {
+      const content = originalRead(target, ...args);
+      if (target === path && !intercepted) {
+        intercepted = true;
+        const script = `import { checkChanges, MAX_REVIEW_REQUESTS } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
 import { writeFileSync } from 'node:fs';import { join } from 'node:path';
-const cwd=${JSON.stringify(f.cwd)},action=${JSON.stringify(action)};await prepareChanges('test',cwd,'turn',[cwd]);
-if(action!=='unchanged')writeFileSync(join(cwd,'code.mjs'),'edited by the first preparation');
+const cwd=${JSON.stringify(f.cwd)},action=${JSON.stringify(action)};
+if(action!=='unchanged')writeFileSync(join(cwd,'code.mjs'),'edited before concurrent completion');
 const changes=await checkChanges('test',cwd,'turn',[cwd]);
 if(action==='review-finished'){await changes.record('review-requested');await changes.record('review-finished');}
 if(action==='review-limit')for(let index=0;index<=MAX_REVIEW_REQUESTS;index++)await changes.record('review-requested');`;
-      const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+          encoding: 'utf8', windowsHide: true, timeout: 15000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+      }
+      return content;
+    };
+    syncBuiltinESMExports();
+    try { await f.prepare(); }
+    finally { fs.readFileSync = originalRead; syncBuiltinESMExports(); }
+    assert.ok(intercepted);
+    assert.equal(stateFor(f.cwd).state.token, state.token);
+    assert.deepEqual(await f.check(), { terminal: action, failed: false, ...(action === 'unchanged' ? { changed: false } : {}) });
+  });
+}
+
+test('이전 턴의 늦은 Git 조회 완료가 새 턴 감시를 종료하지 않는다', async () => {
+  const f = fixture(), originalExec = childProcess.execFile;
+  let resume;
+  childProcess.execFile = (file, args, options, callback) => originalExec(file, args, options, (error, stdout, stderr) => {
+    if (args.includes('rev-parse') && !resume) resume = () => callback(error, stdout, stderr);
+    else callback(error, stdout, stderr);
+  });
+  syncBuiltinESMExports();
+  const old = f.prepare('old').then(() => null, error => error);
+  try {
+    for (let i = 0; i < 100 && !resume; i++) await delay(10);
+    assert.ok(resume);
+    await f.prepare('new');
+    const token = stateFor(f.cwd).state.token;
+    resume(); assert.ok(await old instanceof ChangeWatchError);
+    writeFileSync(join(f.cwd, 'code.mjs'), 'edited by the new turn');
+    const changes = await f.check('new'); assert.equal(changes.changed, true);
+    await changes.record('review-requested');
+    await f.prepare('old');
+    assert.equal(stateFor(f.cwd).state.token, token);
+    assert.equal(stateFor(f.cwd).state.reviewRequests, 1);
+  } finally {
+    if (resume) resume();
+    childProcess.execFile = originalExec; syncBuiltinESMExports();
+    await old;
+  }
+});
+
+test('서로 다른 프로세스의 같은 턴 준비도 하나의 감시만 만든다', async () => {
+  const f = fixture();
+  const script = `import { prepareChanges } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+await prepareChanges('test',${JSON.stringify(f.cwd)},'turn',[${JSON.stringify(f.cwd)}]);`;
+  const run = () => new Promise((resolveChild, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { windowsHide: true, stdio: 'ignore' });
+    child.on('error', reject); child.on('close', code => code === 0 ? resolveChild() : reject(Error('Concurrent preparation failed')));
+  });
+  await Promise.all([run(), run()]);
+  const directory = join(root, 'ai-setting-code-quality-review');
+  const states = readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+    .map(name => JSON.parse(readFileSync(join(directory, name), 'utf8')))
+    .filter(state => state.roots?.some(info => info.path === f.cwd));
+  assert.equal(states.length, 1);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'edited after concurrent processes');
+  assert.equal((await f.check()).changed, true);
+});
+
+test('Windows 실행기 직전 새 턴이 준비되어도 늦은 워커가 소유권을 되찾지 않는다', { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture(), originalSpawn = childProcess.spawnSync;
+  let newer, intercepted = false;
+  childProcess.spawnSync = (file, args, options) => {
+    if (file === 'powershell.exe' && !intercepted) {
+      intercepted = true;
+      const script = `import { prepareChanges } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+await prepareChanges('test',${JSON.stringify(f.cwd)},'new',[${JSON.stringify(f.cwd)}]);`;
+      const result = originalSpawn(process.execPath, ['--input-type=module', '-e', script], {
         encoding: 'utf8', windowsHide: true, timeout: 15000,
       });
       assert.equal(result.status, 0, result.stderr);
-      token = stateFor(f.cwd).state.token;
+      const first = stateFor(f.cwd), directory = join(root, 'ai-setting-code-quality-review');
+      const owner = JSON.parse(readFileSync(join(directory, 'owner-' + first.state.owner + '.json'), 'utf8'));
+      newer = { path: join(directory, owner.file), token: owner.watch.token };
     }
-    return originalWrite(path, content, options);
+    return originalSpawn(file, args, options);
   };
   syncBuiltinESMExports();
-  try { await f.prepare(); }
-  finally { fs.writeFileSync = originalWrite; syncBuiltinESMExports(); }
-  assert.ok(token);
-  assert.equal(stateFor(f.cwd).state.token, token);
-  assert.deepEqual(await f.check(), { terminal: action, failed: false, ...(action === 'unchanged' ? { changed: false } : {}) });
+  try { await assert.rejects(f.prepare('old'), ChangeWatchError); }
+  finally { childProcess.spawnSync = originalSpawn; syncBuiltinESMExports(); }
+  assert.ok(intercepted);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'edited after the late launch');
+  assert.equal((await f.check('new')).changed, true);
+  const current = JSON.parse(readFileSync(newer.path, 'utf8'));
+  assert.equal(current.token, newer.token); assert.equal(current.phase, 'ready');
+  assert.equal(current.failed, undefined);
 });
+
+for (const holder of ['empty', 'dead', 'live']) {
+  test(`소유권 등록 잠금 복구는 살아 있는 소유자의 잠금을 빼앗지 않는다: ${holder}`, async () => {
+    const f = fixture(); await f.prepare();
+    const { state } = stateFor(f.cwd), directory = join(root, 'ai-setting-code-quality-review');
+    const lock = join(directory, 'owner-' + state.owner + '.lock'); mkdirSync(lock);
+    let marker;
+    if (holder === 'dead') {
+      const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { windowsHide: true, stdio: 'ignore' });
+      await new Promise((resolveSpawn, reject) => { child.once('spawn', resolveSpawn); child.once('error', reject); });
+      marker = join(lock, child.pid + '-' + randomUUID() + '.lock'); writeFileSync(marker, '');
+      const closed = new Promise(resolveClose => child.once('close', resolveClose));
+      child.kill(); await closed;
+    } else if (holder === 'live') {
+      marker = join(lock, process.pid + '-' + randomUUID() + '.lock'); writeFileSync(marker, '');
+    }
+    try {
+      if (holder === 'live') {
+        await assert.rejects(f.prepare('new'), ChangeWatchError);
+        assert.ok(existsSync(marker));
+        writeFileSync(join(f.cwd, 'code.mjs'), 'old owner remains active');
+        assert.equal((await f.check()).changed, true);
+      } else {
+        await f.prepare('new'); assert.equal(existsSync(lock), false);
+        writeFileSync(join(f.cwd, 'code.mjs'), 'edit after lock recovery');
+        assert.equal((await f.check('new')).changed, true);
+      }
+    } finally {
+      if (holder === 'live') { fs.unlinkSync(marker); fs.rmdirSync(lock); }
+    }
+  });
+}
+
+for (const nested of [false, true]) {
+  test(`작업 폴더 junction 대상 교체를 변경 없음으로 보고하지 않는다: ancestor=${nested}`, async () => {
+    const first = fixture(), second = fixture(), alias = join(root, 'alias-' + randomUUID());
+    for (const f of [first, second]) { git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs'); }
+    if (nested) for (const f of [first, second]) mkdirSync(join(f.cwd, 'nested'));
+    symlinkSync(first.cwd, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const workspace = nested ? join(alias, 'nested') : alias;
+    await prepareChanges('test', workspace, 'turn', [workspace]);
+    if (!nested) {
+      writeFileSync(join(alias, 'code.mjs'), 'edit through unchanged alias');
+      assert.equal((await checkChanges('test', workspace, 'turn', [workspace])).changed, true);
+    }
+    fs.unlinkSync(alias);
+    symlinkSync(second.cwd, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    writeFileSync(join(alias, 'code.mjs'), 'edit through replaced alias');
+    await unavailable(checkChanges('test', workspace, 'turn', [workspace]));
+    assert.ok(existsSync(join(first.cwd, 'code.mjs')));
+    assert.ok(existsSync(join(second.cwd, 'code.mjs')));
+  });
 }
 
 function trackedLookup(mode, firstPath) {
@@ -232,7 +348,7 @@ const spawn=cp.spawn;cp.spawn=(file,args,options)=>{if(file==='git'&&args.includ
   } finally { writeFileSync(release, 'release'); }
 });
 
-for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO', 'unknown-error', 'timeout', 'stdout-limit', 'stderr-limit', 'combined-limit']) {
+for (const mode of ['mixed', 'missing', 'warning-prefix', 'mount-boundary', 'combined-safe', 'invalid-bytes', 'nonzero', 'config-error', 'signal', 'EIO', 'unknown-error', 'timeout', 'stdout-limit', 'stderr-limit', 'combined-limit']) {
   test(`Git 루트 조회의 병렬 상한·범위·실패 분류·프로세스 정리를 유지한다: ${mode}`, async () => {
     const first = fixture(), second = fixture(), third = fixture();
     let paths = [first.cwd, second.cwd, third.cwd];
@@ -250,19 +366,25 @@ for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO',
       assert.equal(options.killSignal, 'SIGKILL'); assert.equal(options.windowsHide, true);
       assert.equal(options.encoding, 'buffer');
       assert.equal(options.env.GIT_OPTIONAL_LOCKS, '0');
+      assert.equal(options.env.LC_ALL, 'C');
       const index = events.filter(event => event.started).length;
-      let code = `setTimeout(()=>{process.exitCode=128},${index === 1 ? 250 : 0})`;
+      const notRepository = 'fatal: not a git repository (or any of the parent directories): .git\n';
+      let code = `setTimeout(()=>{process.stderr.write(${JSON.stringify(notRepository)});process.exitCode=128},${index === 1 ? 250 : 0})`;
+      if (mode === 'warning-prefix') code = `process.stderr.write('warning: harmless warning\\n'+${JSON.stringify(notRepository)});process.exitCode=128`;
+      if (mode === 'mount-boundary') code = `process.stderr.write('fatal: not a git repository (or any parent up to mount point /)\\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\\n');process.exitCode=128`;
       if (mode === 'mixed') code = `setTimeout(()=>{const r=require('node:child_process').spawnSync('git',${JSON.stringify(args)},{encoding:'utf8',windowsHide:true,env:process.env});process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');process.exitCode=r.status??1},${index % 2 ? 0 : 100})`;
+      if (index === 0 && ['nonzero', 'config-error'].includes(mode)) code = `process.stderr.write('fatal: PRIVATE_LOOKUP_FAILURE');process.exitCode=${mode === 'nonzero' ? 1 : 128}`;
       if (index === 0 && mode === 'timeout') code = 'setInterval(()=>{},1000)';
       if (index === 0 && mode.endsWith('-limit')) code = `process.${mode === 'stdout-limit' ? 'stdout' : 'stderr'}.write(Buffer.alloc(1024*1024+1,65));setInterval(()=>{},1000)`;
       if (index === 0 && ['combined-safe', 'combined-limit', 'invalid-bytes'].includes(mode)) {
         const size = (mode === 'combined-safe' ? 500 : mode === 'invalid-bytes' ? 400 : 600) * 1024;
-        code = `process.stdout.write(Buffer.alloc(${size},${mode === 'invalid-bytes' ? 255 : 65}));process.stderr.write(Buffer.alloc(${size},66));${mode === 'combined-limit' ? 'setInterval(()=>{},1000)' : 'process.exitCode=128'}`;
+        code = `process.stdout.write(Buffer.alloc(${size},${mode === 'invalid-bytes' ? 255 : 65}));process.stderr.write(${JSON.stringify(notRepository)});process.stderr.write(Buffer.alloc(${size},66));${mode === 'combined-limit' ? 'setInterval(()=>{},1000)' : 'process.exitCode=128'}`;
       }
       const child = original(mode === 'missing' ? join(root, 'missing-git') : process.execPath,
         mode === 'missing' ? [] : ['-e', code], options, (error, stdout, stderr) => {
           events.push({ closed: true, pid: child.pid });
           if (index === 0 && ['EIO', 'unknown-error'].includes(mode)) error = Object.assign(Error('PRIVATE_LOOKUP_FAILURE'), mode === 'EIO' ? { code: 'EIO' } : {});
+          if (index === 0 && mode === 'signal') error = Object.assign(Error('PRIVATE_LOOKUP_FAILURE'), { code: null, signal: 'SIGTERM' });
           callback(error, stdout, stderr);
         });
       events.push({ started: true, pid: child.pid });
@@ -271,7 +393,7 @@ for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO',
     };
     syncBuiltinESMExports();
     try {
-      const failed = !['mixed', 'missing', 'combined-safe', 'invalid-bytes'].includes(mode);
+      const failed = !['mixed', 'missing', 'warning-prefix', 'mount-boundary', 'combined-safe', 'invalid-bytes'].includes(mode);
       if (failed) {
         await assert.rejects(prepareChanges('test', first.cwd, 'parallel-root', paths), ChangeWatchError);
         const name = readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name) && !known.has(name));
@@ -302,6 +424,24 @@ for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO',
     }
   });
 }
+
+test('실제 Git 설정 손상은 비저장소로 오판하지 않고 감시 준비 실패로 남긴다', async () => {
+  const f = fixture(), nested = join(f.cwd, 'nested');
+  git(f.cwd, 'init', '--quiet'); git(f.cwd, 'add', 'code.mjs'); mkdirSync(nested);
+  await prepareChanges('test', f.cwd, 'healthy', [nested]);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'first sibling edit');
+  assert.equal((await checkChanges('test', f.cwd, 'healthy', [nested])).changed, true);
+  await stopSession('test', f.cwd, [nested]);
+  const config = join(f.cwd, '.git', 'config');
+  writeFileSync(config, readFileSync(config, 'utf8') + '\n[PRIVATE_INVALID_CONFIG\n');
+  const directory = join(root, 'ai-setting-code-quality-review'), known = new Set(readdirSync(directory));
+  await assert.rejects(prepareChanges('test', f.cwd, 'broken', [nested]), ChangeWatchError);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'second sibling edit');
+  assert.deepEqual(await checkChanges('test', f.cwd, 'broken', [nested]), { terminal: 'watch-failed', failed: true });
+  const name = readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name) && !known.has(name));
+  assert.ok(name);
+  assert.ok(!readFileSync(join(directory, name), 'utf8').includes('PRIVATE_INVALID_CONFIG'));
+});
 
 test('무변경·문서·제외 폴더는 내용 읽기 없이 종료하고 감시를 닫는다', async () => {
   const f = fixture();
@@ -725,7 +865,7 @@ for (const mode of ['write', 'git']) {
 const write=fs.writeFileSync;let failed=false;fs.writeFileSync=(path,data,options)=>{if(${JSON.stringify(mode)}==='write'&&!failed&&options?.flag==='wx'){failed=true;throw Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'ENOSPC'})}return write(path,data,options)};
 const exec=cp.execFile;cp.execFile=(file,args,options,callback)=>file==='git'&&${JSON.stringify(mode)}==='git'?exec(file,args,options,(_error,stdout,stderr)=>callback(Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'}),stdout,stderr)):exec(file,args,options,callback);syncBuiltinESMExports();
 try{await prepareChanges('test','diagnostic','turn',[${JSON.stringify(cwd)}]);process.exitCode=1}catch{const dir=join(process.env.TEMP,'ai-setting-code-quality-review'),name=fs.readdirSync(dir).find(n=>/^[a-f0-9]{64}\\.json$/.test(n));const path=join(dir,name),text=fs.readFileSync(path,'utf8'),state=JSON.parse(text);if(state.failed!=='watch-prepare-failed'||state.errorCode!==${JSON.stringify(mode === 'write' ? 'ENOSPC' : 'EIO')}||!(/^[a-f0-9]{64}$/.test(state.owner))||text.includes('PRIVATE_FAILURE_MESSAGE'))process.exitCode=2;
-const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);fs.writeFileSync(join(dir,'cleanup-completed.json'),JSON.stringify({version:1,completedAt:0}));try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
+const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);const owner=join(dir,'owner-'+state.owner+'.json');if(fs.existsSync(owner))fs.utimesSync(owner,old,old);fs.writeFileSync(join(dir,'cleanup-completed.json'),JSON.stringify({version:1,completedAt:0}));try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       windowsHide: true, encoding: 'utf8', env: { ...process.env, TMP: temporary, TEMP: temporary, TMPDIR: temporary },
     });
