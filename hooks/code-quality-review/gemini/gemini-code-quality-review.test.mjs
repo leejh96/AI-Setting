@@ -149,6 +149,26 @@ test('정확한 청크 경계와 긴 UTF-8 사용자 입력·미완성 마지막
   });
 });
 
+test('여러 긴 JSON 줄을 완성한 뒤에도 새 요청·검토 상태와 이전 기록 검증을 유지한다', async () => {
+  for (const newline of ['\n', '\r\n']) {
+    await fixture(({ script, transcriptPath, event }) => {
+      const serialize = entries => entries.map(JSON.stringify).join(newline + ' ' + newline) + newline;
+      const history = [user, model('이전 기록😀'.repeat(20000)), request, model('[code-quality-review:clean]'), user];
+      writeFileSync(transcriptPath, serialize(history));
+      assert.deepEqual(parse(run(script, event, ['--prepare'])), { injectSteps: [] });
+      writeFileSync(join(event.workspacePaths[0], 'code.mjs'), 'edited after long history');
+      const entries = [...history, model('첫 긴 응답😀'.repeat(30000)), model('다음 긴 응답😀'.repeat(30000))];
+      writeFileSync(transcriptPath, serialize(entries));
+      continues(parse(run(script, event)));
+      writeFileSync(transcriptPath, serialize([...entries, request, model('검토 내용😀'.repeat(30000) + '\n[code-quality-review:clean]')]));
+      assert.deepEqual(parse(run(script, event)), {});
+      writeFileSync(transcriptPath, '{"content":"' + 'PRIVATE_LONG_TRANSCRIPT'.repeat(20000) + newline + JSON.stringify(user));
+      const malformed = run(script, event); warns(malformed);
+      assert.ok(!malformed.stderr.includes('PRIVATE_LONG_TRANSCRIPT'));
+    }, { changed: false });
+  }
+});
+
 for (const mode of ['snapshot', 'stat-error', 'read-error', 'parse-error']) {
   test(`버퍼 읽기의 시작 크기·짧은 읽기·실패 시 파일 닫기를 보장한다: ${mode}`, async () => {
     await fixture(({ root, script, transcriptPath, event }) => {

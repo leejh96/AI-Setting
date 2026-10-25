@@ -82,7 +82,8 @@ function currentTurn(event) {
       let end;
       while ((end = chunk.indexOf('\n', start)) !== -1) {
         const line = chunk.slice(start, end);
-        consume(fragments.length ? fragments.join('') + line : line);
+        if (fragments.length) fragments.push(line);
+        consume(fragments.length ? fragments.join('') : line);
         fragments = [];
         start = end + 1;
       }
