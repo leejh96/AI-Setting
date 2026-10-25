@@ -38,7 +38,10 @@ export function hasTerminalReviewStatus(message) {
   const listIndents = [];
   let paragraphOpen = false;
   let fence = null;
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (let start = 0; start < text.length;) {
+    const end = text.indexOf('\n', start);
+    const rawLine = text.slice(start, end === -1 ? text.length : end - (text.charCodeAt(end - 1) === 13 ? 1 : 0));
+    start = end === -1 ? text.length : end + 1;
     if (fence?.ownerIndent === 0) {
       // A leading tab expands beyond the three-space closing-fence limit.
       if (closesFence(rawLine, fence)) fence = null;

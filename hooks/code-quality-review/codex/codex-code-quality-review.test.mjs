@@ -240,10 +240,10 @@ test('실제 훅은 열린 코드 펜스에서 검토를 계속하고 닫힌 펜
   for (const status of ['clean', 'skipped', 'blocked']) {
     const marker = `[code-quality-review:${status}]`;
     assert.equal((await runEvent(HOOK_PATH, {
-      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '```text\n\tcode\tvalue\n' + marker,
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '```text\r\n\tcode\tvalue\n' + marker,
     })).decision, 'block');
     assert.deepEqual(await runEvent(HOOK_PATH, {
-      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '~~~text\n\tcode\tvalue\n~~~~\t\n' + marker,
+      hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: '~~~text\n\tcode\tvalue\r\n~~~~\t\r\n' + marker,
     }), {});
   }
 });

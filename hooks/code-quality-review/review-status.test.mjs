@@ -105,3 +105,30 @@ test('일반 문단 뒤에도 번호 목록·빈 줄·인용과 펜스의 소유
     }
   }
 });
+
+test('LF·CRLF가 섞여도 빈 줄·목록·펜스의 종료 판정을 유지한다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    for (const [prefixes, expected] of [[openFencePrefixes, false], [terminalPrefixes, true]]) {
+      for (const prefix of prefixes) {
+        const lines = prefix.replaceAll('\r\n', '\n').split('\n');
+        for (const style of ['lf', 'crlf', 'mixed']) {
+          const message = lines.map((line, index) => line + (index === lines.length - 1 ? ''
+            : style === 'crlf' || (style === 'mixed' && index % 2) ? '\r\n' : '\n')).join('');
+          assert.equal(hasTerminalReviewStatus(message + `[code-quality-review:${status}]`), expected,
+            JSON.stringify({ prefix, style, status }));
+        }
+      }
+    }
+  }
+});
+
+test('개행 앞의 CR 하나만 제거하고 줄 내부의 CR과 유니코드 줄 문자는 보존한다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    assert.equal(hasTerminalReviewStatus('```text\r\ncode\n```\r\n' + marker), true);
+    assert.equal(hasTerminalReviewStatus('```text\ncode\n```\r\r\n' + marker), false);
+    assert.equal(hasTerminalReviewStatus('```text\ncode\n```\r \n' + marker), false);
+    assert.equal(hasTerminalReviewStatus('```text\ncode\n```\u2028\n' + marker), false);
+    assert.equal(hasTerminalReviewStatus('text\r' + marker), false);
+  }
+});
