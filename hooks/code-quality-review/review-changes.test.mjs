@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import childProcess, { spawn, spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -51,6 +52,77 @@ function expireCleanup() {
 async function unavailable(promise) {
   await promise.then((result) => { assert.equal(result.failed, true); assert.equal('changed' in result, false); },
     (error) => assert.ok(error instanceof ChangeWatchError));
+}
+
+for (const mode of ['mixed', 'missing', 'combined-safe', 'invalid-bytes', 'EIO', 'unknown-error', 'timeout', 'stdout-limit', 'stderr-limit', 'combined-limit']) {
+  test(`Git 루트 조회의 병렬 상한·범위·실패 분류·프로세스 정리를 유지한다: ${mode}`, async () => {
+    const first = fixture(), second = fixture(), third = fixture();
+    let paths = [first.cwd, second.cwd, third.cwd];
+    const nested = join(first.cwd, 'nested');
+    if (mode === 'mixed') {
+      git(first.cwd, 'init', '--quiet'); mkdirSync(join(first.cwd, 'src')); mkdirSync(nested); git(nested, 'init', '--quiet');
+      paths = [join(first.cwd, 'src'), second.cwd, first.cwd, nested, third.cwd];
+    }
+    const directory = join(root, 'ai-setting-code-quality-review'), known = new Set();
+    try { for (const name of readdirSync(directory)) known.add(name); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const events = [], children = [], original = childProcess.execFile;
+    childProcess.execFile = (file, args, options, callback) => {
+      if (file !== 'git' || !args.includes('rev-parse')) return original(file, args, options, callback);
+      assert.equal(options.timeout, 1000); assert.equal(options.maxBuffer, 1024 * 1024);
+      assert.equal(options.killSignal, 'SIGKILL'); assert.equal(options.windowsHide, true);
+      assert.equal(options.encoding, 'buffer');
+      assert.equal(options.env.GIT_OPTIONAL_LOCKS, '0');
+      const index = events.filter(event => event.started).length;
+      let code = `setTimeout(()=>{process.exitCode=128},${index === 1 ? 250 : 0})`;
+      if (mode === 'mixed') code = `setTimeout(()=>{const r=require('node:child_process').spawnSync('git',${JSON.stringify(args)},{encoding:'utf8',windowsHide:true,env:process.env});process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');process.exitCode=r.status??1},${index % 2 ? 0 : 100})`;
+      if (index === 0 && mode === 'timeout') code = 'setInterval(()=>{},1000)';
+      if (index === 0 && mode.endsWith('-limit')) code = `process.${mode === 'stdout-limit' ? 'stdout' : 'stderr'}.write(Buffer.alloc(1024*1024+1,65));setInterval(()=>{},1000)`;
+      if (index === 0 && ['combined-safe', 'combined-limit', 'invalid-bytes'].includes(mode)) {
+        const size = (mode === 'combined-safe' ? 500 : mode === 'invalid-bytes' ? 400 : 600) * 1024;
+        code = `process.stdout.write(Buffer.alloc(${size},${mode === 'invalid-bytes' ? 255 : 65}));process.stderr.write(Buffer.alloc(${size},66));${mode === 'combined-limit' ? 'setInterval(()=>{},1000)' : 'process.exitCode=128'}`;
+      }
+      const child = original(mode === 'missing' ? join(root, 'missing-git') : process.execPath,
+        mode === 'missing' ? [] : ['-e', code], options, (error, stdout, stderr) => {
+          events.push({ closed: true, pid: child.pid });
+          if (index === 0 && ['EIO', 'unknown-error'].includes(mode)) error = Object.assign(Error('PRIVATE_LOOKUP_FAILURE'), mode === 'EIO' ? { code: 'EIO' } : {});
+          callback(error, stdout, stderr);
+        });
+      events.push({ started: true, pid: child.pid });
+      children.push({ child, closed: new Promise(resolveClosed => child.once('close', resolveClosed)) });
+      return child;
+    };
+    syncBuiltinESMExports();
+    try {
+      const failed = !['mixed', 'missing', 'combined-safe', 'invalid-bytes'].includes(mode);
+      if (failed) {
+        await assert.rejects(prepareChanges('test', first.cwd, 'parallel-root', paths), ChangeWatchError);
+        const name = readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name) && !known.has(name));
+        assert.ok(name);
+        const text = readFileSync(join(directory, name), 'utf8'), state = JSON.parse(text);
+        assert.equal(state.failed, 'watch-prepare-failed');
+        assert.equal(state.errorCode, mode === 'EIO' ? 'EIO' : mode === 'timeout' ? 'ETIMEDOUT' : mode.endsWith('-limit') ? 'ENOBUFS' : undefined);
+        assert.ok(!text.includes('PRIVATE_LOOKUP_FAILURE'));
+        assert.deepEqual(await checkChanges('test', first.cwd, 'parallel-root', paths), { terminal: 'watch-failed', failed: true });
+        await prepareChanges('test', first.cwd, 'parallel-root', paths);
+      } else {
+        await prepareChanges('test', first.cwd, 'parallel-root', paths);
+        assert.deepEqual(stateFor(first.cwd).state.roots.map(info => ({ path: resolve(info.path), git: info.git })), mode === 'mixed'
+          ? [{ path: first.cwd, git: true }, { path: second.cwd, git: false }, { path: nested, git: true }, { path: third.cwd, git: false }]
+          : paths.map(path => ({ path, git: false })));
+        writeFileSync(join(third.cwd, 'code.mjs'), 'edit in final root');
+        assert.equal((await checkChanges('test', first.cwd, 'parallel-root', paths)).changed, true);
+      }
+      let active = 0, peak = 0;
+      for (const event of events) { if (event.started) { active++; peak = Math.max(peak, active); } else active--; }
+      assert.equal(peak, 2); assert.equal(active, 0);
+      assert.equal(events.filter(event => event.started).length, failed ? 2 : paths.length);
+      for (const { child } of children) if (child.pid) assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+    } finally {
+      childProcess.execFile = original; syncBuiltinESMExports();
+      for (const { child } of children) if (child.pid && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await Promise.all(children.map(entry => entry.closed));
+    }
+  });
 }
 
 test('무변경·문서·제외 폴더는 내용 읽기 없이 종료하고 감시를 닫는다', async () => {
@@ -428,7 +500,7 @@ for (const mode of ['write', 'git']) {
     const cwd = mkdtempSync(join(root, 'prepare-code-')), temporary = mkdtempSync(join(root, 'prepare-temp-'));
     const script = `import fs from 'node:fs';import cp from 'node:child_process';import{join}from'node:path';import{syncBuiltinESMExports}from'node:module';import{prepareChanges,finishWatch}from${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
 const write=fs.writeFileSync;let failed=false;fs.writeFileSync=(path,data,options)=>{if(${JSON.stringify(mode)}==='write'&&!failed&&options?.flag==='wx'){failed=true;throw Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'ENOSPC'})}return write(path,data,options)};
-const spawn=cp.spawnSync;cp.spawnSync=(file,args,...rest)=>file==='git'&&${JSON.stringify(mode)}==='git'?{status:null,error:Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'})}:spawn(file,args,...rest);syncBuiltinESMExports();
+const exec=cp.execFile;cp.execFile=(file,args,options,callback)=>file==='git'&&${JSON.stringify(mode)}==='git'?exec(file,args,options,(_error,stdout,stderr)=>callback(Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'}),stdout,stderr)):exec(file,args,options,callback);syncBuiltinESMExports();
 try{await prepareChanges('test','diagnostic','turn',[${JSON.stringify(cwd)}]);process.exitCode=1}catch{const dir=join(process.env.TEMP,'ai-setting-code-quality-review'),name=fs.readdirSync(dir).find(n=>/^[a-f0-9]{64}\\.json$/.test(n));const path=join(dir,name),text=fs.readFileSync(path,'utf8'),state=JSON.parse(text);if(state.failed!=='watch-prepare-failed'||state.errorCode!==${JSON.stringify(mode === 'write' ? 'ENOSPC' : 'EIO')}||!(/^[a-f0-9]{64}$/.test(state.owner))||text.includes('PRIVATE_FAILURE_MESSAGE'))process.exitCode=2;
 const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);fs.writeFileSync(join(dir,'cleanup-completed.json'),JSON.stringify({version:1,completedAt:0}));try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {

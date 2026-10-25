@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, opendirSync, lstatSync, renameSync
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -202,6 +202,44 @@ function cleanupStates(directory, currentFile, currentOwner) {
   saveWatch(marker, { version: 1, completedAt: Date.now() });
 }
 
+async function discoverRoots(paths) {
+  const roots = [];
+  for (let index = 0; index < paths.length; index += 2) {
+    const batch = await Promise.allSettled(paths.slice(index, index + 2).map(cwd => new Promise((resolveRoot, reject) => {
+      let outputBytes = 0, overflow = false;
+      const child = execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
+        encoding: 'buffer', windowsHide: true, timeout: 1000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+      }, (error, stdout) => {
+        if (error || overflow) {
+          const code = overflow || error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'ENOBUFS'
+            : error?.killed ? 'ETIMEDOUT' : error?.code;
+          const processExit = typeof code === 'number' || (code === null && typeof error.signal === 'string');
+          if (code !== 'ENOENT' && !processExit) {
+            reject(Object.assign(new Error('Git root lookup failed'), { code }));
+            return;
+          }
+        }
+        resolveRoot({ path: error ? resolve(cwd) : stdout.toString('utf8').trim(), git: !error });
+      });
+      // spawnSync limits the combined raw output; execFile limits each stream separately.
+      const countOutput = chunk => {
+        outputBytes += chunk.length;
+        if (!overflow && outputBytes > 1024 * 1024) {
+          overflow = true;
+          if (!child.killed) child.kill('SIGKILL');
+        }
+      };
+      child.stdout.on('data', countOutput); child.stderr.on('data', countOutput);
+    })));
+    for (const result of batch) {
+      if (result.status === 'rejected') throw result.reason;
+      roots.push(result.value);
+    }
+  }
+  return roots;
+}
+
 async function startChanges(client, session, turn, paths, canStart) {
   const key = identity(client, session, turn, paths);
   mkdirSync(key.directory, { recursive: true, mode: 0o700 });
@@ -220,13 +258,7 @@ async function startChanges(client, session, turn, paths, canStart) {
   if (!canStart) throw new ChangeWatchError('Cannot prepare after the request has started');
   await stopSession(client, session, paths);
   cleanupStates(key.directory, key.path.split(/[\\/]/).at(-1), `owner-${key.owner}.json`);
-  const roots = paths.map((cwd) => {
-    const result = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8', windowsHide: true, timeout: 1000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
-    });
-    if (result.error && result.error.code !== 'ENOENT') throw result.error;
-    return { path: result.status === 0 ? result.stdout.trim() : resolve(cwd), git: result.status === 0 };
-  });
+  const roots = await discoverRoots(paths);
   const id = randomUUID();
   const state = { version: 2, owner: key.owner, phase: 'starting', token: randomUUID(),
     endpoint: process.platform === 'win32' ? `\\\\.\\pipe\\ai-setting-quality-${id}` : join(key.directory, `${id.slice(0, 8)}.sock`),
