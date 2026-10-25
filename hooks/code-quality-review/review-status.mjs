@@ -73,7 +73,8 @@ export function hasTerminalReviewStatus(message) {
       continue;
     }
 
-    const lazyContinuation = paragraphOpen && !interruptsParagraph(line);
+    const lazyContinuation = listIndents.length > 0 && indent < listIndents.at(-1)
+      && paragraphOpen && !interruptsParagraph(line);
     while (listIndents.length && indent < listIndents.at(-1) && !lazyContinuation) {
       listIndents.pop();
     }

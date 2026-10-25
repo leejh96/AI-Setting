@@ -132,3 +132,18 @@ test('개행 앞의 CR 하나만 제거하고 줄 내부의 CR과 유니코드 �
     assert.equal(hasTerminalReviewStatus('text\r' + marker), false);
   }
 });
+
+test('목록 밖의 들여쓰기·강조 문단 뒤에도 번호 목록과 펜스 경계를 유지한다', () => {
+  for (const body of ['    들여쓴 설명😀\n', '_강조한 설명😀_\n']) {
+    const paragraph = body.repeat(1000);
+    for (const status of ['clean', 'skipped', 'blocked']) {
+      const marker = `[code-quality-review:${status}]`;
+      assert.equal(hasTerminalReviewStatus(paragraph + marker), true);
+      assert.equal(hasTerminalReviewStatus(paragraph + '```text\n' + marker), false);
+      assert.equal(hasTerminalReviewStatus(paragraph + '```text\nexample\n```\n' + marker), true);
+      assert.equal(hasTerminalReviewStatus(paragraph + '1. ```text\n   code\n   ```\n' + marker), true);
+      assert.equal(hasTerminalReviewStatus(paragraph + '2. ```text\n   code\n   ```\n' + marker), false);
+      assert.equal(hasTerminalReviewStatus(paragraph + '\n2. ```text\n   code\n   ```\n' + marker), true);
+    }
+  }
+});
