@@ -125,6 +125,7 @@ async function checkpoint() {
   let seen;
   do {
     if (Date.now() > deadline) throw Error('Checkpoint timeout');
+    if (state.changed) break;
     seen = generation;
     await delay(20);
     await Promise.all(roots.map(flush));

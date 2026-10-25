@@ -622,6 +622,44 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>{const watcher=watch(path
   });
 }
 
+for (const mode of ['normal', 'no-probe', 'root-replaced', 'expired']) {
+  test(`수정 확정 후 Stop에서도 probe·루트·전체 확인 제한을 유지한다: ${mode}`, async () => {
+    const f = fixture(), inject = join(root, `changed-checkpoint-${mode}.mjs`), trace = inject + '.log';
+    writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const mode=${JSON.stringify(mode)},workspace=${JSON.stringify(f.cwd)},trace=${JSON.stringify(trace)};
+const changed=()=>JSON.parse(fs.readFileSync(process.argv[2],'utf8')).changed;
+const write=fs.writeFileSync;fs.writeFileSync=(path,...args)=>{if(String(path).includes('.ai-setting-quality-probe-')&&changed())fs.appendFileSync(trace,'probe\\n');return write(path,...args)};
+const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{const value=stat(path,...args);if(path===workspace&&changed()){fs.appendFileSync(trace,'root\\n');if(mode==='expired'){const now=Date.now;Date.now=()=>now()+3000;}}return value};
+const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(mode==='no-probe'&&name?.startsWith('.ai-setting-quality-probe-')&&changed())return;listener(event,name)});syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try { await f.prepare(); }
+    finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'code.mjs'), 'confirmed edit');
+    for (let i = 0; i < 100 && !stateFor(f.cwd).state.changed; i++) await delay(10);
+    assert.equal(stateFor(f.cwd).state.changed, true);
+    if (mode === 'root-replaced') { renameSync(f.cwd, f.cwd + '-moved'); mkdirSync(f.cwd); }
+    if (mode === 'normal') {
+      for (let i = 0; i < 2; i++) {
+        const gate = await f.check(); assert.equal(gate.changed, true);
+        assert.equal((await gate.record('review-requested')).reviewRequests, i + 1);
+      }
+      const events = readFileSync(trace, 'utf8').trim().split('\n');
+      assert.equal(events.filter(event => event === 'probe').length, 2);
+      assert.equal(events.filter(event => event === 'root').length, 2);
+      assert.equal(stateFor(f.cwd).state.failed, undefined);
+    } else {
+      await unavailable(f.check());
+      const state = stateFor(f.cwd).state;
+      assert.equal(state.changed, true);
+      if (mode === 'root-replaced') assert.ok(state.failed);
+      else {
+        assert.equal(state.failed, 'watch-check-failed');
+        assert.ok(readFileSync(trace, 'utf8').includes('probe'));
+      }
+    }
+  });
+}
+
 test('수정 판단 전의 파일 정보 조회 실패는 무변경으로 숨기지 않는다', async () => {
   const f = fixture(), inject = join(root, 'metadata-before-edit.mjs');
   writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).replaceAll('\\\\','/').endsWith('/noise.mjs'))throw Object.assign(Error('Injected metadata failure'),{code:'EPERM'});return stat(path,...args)};syncBuiltinESMExports();`);
