@@ -87,12 +87,13 @@ export async function finishWatch(state) {
   }
 }
 
-export async function stopSession(client, session, paths) {
+export async function stopSession(client, session, paths, exceptFile) {
   const key = identity(client, session, 'cleanup', paths);
   const ownerPath = join(key.directory, `owner-${key.owner}.json`);
   if (!existsSync(ownerPath)) return;
   const old = JSON.parse(readFileSync(ownerPath, 'utf8'));
   if (!/^[a-f0-9]{64}\.json$/.test(old.file)) throw new ChangeWatchError('Invalid watcher owner');
+  if (old.file === exceptFile) return;
   const path = join(key.directory, old.file);
   try {
     const previous = JSON.parse(readFileSync(path, 'utf8'));
@@ -128,6 +129,7 @@ async function ready(path) {
   while (Date.now() < deadline) {
     let state;
     state = JSON.parse(readFileSync(path, 'utf8'));
+    if (isTerminal(state) && !state.failed && state.action !== 'superseded') return state;
     if (state.version !== 2 || state.failed || state.phase === 'closed') throw new ChangeWatchError('Change tracking unavailable');
     try {
       const status = await requestWatch(state, 'status');
@@ -263,12 +265,16 @@ async function startChanges(client, session, turn, paths, canStart) {
   if (existsSync(ownerPath)) {
     const old = JSON.parse(readFileSync(ownerPath, 'utf8'));
     if (old.file === key.path.split(/[\\/]/).at(-1)) {
+      if (existsSync(key.path)) {
+        if (isTerminal(JSON.parse(readFileSync(key.path, 'utf8')))) return;
+        await ready(key.path); return;
+      }
       if (old.watch) await finishWatch(old.watch);
       throw new ChangeWatchError('Prepared watcher state was lost');
     }
   }
   if (!canStart) throw new ChangeWatchError('Cannot prepare after the request has started');
-  await stopSession(client, session, paths);
+  await stopSession(client, session, paths, key.path.split(/[\\/]/).at(-1));
   cleanupStates(key.directory, key.path.split(/[\\/]/).at(-1), `owner-${key.owner}.json`);
   const roots = await discoverRoots(paths);
   const id = randomUUID();

@@ -228,7 +228,7 @@ test('첫 응답의 종료 표식이나 인용·중간 표식·오타로 검토�
       last_assistant_message: `[code-quality-review:${status}]`,
     })).decision, 'block');
   }
-  for (const message of ['> [code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
+  for (const message of ['> [code-quality-review:clean]', '> 인용한 예시\n[code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
     '[code-quality-review:clean]\n추가 내용', '[code-quality-review:Clean]', '[code-quality-review:unknown]']) {
     assert.equal((await runEvent(HOOK_PATH, {
       hook_event_name: 'Stop', stop_hook_active: true, last_assistant_message: message,

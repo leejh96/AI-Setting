@@ -15,6 +15,22 @@ const terminalPrefixes = ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~
   '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
   '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n'];
 
+test('인용문의 이어지는 문단은 종료 표식으로 인정하지 않고 인용 밖 표식만 허용한다', () => {
+  const quoted = ['> quoted paragraph\n', '> quoted paragraph\ncontinued\n',
+    '> > nested paragraph\n', '> - quoted list paragraph\n', '> > ```text\n> outer paragraph\n',
+    '> 1000. ```text\n>       code\n>       ```\n> quote paragraph\n',
+    '> - ```text\n> quote paragraph\n'];
+  const outside = ['> quoted paragraph\n\n', '> # heading\n', '> ---\n',
+    '> ```text\n> code\n', '> ```text\n> code\n> ```\n',
+    '> quoted paragraph\n>\n', '> quoted paragraph\n---\n', '>     indented code\n',
+    '> ```text\n> > ```\n> still code\n'];
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const prefix of quoted) assert.equal(hasTerminalReviewStatus(prefix + marker), false, prefix);
+    for (const prefix of outside) assert.equal(hasTerminalReviewStatus(prefix + marker), true, prefix);
+  }
+});
+
 for (const status of ['clean', 'skipped', 'blocked']) {
   const marker = `[code-quality-review:${status}]`;
   test(`열린 코드 펜스의 ${status} 표식은 종료로 인정하지 않는다`, () => {

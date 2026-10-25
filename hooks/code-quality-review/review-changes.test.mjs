@@ -1,6 +1,6 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import childProcess, { spawn, spawnSync } from 'node:child_process';
@@ -49,9 +49,66 @@ function git(cwd, ...args) {
 function expireCleanup() {
   writeFileSync(join(root, 'ai-setting-code-quality-review', 'cleanup-completed.json'), JSON.stringify({ version: 1, completedAt: 0 }));
 }
+
+for (const ownerRead of [1, 2]) {
+  test(`같은 턴의 준비가 owner 조회 ${ownerRead} 전에 완료되어도 기존 감시를 재사용한다`, async () => {
+    const f = fixture(), originalExists = fs.existsSync;
+    let reads = 0, token;
+    fs.existsSync = (path) => {
+      if (/owner-[a-f0-9]{64}\.json$/.test(String(path)) && ++reads === ownerRead) {
+        const script = `import { prepareChanges } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+await prepareChanges('test', ${JSON.stringify(f.cwd)}, 'turn', [${JSON.stringify(f.cwd)}]);`;
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+          encoding: 'utf8', windowsHide: true, timeout: 15000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+        token = stateFor(f.cwd).state.token;
+      }
+      return originalExists(path);
+    };
+    syncBuiltinESMExports();
+    try { await f.prepare(); }
+    finally { fs.existsSync = originalExists; syncBuiltinESMExports(); }
+    assert.ok(token);
+    assert.equal(stateFor(f.cwd).state.token, token);
+    assert.equal(stateFor(f.cwd).state.failed, undefined);
+    writeFileSync(join(f.cwd, 'code.mjs'), 'edited after overlapping preparation');
+    assert.equal((await f.check()).changed, true);
+  });
+}
 async function unavailable(promise) {
   await promise.then((result) => { assert.equal(result.failed, true); assert.equal('changed' in result, false); },
     (error) => assert.ok(error instanceof ChangeWatchError));
+}
+
+for (const action of ['unchanged', 'review-finished', 'review-limit']) {
+test(`동시 준비의 감시가 먼저 종료되어도 종료 기록을 실패로 덮어쓰지 않는다: ${action}`, async () => {
+  const f = fixture(), originalWrite = fs.writeFileSync;
+  let token;
+  fs.writeFileSync = (path, content, options) => {
+    if (options?.flag === 'wx' && /[a-f0-9]{64}\.json$/.test(String(path))) {
+      const script = `import { prepareChanges, checkChanges, MAX_REVIEW_REQUESTS } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+import { writeFileSync } from 'node:fs';import { join } from 'node:path';
+const cwd=${JSON.stringify(f.cwd)},action=${JSON.stringify(action)};await prepareChanges('test',cwd,'turn',[cwd]);
+if(action!=='unchanged')writeFileSync(join(cwd,'code.mjs'),'edited by the first preparation');
+const changes=await checkChanges('test',cwd,'turn',[cwd]);
+if(action==='review-finished'){await changes.record('review-requested');await changes.record('review-finished');}
+if(action==='review-limit')for(let index=0;index<=MAX_REVIEW_REQUESTS;index++)await changes.record('review-requested');`;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        encoding: 'utf8', windowsHide: true, timeout: 15000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      token = stateFor(f.cwd).state.token;
+    }
+    return originalWrite(path, content, options);
+  };
+  syncBuiltinESMExports();
+  try { await f.prepare(); }
+  finally { fs.writeFileSync = originalWrite; syncBuiltinESMExports(); }
+  assert.ok(token);
+  assert.equal(stateFor(f.cwd).state.token, token);
+  assert.deepEqual(await f.check(), { terminal: action, failed: false, ...(action === 'unchanged' ? { changed: false } : {}) });
+});
 }
 
 function trackedLookup(mode, firstPath) {
@@ -275,7 +332,7 @@ for (const [name, paths, expected] of [
     ? [['같은 드라이브의 상대 제외 경로', cwd => [cwd.slice(0, 2) + 'node_modules\\generated.mjs'], 'ignored'],
       ['다른 드라이브의 상대 경로', cwd => [(cwd[0].toLowerCase() === 'c' ? 'D:' : 'C:') + 'node_modules\\generated.mjs'], 'failed']] : []),
 ]) {
-  test(`경로 계산을 생략해도 제외·정규화·루트 경계 처리를 유지한다: ${name}`, async () => {
+  test(`이벤트 경로의 제외·정규화·루트 경계 처리를 유지한다: ${name}`, async () => {
     const f = fixture(), inject = join(root, `event-path-${randomUUID()}.mjs`);
     mkdirSync(join(f.cwd, 'src')); writeFileSync(join(f.cwd, 'src', 'code.mjs'), 'source');
     if (name === '제외 경로와 링크 내부') {

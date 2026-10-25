@@ -169,6 +169,27 @@ test('여러 긴 JSON 줄을 완성한 뒤에도 새 요청·검토 상태와 �
   }
 });
 
+test('읽는 도중 잘린 기록의 이전 clean 표식으로 검토를 종료하지 않는다', async () => {
+  await fixture(({ root, script, transcriptPath, event }) => {
+    continues(parse(run(script, event)));
+    const head = [user, request, model('[code-quality-review:clean]')].map(JSON.stringify).join('\n') + '\n';
+    const padding = { type: 'TOOL_RESPONSE', source: 'TOOL', content: '' };
+    padding.content = 'a'.repeat(64 * 1024 - Buffer.byteLength(head + JSON.stringify(padding) + '\n'));
+    const prefix = head + JSON.stringify(padding) + '\n';
+    assert.equal(Buffer.byteLength(prefix), 64 * 1024);
+    const transcript = prefix + JSON.stringify(model('추가 수정 후 검토 필요')) + '\n';
+    writeFileSync(transcriptPath, transcript);
+    const preload = join(root, 'truncate-transcript.mjs');
+    writeFileSync(preload, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
+const path=${JSON.stringify(transcriptPath)};let descriptor;
+const open=fs.openSync;fs.openSync=(p,...args)=>{const fd=open(p,...args);if(p===path)descriptor=fd;return fd};
+const read=fs.readSync;fs.readSync=(fd,buffer,offset,length,position)=>{const bytes=read(fd,buffer,offset,length,position);if(fd===descriptor&&position===0)fs.truncateSync(path,64*1024);return bytes};syncBuiltinESMExports();`);
+    warns(run(script, event, [], { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }));
+    writeFileSync(transcriptPath, transcript);
+    continues(parse(run(script, event)));
+  });
+});
+
 for (const mode of ['snapshot', 'stat-error', 'read-error', 'parse-error']) {
   test(`버퍼 읽기의 시작 크기·짧은 읽기·실패 시 파일 닫기를 보장한다: ${mode}`, async () => {
     await fixture(({ root, script, transcriptPath, event }) => {
@@ -305,7 +326,7 @@ test('다섯 번째 검토의 clean·skipped·blocked는 정상 종료하고 반
 
 test('수정 회차·누락·잘못된 표식은 반복하며 종료 표식은 재검토 이후에만 허용한다', async () => {
   for (const content of ['', '검토 완료', '[code-quality-review:revised]',
-    '> [code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
+    '> [code-quality-review:clean]', '> 인용한 예시\n[code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
     '[code-quality-review:clean]\n추가 내용', '[code-quality-review:Clean]']) {
     continues(await turn([user, model('구현 완료'), request, model(content)]));
   }

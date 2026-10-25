@@ -299,7 +299,7 @@ for (const mode of ['packed', 'packed-fragmented', 'packed-body-boundary']) {
 }
 
 for (const mode of ['header-boundary', 'header-boundary-fragmented', 'header-over-limit', 'header-over-limit-fragmented']) {
-  test(`헤더 직접 해석도 256바이트 제한과 파일 크기 검증을 유지한다: ${mode}`, () => {
+  test(`배치 헤더의 256바이트 제한과 파일 크기를 검증한다: ${mode}`, () => {
     const f = fixture(); f.write('code.js', 'fixture'); f.git('add', 'code.js');
     const result = f.scan({ BATCH_MODE: mode });
     assert.equal(result.status, 1);

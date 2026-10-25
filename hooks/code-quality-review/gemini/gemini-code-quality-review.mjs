@@ -75,7 +75,7 @@ function currentTurn(event) {
     let position = 0;
     while (position < size) {
       const bytes = readSync(descriptor, buffer, 0, Math.min(buffer.length, size - position), position);
-      if (!bytes) break;
+      if (!bytes) throw new Error('Transcript changed while reading');
       position += bytes;
       const chunk = decoder.write(buffer.subarray(0, bytes));
       let start = 0;

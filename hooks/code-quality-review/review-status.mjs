@@ -38,19 +38,9 @@ export function hasTerminalReviewStatus(message) {
   const listIndents = [];
   let paragraphOpen = false;
   let fence = null;
-  for (let start = 0; start < text.length;) {
-    const end = text.indexOf('\n', start);
-    const rawLine = text.slice(start, end === -1 ? text.length : end - (text.charCodeAt(end - 1) === 13 ? 1 : 0));
-    start = end === -1 ? text.length : end + 1;
-    if (fence?.ownerIndent === 0) {
-      // A leading tab expands beyond the three-space closing-fence limit.
-      if (closesFence(rawLine, fence)) fence = null;
-      continue;
-    }
-    if (!fence && !listIndents.length && rawLine && !/^[-+*`~>#_ \t0-9]/.test(rawLine)) {
-      paragraphOpen = true;
-      continue;
-    }
+  let quoteParagraphOpen = false;
+  let quoteFence = null;
+  for (const rawLine of text.split(/\r?\n/)) {
     // Markdown indentation uses four-column tab stops.
     let extra = 0;
     const line = !rawLine.includes('\t') ? rawLine : rawLine.replace(/\t/g, (_, offset) => {
@@ -61,7 +51,7 @@ export function hasTerminalReviewStatus(message) {
     const blank = /^ *$/.test(line);
     const indent = /^ */.exec(line)[0].length;
     if (fence) {
-      if (blank || indent >= fence.ownerIndent) {
+      if (fence.ownerIndent === 0 || blank || indent >= fence.ownerIndent) {
         if (closesFence(line.slice(fence.ownerIndent), fence)) fence = null;
         continue;
       }
@@ -70,21 +60,47 @@ export function hasTerminalReviewStatus(message) {
     }
     if (blank) {
       paragraphOpen = false;
+      quoteParagraphOpen = false;
+      quoteFence = null;
       continue;
     }
 
-    const lazyContinuation = listIndents.length > 0 && indent < listIndents.at(-1)
-      && paragraphOpen && !interruptsParagraph(line);
+    const lazyContinuation = paragraphOpen && !interruptsParagraph(line);
     while (listIndents.length && indent < listIndents.at(-1) && !lazyContinuation) {
       listIndents.pop();
     }
     let ownerIndent = listIndents.at(-1) ?? 0;
     let content = line.slice(Math.min(indent, ownerIndent));
-    // Explicit quote lines cannot contain the unquoted final status line.
     if (/^ {0,3}>/.test(content)) {
+      let depth = 0, prefix;
+      while ((prefix = /^ {0,3}> ?/.exec(content))) {
+        content = content.slice(prefix[0].length);
+        if (++depth === quoteFence?.depth) break;
+      }
+      if (quoteFence && (depth < quoteFence.depth
+          || (content.trim() && /^ */.exec(content)[0].length < quoteFence.ownerIndent))) quoteFence = null;
+      if (quoteFence) {
+        if (closesFence(content.slice(quoteFence.ownerIndent), quoteFence)) quoteFence = null;
+        quoteParagraphOpen = false;
+      } else {
+        let marker, quoteIndent = 0;
+        while ((marker = listMarker(content, quoteParagraphOpen))) {
+          quoteIndent += marker.indent;
+          content = marker.content;
+          quoteParagraphOpen = false;
+        }
+        const opener = openingFence(content);
+        quoteFence = opener && { ...opener, depth, ownerIndent: quoteIndent };
+        quoteParagraphOpen = !quoteFence && (!!quoteParagraphOpen || !/^ {4}/.test(content)) && !!content.trim()
+          && !/^ {0,3}#{1,6}(?: |$)/.test(content) && !isThematicBreak(content);
+      }
       paragraphOpen = false;
       continue;
     }
+    // A quote paragraph can continue without another > until a blank or block boundary.
+    if (quoteParagraphOpen && !interruptsParagraph(content)) continue;
+    quoteParagraphOpen = false;
+    quoteFence = null;
     let marker;
     while ((marker = listMarker(content, paragraphOpen))) {
       ownerIndent += marker.indent;
@@ -100,5 +116,5 @@ export function hasTerminalReviewStatus(message) {
       paragraphOpen = !/^ {0,3}#{1,6}(?: |$)/.test(content) && !isThematicBreak(content);
     }
   }
-  return fence === null;
+  return fence === null && !quoteParagraphOpen;
 }
