@@ -10,9 +10,9 @@ const TIMEOUT_REASON = '검사가 60초를 초과해 커밋을 차단했습니�
 const LEAK_EXIT_CODE = 42;
 class ScanFailure extends Error {}
 
-async function* readBlobs(objectIds, deadline) {
+async function* readBlobs(objectIds, deadline, signal) {
   const child = spawn('git', ['cat-file', '--batch'], {
-    cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, signal, killSignal: 'SIGKILL',
   });
   const readFailure = () => new ScanFailure('커밋할 파일 내용을 읽지 못해 명령 실행을 차단했습니다.');
   let failure;
@@ -97,6 +97,61 @@ async function* readBlobs(objectIds, deadline) {
   }
 }
 
+async function scanBlobs(objectIds, gitleaksBin, deadline) {
+  const controller = new AbortController();
+  const active = new Set();
+  let reason = null;
+  const stop = (message) => {
+    if (reason) return;
+    reason = message; controller.abort();
+  };
+  const scan = (content) => new Promise(resolveScan => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) { stop(TIMEOUT_REASON); resolveScan(); return; }
+    let child;
+    try {
+      child = spawn(gitleaksBin, [
+        'stdin', '--config', join(HOOK_DIRECTORY, 'gitleaks.toml'),
+        '--gitleaks-ignore-path', join(HOOK_DIRECTORY, '.disabled-gitleaksignore'),
+        '--ignore-gitleaks-allow', '--exit-code', String(LEAK_EXIT_CODE),
+        '--redact=100', '--no-banner', '--no-color',
+      ], { cwd: HOOK_DIRECTORY, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true,
+        signal: controller.signal, killSignal: 'SIGKILL' });
+    } catch {
+      stop('시크릿 검사를 실행할 수 없어 커밋을 차단했습니다. Gitleaks 실행 환경을 확인하세요.');
+      resolveScan(); return;
+    }
+    const timer = setTimeout(() => stop(TIMEOUT_REASON), remaining);
+    const failed = () => stop('시크릿 검사를 완료하지 못해 커밋을 차단했습니다. Gitleaks 실행 환경과 설정을 확인하세요.');
+    child.on('error', failed);
+    child.stdin.on('error', failed);
+    child.once('close', code => {
+      clearTimeout(timer);
+      if (Date.now() >= deadline) stop(TIMEOUT_REASON);
+      else if (code === LEAK_EXIT_CODE) stop('커밋 대상에서 시크릿 후보가 발견되어 명령 실행을 차단했습니다. 해당 값을 제거한 뒤 다시 git add 하세요.');
+      else if (code !== 0) failed();
+      resolveScan();
+    });
+    child.stdin.end(content);
+  });
+  try {
+    for await (const content of readBlobs(objectIds, deadline, controller.signal)) {
+      if (reason) break;
+      const task = scan(content).then(() => active.delete(task));
+      active.add(task);
+      if (active.size >= 2) await Promise.race(active);
+      if (reason) break;
+    }
+    await Promise.all(active);
+  } catch (error) {
+    stop(error instanceof ScanFailure ? error.message : '검사를 완료하지 못해 커밋을 차단했습니다.');
+  } finally {
+    if (reason) controller.abort();
+    await Promise.all(active);
+  }
+  return reason;
+}
+
 async function getCommitBlockReason() {
   const deadline = Date.now() + SCAN_TIMEOUT_MS;
   const execute = (program, args, options = {}) => {
@@ -135,21 +190,7 @@ async function getCommitBlockReason() {
       if (mode !== '160000') objectIds.add(objectId);
     }
     if (!objectIds.size) return null;
-    for await (const content of readBlobs(objectIds, deadline)) {
-      const result = execute(gitleaksBin, [
-        'stdin',
-        '--config', join(HOOK_DIRECTORY, 'gitleaks.toml'),
-        '--gitleaks-ignore-path', join(HOOK_DIRECTORY, '.disabled-gitleaksignore'),
-        '--ignore-gitleaks-allow',
-        '--exit-code', String(LEAK_EXIT_CODE),
-        '--redact=100',
-        '--no-banner',
-        '--no-color',
-      ], { cwd: HOOK_DIRECTORY, input: content, stdio: ['pipe', 'ignore', 'ignore'] });
-      if (result.status === LEAK_EXIT_CODE) return '커밋 대상에서 시크릿 후보가 발견되어 명령 실행을 차단했습니다. 해당 값을 제거한 뒤 다시 git add 하세요.';
-      if (result.status !== 0) return '시크릿 검사를 완료하지 못해 커밋을 차단했습니다. Gitleaks 설정을 확인하세요.';
-    }
-    return null;
+    return await scanBlobs(objectIds, gitleaksBin, deadline);
   } catch (error) {
     // 하위 명령 원문이나 파일 내용은 오류 응답에 포함하지 않습니다.
     return error instanceof ScanFailure ? error.message : '검사를 완료하지 못해 커밋을 차단했습니다.';

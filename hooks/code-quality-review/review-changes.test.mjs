@@ -45,6 +45,9 @@ function git(cwd, ...args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
 }
+function expireCleanup() {
+  writeFileSync(join(root, 'ai-setting-code-quality-review', 'cleanup-completed.json'), JSON.stringify({ version: 1, completedAt: 0 }));
+}
 async function unavailable(promise) {
   await promise.then((result) => { assert.equal(result.failed, true); assert.equal('changed' in result, false); },
     (error) => assert.ok(error instanceof ChangeWatchError));
@@ -239,13 +242,15 @@ test('7일 지난 종료 쌍·임시 파일만 정리하고 활성·불명확 �
   const orphanTmp = join(directory, `${'a'.repeat(64)}.json.${randomUUID()}.tmp`);
   const unknown = join(directory, `${'b'.repeat(64)}.json`), malformed = join(directory, `${'c'.repeat(64)}.json`);
   const recentTmp = `${done.path}.${randomUUID()}.tmp`, unrelated = join(directory, 'unrelated.tmp');
-  for (const path of [doneTmp, liveTmp, orphanTmp, recentTmp, unrelated]) writeFileSync(path, '{}');
+  const oldCleanupTmp=join(directory,`cleanup-completed.json.${randomUUID()}.tmp`),recentCleanupTmp=join(directory,`cleanup-completed.json.${randomUUID()}.tmp`);
+  for (const path of [doneTmp, liveTmp, orphanTmp, recentTmp, unrelated,oldCleanupTmp,recentCleanupTmp]) writeFileSync(path, '{}');
   writeFileSync(unknown, JSON.stringify({ version: 2, phase: 'ready' })); writeFileSync(malformed, '{');
-  for (const path of [done.path, doneOwner, live.path, liveOwner, doneTmp, liveTmp, orphanTmp, unknown, malformed, unrelated]) utimesSync(path, old, old);
+  for (const path of [done.path, doneOwner, live.path, liveOwner, doneTmp, liveTmp, orphanTmp, unknown, malformed, unrelated,oldCleanupTmp]) utimesSync(path, old, old);
+  expireCleanup();
   try {
     await fixture().prepare();
-    for (const path of [done.path, doneOwner, doneTmp, orphanTmp]) assert.throws(() => readFileSync(path), { code: 'ENOENT' });
-    for (const path of [live.path, liveOwner, liveTmp, unknown, malformed, recentTmp, unrelated]) assert.doesNotThrow(() => readFileSync(path));
+    for (const path of [done.path, doneOwner, doneTmp, orphanTmp,oldCleanupTmp]) assert.throws(() => readFileSync(path), { code: 'ENOENT' });
+    for (const path of [live.path, liveOwner, liveTmp, unknown, malformed, recentTmp, unrelated,recentCleanupTmp]) assert.doesNotThrow(() => readFileSync(path));
     assert.equal((await requestWatch(live.state, 'status')).phase, 'ready');
   } finally { rmSync(malformed, { force: true }); }
 });
@@ -256,16 +261,54 @@ test('정리 중 현재 owner의 오래된 종료·검토 예산 기록은 보�
   const previousState = stateFor(f.cwd), directory = join(root, 'ai-setting-code-quality-review');
   const owner = join(directory, `owner-${previousState.state.owner}.json`), old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000);
   for (const path of [previousState.path, owner]) utimesSync(path, old, old);
+  expireCleanup();
   await f.prepare('next');
   assert.equal(JSON.parse(readFileSync(previousState.path, 'utf8')).reviewRequests, 2);
   assert.equal((await f.check()).terminal, 'review-finished');
   assert.equal((await f.check('next')).changed, false);
 });
 
+test('1시간 이내에는 정리를 생략하고 주기가 지나면 7일 지난 종료 기록만 지운다', async () => {
+  const done=fixture(),live=fixture();await done.prepare();await done.check();await live.prepare();
+  const closed=stateFor(done.cwd),active=stateFor(live.cwd),directory=join(root,'ai-setting-code-quality-review');
+  const owner=join(directory,`owner-${closed.state.owner}.json`),old=new Date(Date.now()-9*86400000);
+  for(const path of [closed.path,owner])utimesSync(path,old,old);
+  const marker=join(directory,'cleanup-completed.json');
+  writeFileSync(marker,JSON.stringify({version:1,completedAt:Date.now()}));
+  await fixture().prepare();assert.doesNotThrow(()=>readFileSync(closed.path));
+  writeFileSync(marker,JSON.stringify({version:1,completedAt:Date.now()-3600000}));
+  await fixture().prepare();assert.throws(()=>readFileSync(closed.path),{code:'ENOENT'});
+  assert.doesNotThrow(()=>readFileSync(active.path));assert.equal((await requestWatch(active.state,'status')).phase,'ready');
+});
+
+for(const markerValue of [null,'{','{}',JSON.stringify({version:1,completedAt:Date.now()+86400000}),JSON.stringify({version:2,completedAt:Date.now()})]){
+  test(`정리 완료 기록이 유효하지 않으면 정리를 다시 수행한다: ${markerValue}`,async()=>{
+    const f=fixture();await f.prepare();await f.check();const state=stateFor(f.cwd),directory=join(root,'ai-setting-code-quality-review');
+    const old=new Date(Date.now()-9*86400000);for(const path of [state.path,join(directory,`owner-${state.state.owner}.json`)])utimesSync(path,old,old);
+    if(markerValue===null)rmSync(join(directory,'cleanup-completed.json'),{force:true});
+    else writeFileSync(join(directory,'cleanup-completed.json'),markerValue);
+    await fixture().prepare();
+    assert.throws(()=>readFileSync(state.path),{code:'ENOENT'});
+    const marker=JSON.parse(readFileSync(join(directory,'cleanup-completed.json'),'utf8'));
+    assert.equal(marker.version,1);assert.ok(Date.now()-marker.completedAt<60000);
+  });
+}
+
+test('정리 실패는 완료 시각을 갱신하지 않고 다음 요청에서 다시 수행한다',()=>{
+  const cwd=fixture().cwd,temporary=mkdtempSync(join(root,'cleanup-failed-'));
+  const script=`import assert from'node:assert/strict';import fs from'node:fs';import{join}from'node:path';import{syncBuiltinESMExports}from'node:module';import{prepareChanges,finishWatch,ChangeWatchError}from${JSON.stringify(new URL('./review-changes.mjs',import.meta.url).href)};
+const directory=join(process.env.TEMP,'ai-setting-code-quality-review'),marker=join(directory,'cleanup-completed.json');fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(marker,JSON.stringify({version:1,completedAt:0}));
+const open=fs.opendirSync;fs.opendirSync=()=>{throw Object.assign(Error('PRIVATE_CLEANUP_FAILURE'),{code:'EIO'})};syncBuiltinESMExports();await assert.rejects(prepareChanges('test','cleanup-failure','one',[${JSON.stringify(cwd)}]),ChangeWatchError);assert.equal(JSON.parse(fs.readFileSync(marker,'utf8')).completedAt,0);
+fs.opendirSync=open;syncBuiltinESMExports();try{await prepareChanges('test','cleanup-retry','two',[${JSON.stringify(cwd)}]);assert.ok(JSON.parse(fs.readFileSync(marker,'utf8')).completedAt>0);}finally{for(const name of fs.readdirSync(directory))if(/^[a-f0-9]{64}\\.json$/.test(name))await finishWatch(JSON.parse(fs.readFileSync(join(directory,name),'utf8')));}`;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',windowsHide:true,timeout:15000,env:{...process.env,TMP:temporary,TEMP:temporary,TMPDIR:temporary}});
+  assert.equal(result.status,0,result.stderr);
+});
+
 test('원본 기록을 잃은 오래된 owner는 정리하지 않아 같은 요청의 재준비를 막는다', async () => {
   const f = fixture(); await f.prepare(); const current = stateFor(f.cwd);
   const owner = join(root, 'ai-setting-code-quality-review', `owner-${current.state.owner}.json`);
   rmSync(current.path); const old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000); utimesSync(owner, old, old);
+  expireCleanup();
   await fixture().prepare();
   assert.doesNotThrow(() => readFileSync(owner));
   await assert.rejects(f.prepare(), ChangeWatchError);
@@ -295,7 +338,7 @@ for (const mode of ['write', 'git']) {
 const write=fs.writeFileSync;let failed=false;fs.writeFileSync=(path,data,options)=>{if(${JSON.stringify(mode)}==='write'&&!failed&&options?.flag==='wx'){failed=true;throw Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'ENOSPC'})}return write(path,data,options)};
 const spawn=cp.spawnSync;cp.spawnSync=(file,args,...rest)=>file==='git'&&${JSON.stringify(mode)}==='git'?{status:null,error:Object.assign(Error('PRIVATE_FAILURE_MESSAGE'),{code:'EIO'})}:spawn(file,args,...rest);syncBuiltinESMExports();
 try{await prepareChanges('test','diagnostic','turn',[${JSON.stringify(cwd)}]);process.exitCode=1}catch{const dir=join(process.env.TEMP,'ai-setting-code-quality-review'),name=fs.readdirSync(dir).find(n=>/^[a-f0-9]{64}\\.json$/.test(n));const path=join(dir,name),text=fs.readFileSync(path,'utf8'),state=JSON.parse(text);if(state.failed!=='watch-prepare-failed'||state.errorCode!==${JSON.stringify(mode === 'write' ? 'ENOSPC' : 'EIO')}||!(/^[a-f0-9]{64}$/.test(state.owner))||text.includes('PRIVATE_FAILURE_MESSAGE'))process.exitCode=2;
-const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
+const old=new Date(Date.now()-9*86400000);fs.utimesSync(path,old,old);fs.writeFileSync(join(dir,'cleanup-completed.json'),JSON.stringify({version:1,completedAt:0}));try{await prepareChanges('test','cleanup-next','turn',[${JSON.stringify(cwd)}])}catch{}if(fs.existsSync(path))process.exitCode=3;for(const n of fs.readdirSync(dir))if(/^[a-f0-9]{64}\\.json$/.test(n))await finishWatch(JSON.parse(fs.readFileSync(join(dir,n),'utf8')));}`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       windowsHide: true, encoding: 'utf8', env: { ...process.env, TMP: temporary, TEMP: temporary, TMPDIR: temporary },
     });

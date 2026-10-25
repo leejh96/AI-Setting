@@ -15,6 +15,16 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 const preload = join(root, 'scanner.mjs');
+const scannerWorker = join(root, 'scanner-worker.mjs');
+writeFileSync(scannerWorker, `import{appendFileSync,readFileSync}from'node:fs';import{createHash}from'node:crypto';let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{
+appendFileSync(process.env.SCAN_TRACE,JSON.stringify({scanner:createHash('sha256').update(input).digest('hex')})+'\\n');
+const code=Number(process.env.SCAN_STATUS||(input.includes('fixture-secret')?42:0)),mode=process.env.SCANNER_MODE;
+if(mode==='hang'){setInterval(()=>{},1000);return;}
+if(mode==='leak-peer'||mode==='error-peer'){
+  if(input.includes('fixture-secret')){const wait=setInterval(()=>{if(readFileSync(process.env.SCAN_TRACE,'utf8').split('scannerStart').length-1>=2){clearInterval(wait);process.exitCode=mode==='error-peer'?2:42;}},10);}else setInterval(()=>{},1000);return;
+}
+setTimeout(()=>{process.exitCode=code;},mode==='parallel'?150:0);
+});`);
 const batchWorker = join(root, 'batch-worker.mjs');
 writeFileSync(batchWorker, `let input = '';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);
 process.stdin.on('end',()=>{
@@ -35,11 +45,16 @@ process.stdin.on('end',()=>{
 });`);
 writeFileSync(preload, `import cp from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 const original = cp.spawnSync;
 const spawn = cp.spawn;
 cp.spawn = (program, args, options) => {
+  if(program==='fixture-scanner'){
+    const child=spawn(process.execPath,[process.env.SCANNER_WORKER],options);
+    appendFileSync(process.env.SCAN_TRACE,JSON.stringify({scannerStart:child.pid})+'\\n');
+    child.once('close',()=>{appendFileSync(process.env.SCAN_TRACE,JSON.stringify({scannerEnd:child.pid})+'\\n');if(process.env.BATCH_MODE==='expired-after-scan'){const now=Date.now;Date.now=()=>now()+61000;}});
+    return child;
+  }
   if (program === 'git') appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ git: args[0] }) + '\\n');
   if (program === 'git' && args.includes('--batch')) {
     if(process.env.BATCH_MODE==='expired'){const now=Date.now;Date.now=()=>now()+61000;}
@@ -50,13 +65,8 @@ cp.spawn = (program, args, options) => {
   }
   return spawn(program,args,options);
 };
-if(process.env.BATCH_MODE==='stall'){const timer=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timer(fn,ms>50000?50:ms,...args);}
+if(process.env.BATCH_MODE==='stall'||process.env.SCANNER_MODE==='hang'){const timer=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>timer(fn,ms>50000?250:ms,...args);}
 cp.spawnSync = (program, args, options) => {
-  if (program === 'fixture-scanner') {
-    appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ scanner: createHash('sha256').update(options.input).digest('hex') }) + '\\n');
-    if(process.env.BATCH_MODE==='expired-after-scan'){const now=Date.now;Date.now=()=>now()+61000;}
-    return { status: Number(process.env.SCAN_STATUS || (options.input.includes('fixture-secret') ? 42 : 0)) };
-  }
   if (program === 'git') appendFileSync(process.env.SCAN_TRACE, JSON.stringify({ git: args[0] }) + '\\n');
   return original(program, args, options);
 };
@@ -67,6 +77,7 @@ function fixture({ initialCommit = true } = {}) {
   const trace = join(cwd, 'trace.log');
   const env = { ...process.env, AI_SETTING_GITLEAKS_BIN: 'fixture-scanner', SCAN_TRACE: trace,
     BATCH_WORKER: batchWorker,
+    SCANNER_WORKER: scannerWorker,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${pathToFileURL(preload).href}`.trim() };
   const git = (...args) => {
     const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
@@ -230,5 +241,33 @@ for (const mode of ['invalid-header', 'wrong-object', 'wrong-type', 'truncated',
       assert.ok(pid);
       assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
     }
+  });
+}
+
+test('서로 다른 파일은 최대 두 검사기만 동시에 실행하고 모두 검사한다', () => {
+  const f=fixture();
+  for(let i=0;i<6;i++)f.write(`code-${i}.js`,`clean file ${i}`);
+  f.git('add','--all');
+  const result=f.scan({SCANNER_MODE:'parallel'});
+  assert.equal(result.status,0,result.stderr);
+  let active=0,peak=0;
+  for(const entry of result.trace){if(entry.scannerStart){active++;peak=Math.max(peak,active);}if(entry.scannerEnd)active--;}
+  assert.equal(peak,2);assert.equal(active,0);
+  assert.equal(result.trace.filter(entry=>entry.scanner).length,6);
+  for(const entry of result.trace)if(entry.scannerStart)assert.throws(()=>process.kill(entry.scannerStart,0),{code:'ESRCH'});
+});
+
+for(const mode of ['leak-peer','error-peer','hang']){
+  test(`병렬 검사 실패는 다른 검사도 정리하고 HEAD·인덱스를 보존한다: ${mode}`,()=>{
+    const f=fixture();f.write('a-clean.js','clean peer');f.write('b-secret.js','fixture-secret synthetic');f.write('c-next.js','must not start');f.git('add','--all');
+    const before=[f.git('rev-parse','HEAD'),f.git('write-tree')];
+    const result=f.scan({SCANNER_MODE:mode});assert.equal(result.status,1);
+    if(mode==='leak-peer')assert.match(result.stderr,/시크릿 후보/);
+    if(mode==='hang')assert.match(result.stderr,/60초/);
+    assert.deepEqual([f.git('rev-parse','HEAD'),f.git('write-tree')],before);
+    assert.ok(!result.stderr.includes('fixture-secret'));
+    const starts=result.trace.filter(entry=>entry.scannerStart);assert.equal(starts.length,2);
+    for(const entry of starts)assert.throws(()=>process.kill(entry.scannerStart,0),{code:'ESRCH'});
+    for(const entry of result.trace)if(entry.batchPid)assert.throws(()=>process.kill(entry.batchPid,0),{code:'ESRCH'});
   });
 }

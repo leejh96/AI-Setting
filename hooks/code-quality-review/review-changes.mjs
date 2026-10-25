@@ -141,11 +141,18 @@ async function ready(path) {
 }
 
 function cleanupStates(directory, currentFile, currentOwner) {
+  const marker = join(directory, 'cleanup-completed.json');
+  const startedAt = Date.now();
+  try {
+    const last = JSON.parse(readFileSync(marker, 'utf8'));
+    if (last?.version === 1 && Number.isSafeInteger(last.completedAt)
+        && last.completedAt <= startedAt && startedAt - last.completedAt < 60 * 60 * 1000) return;
+  } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const protectedFiles = new Set([currentFile, currentOwner]);
   const stateName = /^[a-f0-9]{64}\.json$/;
   const ownerName = /^owner-[a-f0-9]{64}\.json$/;
-  const temporaryName = /^((?:owner-)?[a-f0-9]{64}\.json)\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/;
+  const temporaryName = /^((?:(?:owner-)?[a-f0-9]{64}|cleanup-completed)\.json)\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/;
   function read(name) {
     try {
       const value = JSON.parse(readFileSync(join(directory, name), 'utf8'));
@@ -184,6 +191,7 @@ function cleanupStates(directory, currentFile, currentOwner) {
         } else {
           const match = name.match(temporaryName);
           if (!match || protectedFiles.has(match[1])) continue;
+          if (match[1] === 'cleanup-completed.json') { unlinkSync(join(directory, name)); continue; }
           let target = read(match[1]);
           if (ownerName.test(match[1]) && stateName.test(target?.file)) target = read(target.file) ?? null;
           if (target === undefined || (target && isTerminal(target))) unlinkSync(join(directory, name));
@@ -191,6 +199,7 @@ function cleanupStates(directory, currentFile, currentOwner) {
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
   } finally { entries.closeSync(); }
+  saveWatch(marker, { version: 1, completedAt: Date.now() });
 }
 
 async function startChanges(client, session, turn, paths, canStart) {
