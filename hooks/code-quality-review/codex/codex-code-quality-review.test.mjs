@@ -113,6 +113,9 @@ test('첫 Stop은 본문 대신 적용 판단과 절대 REVIEW 경로를 전달�
   assert.match(output.reason, /서브에이전트/);
   assert.match(output.reason, /동작 설정/);
   assert.match(output.reason, /문서만 변경/);
+  assert.match(output.reason, /적용 전 답변·승인 대기·중단 요청[\s\S]*\[code-quality-review:skipped\]/);
+  assert.match(output.reason, /적용 대상인 구현·수정 작업에서 답변·승인 대기나 중단 요청[\s\S]*\[code-quality-review:blocked\]/);
+  assert.match(output.reason, /중단 요청 시에는 추가 검토·수정을 진행하지 마세요/);
   assert.match(output.reason, /파일 읽기나 저장소 전체 검색은 하지 마세요/);
   assert.match(output.reason, /\[code-quality-review:skipped\]/);
   assert.match(output.reason, /읽을 수 없으면[\s\S]*\[code-quality-review:blocked\]/);
