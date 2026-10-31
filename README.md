@@ -13,10 +13,33 @@ ai-setting/
 │   ├── prompt-secret-checker/  # 사용자 입력 검사와 OS별 README
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
 │   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
+├── skills/
+│   └── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
-공통 지침은 `AGENTS.md` 하나로 관리합니다. 스킬, MCP, 도구별 설정과 플러그인은 실제로 추가할 때 필요한 구조를 마련합니다.
+공통 지침은 `AGENTS.md` 하나로 관리합니다. 스킬 원본은 `skills/`에서 관리합니다. MCP, 도구별 설정과 플러그인은 실제로 추가할 때 필요한 구조를 마련합니다.
+
+## AGENTS.md 최적화 스킬
+
+[`agents-md-optimizer`](skills/agents-md-optimizer/SKILL.md)는 전역 지침과 프로젝트 지침을 각각의 적용 범위에 맞게 평가하고 수정합니다. 전역 지침은 여러 프로젝트에서 공통으로 쓸 수 있는지, 프로젝트 지침은 해당 저장소의 작업 방법과 제약을 정확히 담고 있는지 확인합니다. 규칙을 삭제하거나 완화하면 어떤 행동이 달라지는지 설명하며, 분석이나 수정안만 요청하면 원본을 바꾸지 않습니다. 파일 크기 비교 도구와 실제 작업 비교 방법을 제공하고, 글자 수가 줄었다는 이유만으로 모델 성능이 좋아졌다고 판단하지 않습니다.
+
+같은 스킬을 Codex와 Antigravity에 각각 전역 등록할 수 있습니다. 이 환경에서 사용하는 설치 위치와 호출 방법은 다음과 같습니다.
+
+| 도구 | 전역 설치 위치 | 명시적 호출 |
+| --- | --- | --- |
+| Codex | `~/.codex/skills/agents-md-optimizer` | `$agents-md-optimizer` |
+| Antigravity | `~/.gemini/config/skills/agents-md-optimizer` | `/agents-md-optimizer` |
+
+Codex의 현재 설치는 저장소 원본에 연결하며, Antigravity에는 같은 스킬 폴더를 복사합니다. 연결 설치는 원본 변경을 공유하고, 복사 설치는 원본 수정 후 다시 반영해야 합니다. 기존 항목을 임의로 덮어쓰지 말고, 연결 원본을 이동할 때는 연결도 갱신하세요. 저장소를 받는 것만으로 전역에 설치되지는 않습니다.
+
+Codex의 최신 공식 문서는 사용자 스킬 위치로 `~/.agents/skills`를 안내합니다. 새 환경에서는 실제 지원 경로를 확인하고 한 곳에만 등록해 중복 노출을 피하세요. 위 Codex 경로는 현재 설치에서 사용하는 호환 경로입니다. [Codex 공식 안내](https://developers.openai.com/codex/skills), [Antigravity 공식 안내](https://antigravity.google/docs/skills?app=antigravity).
+
+등록 후 새 세션에서 `$agents-md-optimizer 이 AGENTS.md의 최적화안을 만들어줘`처럼 요청할 수 있습니다. 실제 지침 수정과 다른 도구로의 동기화는 요청 범위를 따릅니다.
+
+- 전역: `$agents-md-optimizer 전역 AGENTS.md를 여러 프로젝트에서 쓰기 좋게 최적화해줘`
+- 프로젝트: `$agents-md-optimizer 이 프로젝트 AGENTS.md를 최적화해줘. 전역 지침은 참고만 해줘`
+- 함께: `$agents-md-optimizer 전역과 이 프로젝트 지침을 함께 보고 중복·충돌과 수정안을 설명해줘`
 
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
