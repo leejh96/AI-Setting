@@ -14,7 +14,8 @@ ai-setting/
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
 │   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 ├── skills/
-│   └── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
+│   ├── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
+│   └── decision-table-dev/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -40,6 +41,19 @@ Codex의 최신 공식 문서는 사용자 스킬 위치로 `~/.agents/skills`�
 - 전역: `$agents-md-optimizer 전역 AGENTS.md를 여러 프로젝트에서 쓰기 좋게 최적화해줘`
 - 프로젝트: `$agents-md-optimizer 이 프로젝트 AGENTS.md를 최적화해줘. 전역 지침은 참고만 해줘`
 - 함께: `$agents-md-optimizer 전역과 이 프로젝트 지침을 함께 보고 중복·충돌과 수정안을 설명해줘`
+
+## 결정 테이블 기반 구현·테스트 스킬
+
+[`decision-table-dev`](skills/decision-table-dev/SKILL.md)는 조건에 따라 결과가 갈리는 백엔드 API와 비즈니스 로직을 다룹니다. 코드 작성 전에 조건과 기대 결과를 정리한 결정 테이블(Decision Table)을 만들고, 권한·입력·상태·외부 연동에 따른 반환 결과와 데이터 변경을 확인합니다.
+
+미확정 업무 규칙은 질문으로 분리하고, 확정된 분기는 구현과 테스트에 연결합니다. 차단 조건은 상태 변경이나 외부 호출 전에 처리하도록 검사 순서를 확인하며, 테스트는 반환 결과와 부수효과를 함께 검증합니다. 설계·분석·리뷰만 요청하면 코드를 수정하지 않습니다. 분기 없는 단순 조회나 업무 결과에 영향을 주지 않는 문구·설정 변경에는 사용하지 않습니다.
+
+| 도구 | 전역 설치 위치 | 명시적 호출 |
+| --- | --- | --- |
+| Codex | `~/.codex/skills/decision-table-dev` | `$decision-table-dev` |
+| Antigravity | `~/.gemini/config/skills/decision-table-dev` | `/decision-table-dev` |
+
+이 스킬도 위의 AGENTS.md 최적화 스킬과 같은 복사 방식으로 설치·갱신합니다. 예를 들어 `$decision-table-dev 이 API의 권한·상태별 분기를 정리하고 구현과 테스트에 반영해줘`처럼 요청합니다.
 
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
