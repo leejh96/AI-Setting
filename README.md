@@ -31,7 +31,7 @@ ai-setting/
 | Codex | `~/.codex/skills/agents-md-optimizer` | `$agents-md-optimizer` |
 | Antigravity | `~/.gemini/config/skills/agents-md-optimizer` | `/agents-md-optimizer` |
 
-Codex의 현재 설치는 저장소 원본에 연결하며, Antigravity에는 같은 스킬 폴더를 복사합니다. 연결 설치는 원본 변경을 공유하고, 복사 설치는 원본 수정 후 다시 반영해야 합니다. 기존 항목을 임의로 덮어쓰지 말고, 연결 원본을 이동할 때는 연결도 갱신하세요. 저장소를 받는 것만으로 전역에 설치되지는 않습니다.
+Codex와 Antigravity 모두 저장소의 스킬 폴더를 각 전역 설치 위치에 직접 복사합니다. 심볼릭 링크는 사용하지 않습니다. 저장소 원본을 수정한 뒤에는 두 설치 위치에 다시 복사해야 반영됩니다. 기존 항목을 교체하기 전에는 별도 수정 여부를 확인하고 복구할 수 있도록 백업하세요. 저장소를 받는 것만으로 전역에 설치되지는 않습니다.
 
 Codex의 최신 공식 문서는 사용자 스킬 위치로 `~/.agents/skills`를 안내합니다. 새 환경에서는 실제 지원 경로를 확인하고 한 곳에만 등록해 중복 노출을 피하세요. 위 Codex 경로는 현재 설치에서 사용하는 호환 경로입니다. [Codex 공식 안내](https://developers.openai.com/codex/skills), [Antigravity 공식 안내](https://antigravity.google/docs/skills?app=antigravity).
 
