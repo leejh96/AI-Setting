@@ -15,7 +15,8 @@ ai-setting/
 │   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 ├── skills/
 │   ├── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
-│   └── decision-table-dev/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
+│   ├── decision-table-dev/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
+│   └── technical-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -54,6 +55,17 @@ Codex의 최신 공식 문서는 사용자 스킬 위치로 `~/.agents/skills`�
 | Antigravity | `~/.gemini/config/skills/decision-table-dev` | `/decision-table-dev` |
 
 이 스킬도 위의 AGENTS.md 최적화 스킬과 같은 복사 방식으로 설치·갱신합니다. 예를 들어 `$decision-table-dev 이 API의 권한·상태별 분기를 정리하고 구현과 테스트에 반영해줘`처럼 요청합니다.
+
+## 기술 조사 스킬
+
+[`technical-research`](skills/technical-research/SKILL.md)는 여러 프로젝트에서 공식 근거 확인, 기술 선택, 버전 호환성과 상충하는 기술 주장을 조사하는 전역 스킬의 원본입니다. 특정 저장소 구조나 오케스트레이션 스킬에 의존하지 않습니다. Context7을 사용할 수 있으면 라이브러리 문서 조사에 우선 활용하고, 사용할 수 없거나 근거가 부족하면 공식 문서·릴리스 노트·소스로 확인합니다.
+
+단순 조회에는 짧게 답하고, 버전·구성요소 조합이 결론에 영향을 줄 때만 호환성을 조사합니다. 공식 지원 여부와 실제 실행 확인을 구분하고, 결론에 근거와 적용 조건을 연결합니다. 조사만 요청하면 코드·설정을 바꾸지 않으며, 사용자 요청이나 프로젝트 작업 규칙이 있을 때만 조사 문서를 기록합니다.
+
+이 스킬도 위의 스킬과 같은 복사 방식으로 전역 설치·갱신합니다. Codex의 현재 설치에서 사용하는 호환 경로는 `~/.codex/skills/technical-research`, Antigravity 경로는 `~/.gemini/config/skills/technical-research`입니다. 새 환경에서는 각 도구가 지원하는 경로를 확인하고 중복 등록을 피하세요. 저장소에 원본을 추가하는 것만으로 전역 설치되지는 않습니다.
+
+- Codex: `$technical-research 현재 프로젝트의 클라이언트와 서버 버전이 공식 지원 조합인지 조사해줘`
+- Antigravity: `/technical-research 이 라이브러리의 공식 지원 환경과 선택 시 제약을 조사해줘`
 
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
