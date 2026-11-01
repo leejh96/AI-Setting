@@ -30,9 +30,25 @@ function interruptsParagraph(line) {
     || listMarker(line, true);
 }
 
+function withoutMemoryCitationFooter(text) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.lastIndexOf('<oai-mem-citation>');
+  if (start < 1) return text;
+  const footer = lines.slice(start);
+  const endEntries = footer.indexOf('</citation_entries>');
+  if (footer[1] !== '<citation_entries>' || endEntries < 3
+      || footer[endEntries + 1] !== '<rollout_ids>'
+      || footer.at(-2) !== '</rollout_ids>' || footer.at(-1) !== '</oai-mem-citation>') return text;
+  const entries = footer.slice(2, endEntries);
+  const ids = footer.slice(endEntries + 2, -2);
+  if (!entries.every(line => /^[A-Za-z0-9_./-]+:\d+-\d+\|note=\[[^\[\]<>]+\]$/.test(line))
+      || !ids.every(line => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(line))) return text;
+  return lines.slice(0, start).join('\n').trimEnd();
+}
+
 export function hasTerminalReviewStatus(message) {
   if (typeof message !== 'string') return false;
-  const text = message.trimEnd();
+  const text = withoutMemoryCitationFooter(message.trimEnd());
   if (!/(?:^|\r?\n)\[code-quality-review:(clean|skipped|blocked)\]$/.test(text)) return false;
 
   const listIndents = [];

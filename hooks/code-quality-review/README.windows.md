@@ -54,12 +54,12 @@ Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks
 ## 검증과 갱신
 
 ```powershell
-node --test hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
+node --test hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/review-status.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
 ```
 
 자동 테스트는 도구별 입력·종료 표식·오류 처리와 생성 명령을 검사합니다. Codex 테스트는 기본 `powershell.exe`를 사용합니다. 실제 Codex가 다른 PowerShell을 사용한다면 테스트할 때만 `CODE_QUALITY_REVIEW_TEST_SHELL`에 그 실행 파일 경로를 지정합니다. Antigravity 테스트는 생성한 EncodedCommand를 직접 실행하며, 이는 모델의 전체 검토 반복을 증명하지는 않습니다.
 
-새 대화에서 작은 구현을 요청한 뒤 현재 파일 재읽기, 문제 수정·테스트, `revised` 이후 별도 회차의 `clean` 종료를 확인합니다. 터미널·서브에이전트가 작업 폴더 안의 코드를 수정한 경우도 검토해야 합니다. 변경 없는 질문·기존 문서만 수정·읽기 전용 리뷰·답변 대기에서는 추가 검토 프롬프트와 상태 표식 없이 종료해야 합니다. 검증을 실행할 수 없는 상황은 통과로 보고하지 않아야 합니다. CLI와 데스크톱 앱의 확인 결과를 구분합니다.
+새 대화에서 작은 구현을 요청한 뒤 현재 파일 재읽기, 문제 수정·테스트, `revised` 이후 별도 회차의 `clean` 종료를 확인합니다. 터미널·서브에이전트가 작업 폴더 안의 코드를 수정한 경우도 검토해야 합니다. 변경 없는 질문·기존 문서만 수정·읽기 전용 리뷰와 적용 대상 수정 전의 답변·승인 대기에서는 추가 검토 프롬프트와 상태 표식 없이 종료해야 합니다. 이미 적용 대상인 변경을 수행한 뒤 답변·승인을 기다리는 경우에는 `blocked`로 종료하고 미완료 범위를 보고해야 합니다. 검증을 실행할 수 없는 상황은 통과로 보고하지 않아야 합니다. CLI와 데스크톱 앱의 확인 결과를 구분합니다.
 
 2026-10-23에 Windows, Node.js 24.14.0, Codex CLI 0.160.0과 Antigravity CLI의 Gemini 3.8 Flash Medium(`gemini-3.8-flash-medium`)에서 파일 감시 방식을 검증했습니다. Codex에서 일반 질문은 검토 요청 없이 종료했고, 실제 서브에이전트가 코드를 수정한 요청은 현재 파일 재읽기·기존 테스트·품질 검토 후 종료했습니다. Flash에서도 무변경 질문의 검토 요청 0회, 코드 수정의 검토 요청 1회와 종료를 확인했습니다. 두 도구 모두 시험용 감시 프로세스 종료를 수정 없음으로 통과시키지 않았고, 실패 상태를 보존하며 추가 검토 프롬프트 없이 원래 작업을 종료했습니다. Flash의 미완료 경고는 실행 로그에서 확인했습니다. 기존 전역 설정과 시크릿 검사 훅은 보존했습니다.
 

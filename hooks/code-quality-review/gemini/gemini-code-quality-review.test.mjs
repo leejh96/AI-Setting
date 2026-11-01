@@ -4,8 +4,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, isAbsolute, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { stopSession, finishWatch } from '../review-changes.mjs';
+import { createWatchTestRoot } from '../test-temp.mjs';
 
 const HOOK_PATH = fileURLToPath(new URL('./gemini-code-quality-review.mjs', import.meta.url));
 const REVIEW = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
@@ -13,7 +13,7 @@ const REQUEST = '[code-quality-review:request]\nA recorded review request';
 const user = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: '구현 요청' };
 const model = (content) => ({ type: 'PLANNER_RESPONSE', source: 'MODEL', content });
 const request = { type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: REQUEST };
-const TEST_ROOT = mkdtempSync(join(tmpdir(), 'quality-gemini-state-'));
+const { root: TEST_ROOT } = createWatchTestRoot();
 const TEST_ENV = { ...process.env, TMP: TEST_ROOT, TEMP: TEST_ROOT, TMPDIR: TEST_ROOT };
 after(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
@@ -76,6 +76,14 @@ async function turn(entries, overrides = {}) {
   });
   return output;
 }
+
+test('필수 메모리 출처가 뒤따라도 현재 검토의 종료 표식을 인정한다', async () => {
+  const footer = '<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[verified]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>';
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    assert.deepEqual(await turn([user, model('구현 완료'), request,
+      model(`검토 결과\n[code-quality-review:${status}]\n\n${footer}`)]), {});
+  }
+});
 
 function continues(output, expectedReviewPath) {
   assert.equal(output.decision, 'continue');

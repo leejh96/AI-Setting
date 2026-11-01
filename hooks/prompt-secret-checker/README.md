@@ -14,6 +14,7 @@ Gitleaks의 기본 탐지 규칙을 사용하며 별도 LLM 호출이나 키의 
   Codex는 출력 없이 종료하고, Antigravity는 빈 주입 응답을 반환합니다.
 - 시크릿 후보 또는 검사 오류가 있으면 Codex는 요청을 차단하고 Antigravity는 보안 경고를 주입합니다.
   가짜 예제라도 탐지 규칙에 맞으면 같은 처리를 받습니다.
+- 경고는 실제 후보 탐지와 검사 실패·시간 초과를 구분합니다. Antigravity 경고를 모델 전송 차단으로 표현하지 않습니다.
 - Gitleaks 미설치, 실행 오류, 30초 시간 초과도 검사 오류로 처리합니다.
 - Codex는 잘못된 훅 입력도 차단합니다. Antigravity는 훅 입력·대화 기록을 읽거나 해석하지 못하면 경고 없이 진행합니다.
 - 차단 안내와 경고에는 입력 원문, 시크릿 값, Gitleaks 로그를 포함하지 않습니다.
@@ -33,7 +34,8 @@ hooks/prompt-secret-checker/
 │   └── codex-secret-checker.mjs
 ├── gemini/
 │   └── gemini-secret-checker.mjs
-├── secret-checker.mjs       # 공통 검사기와 차단 사유
+├── secret-checker.mjs       # 공통 검사기와 중립 검사 사유
+├── prompt-secret-checker.test.mjs # 도구별 응답·설정 생성·명령 실행 검사
 ├── gitleaks.toml            # 공통 탐지 규칙
 └── README.md
 ```
@@ -56,7 +58,15 @@ Linux에서는 공식 릴리스나 해당 운영체제의 설치 방법을 사�
 
 ## 검증
 
-Antigravity 기록 읽기의 회귀 테스트는 `node --test hooks/prompt-secret-checker/gemini/gemini-secret-checker.test.mjs`로 실행합니다.
+회귀 테스트는 아래 명령으로 실행합니다.
+
+```sh
+node --test hooks/prompt-secret-checker/prompt-secret-checker.test.mjs hooks/prompt-secret-checker/gemini/gemini-secret-checker.test.mjs
+```
+
+공통 검사 결과의 도구별 응답과 비밀값 비노출, 설정 생성 명령, Antigravity 기록 읽기를 검사합니다.
+생성 명령은 macOS에서 `/bin/sh`, Windows에서 Codex는 PowerShell, Antigravity는 생성된 직접 명령 또는 인코딩 실행기로 실행합니다.
+다른 OS에서 Windows 명령의 문자열·인코딩을 검사하는 것은 실제 Windows 실행 검증을 대신하지 않습니다.
 테스트의 임시 대화 기록과 합성 입력은 실행 후 정리합니다. 실제로 확인한 범위와 확인하지 못한 부분은 작업 결과에 기록합니다.
 검사 동작을 변경할 때는 정상 입력, 탐지, 비밀값 비노출과 검사 실패 시 차단을 확인합니다.
 실제 인증 키 대신 가상의 문자열을 사용합니다.

@@ -2,6 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hasTerminalReviewStatus } from './review-status.mjs';
 
+const memoryFooter = ['<oai-mem-citation>', '<citation_entries>',
+  'MEMORY.md:10-12|note=[verified workflow]',
+  'skills/example/SKILL.md:2-3|note=[project conventions]',
+  '</citation_entries>', '<rollout_ids>',
+  '01a192af-b0fc-7812-ad30-3d47668c1bbe', '</rollout_ids>', '</oai-mem-citation>'].join('\n');
+
 const openFencePrefixes = ['```text\n', '~~~text\n', '   ```text\r\n',
   '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
   '```text\n    ```\n', '- item\n\n```text\n',
@@ -14,6 +20,43 @@ const terminalPrefixes = ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~
   '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
   '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
   '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n'];
+
+test('필수 메모리 출처 블록 하나만 분리하고 기존 본문 종료 조건은 유지한다', () => {
+  const noIds = memoryFooter.replace('01a192af-b0fc-7812-ad30-3d47668c1bbe\n', '');
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const marker = `[code-quality-review:${status}]`;
+    for (const footer of [memoryFooter, noIds, memoryFooter.replaceAll('\n', '\r\n')]) {
+      for (const prefix of terminalPrefixes) assert.equal(hasTerminalReviewStatus(prefix + marker + '\n\n' + footer), true);
+      for (const prefix of [...openFencePrefixes, '> quoted\n', '> quoted\ncontinued\n']) {
+        assert.equal(hasTerminalReviewStatus(prefix + marker + '\n\n' + footer), false, prefix);
+      }
+      assert.equal(hasTerminalReviewStatus('> ' + marker + '\n\n' + footer), false);
+      assert.equal(hasTerminalReviewStatus('    ' + marker + '\n\n' + footer), false);
+    }
+  }
+  assert.equal(hasTerminalReviewStatus('[code-quality-review:revised]\n' + memoryFooter), false);
+});
+
+test('임의·손상·중복 메타데이터와 표식 뒤 설명은 종료를 허용하지 않는다', () => {
+  const malformed = [
+    '<other>metadata</other>',
+    memoryFooter.replace('MEMORY.md:10-12|note=[verified workflow]', 'unstructured note'),
+    memoryFooter.replace('MEMORY.md:10-12|note=[verified workflow]\n', '').replace('skills/example/SKILL.md:2-3|note=[project conventions]\n', ''),
+    memoryFooter.replace('01a192af-b0fc-7812-ad30-3d47668c1bbe', 'unknown-id'),
+    memoryFooter.replace('</citation_entries>', '</wrong>'),
+    memoryFooter.replace('</oai-mem-citation>', ''),
+    memoryFooter + '\nextra explanation',
+    memoryFooter + '\n' + memoryFooter,
+    'extra explanation\n' + memoryFooter,
+    '```xml\n' + memoryFooter + '\n```',
+    memoryFooter.replaceAll('\n', '\n> '),
+  ];
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    for (const footer of malformed) {
+      assert.equal(hasTerminalReviewStatus(`[code-quality-review:${status}]\n\n${footer}`), false, footer);
+    }
+  }
+});
 
 test('인용문의 이어지는 문단은 종료 표식으로 인정하지 않고 인용 밖 표식만 허용한다', () => {
   const quoted = ['> quoted paragraph\n', '> quoted paragraph\ncontinued\n',

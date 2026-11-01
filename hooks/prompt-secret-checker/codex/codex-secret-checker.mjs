@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { getPromptBlockReason } from '../secret-checker.mjs';
+import { getPromptScanWarning } from '../secret-checker.mjs';
 
 function block(reason) {
   process.stdout.write(`${JSON.stringify({ decision: 'block', reason, systemMessage: reason })}\n`);
@@ -8,9 +8,10 @@ function block(reason) {
 
 function printConfig() {
   const quote = process.platform === 'win32'
-    ? (value) => `"${value.replaceAll('\\', '/')}"`
+    ? (value) => `'${value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)}'`
     : (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const command = `${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))}`;
+  const invocation = `${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))}`;
+  const command = process.platform === 'win32' ? `& ${invocation}` : invocation;
   process.stdout.write(`${JSON.stringify({
     description: '사용자 입력의 시크릿 후보를 Gitleaks로 검사합니다.',
     hooks: {
@@ -33,8 +34,8 @@ function runHook() {
     return;
   }
 
-  const reason = getPromptBlockReason(event.prompt);
-  if (reason) block(reason);
+  const warning = getPromptScanWarning(event.prompt);
+  if (warning) block(`요청을 차단했습니다. ${warning}`);
 }
 
 try {

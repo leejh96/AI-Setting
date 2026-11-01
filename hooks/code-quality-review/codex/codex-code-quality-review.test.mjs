@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -15,12 +16,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stopSession, finishWatch } from '../review-changes.mjs';
+import { createWatchTestRoot } from '../test-temp.mjs';
 
 const NODE_PATH = process.execPath;
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
 const HOOK_PATH = join(HOOK_DIR, 'codex-code-quality-review.mjs');
 const REVIEW_PATH = join(HOOK_DIR, '..', 'REVIEW.md');
-const TEST_ROOT = mkdtempSync(join(tmpdir(), 'quality-codex-state-'));
+const { root: TEST_ROOT } = createWatchTestRoot();
 const TEST_ENV = { ...process.env, TMP: TEST_ROOT, TEMP: TEST_ROOT, TMPDIR: TEST_ROOT };
 after(async () => {
   const directory = join(TEST_ROOT, 'ai-setting-code-quality-review');
@@ -75,7 +77,7 @@ function assertWarning(output) {
 }
 
 function copyHookToTemp({ review } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'codex quality hook-'));
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), 'codex quality hook-'));
   mkdirSync(join(directory, 'codex'));
   const hookPath = join(directory, 'codex', 'codex-code-quality-review.mjs');
   copyFileSync(HOOK_PATH, hookPath);
@@ -100,6 +102,15 @@ function assertReviewRequest(output, hookPath = HOOK_PATH) {
   assert.ok(!output.reason.includes(readFileSync(reviewPath, 'utf8').trim()));
   assert.match(output.reason, /이번 회차에 실제로 읽고/);
 }
+
+test('필수 메모리 출처가 뒤따라도 검토 종료 표식을 인정한다', async () => {
+  const footer = '<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[verified]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>';
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    const output = await runEvent(HOOK_PATH, { hook_event_name: 'Stop', stop_hook_active: true,
+      last_assistant_message: `검토 결과\n[code-quality-review:${status}]\n\n${footer}` });
+    assert.deepEqual(output, {});
+  }
+});
 
 test('첫 Stop은 본문 대신 적용 판단과 절대 REVIEW 경로를 전달한다', async () => {
   const output = await runEvent(HOOK_PATH, {

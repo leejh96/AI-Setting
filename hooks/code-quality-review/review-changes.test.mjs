@@ -1,7 +1,6 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import childProcess, { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -10,9 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareChanges, checkChanges, stopChanges, stopSession, finishWatch, requestWatch, watchErrorCode, ChangeWatchError } from './review-changes.mjs';
+import { createWatchTestRoot } from './test-temp.mjs';
 
 const previous = { TMP: process.env.TMP, TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR, NODE_OPTIONS: process.env.NODE_OPTIONS };
-const originalTmp = tmpdir(), root = mkdtempSync(join(originalTmp, 'quality-watch-test-'));
+const { parent: originalTmp, root } = createWatchTestRoot();
 process.env.TMP = process.env.TEMP = process.env.TMPDIR = root;
 async function cleanup() {
   const directory = join(root, 'ai-setting-code-quality-review');

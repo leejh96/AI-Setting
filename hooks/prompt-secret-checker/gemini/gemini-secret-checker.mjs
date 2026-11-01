@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { getPromptBlockReason } from '../secret-checker.mjs';
+import { getPromptScanWarning } from '../secret-checker.mjs';
 
 function respondPreInvocation(injectSteps = []) {
   process.stdout.write(`${JSON.stringify({ injectSteps })}\n`);
@@ -8,13 +8,22 @@ function respondPreInvocation(injectSteps = []) {
 
 function printConfig() {
   const quote = process.platform === 'win32'
-    ? (value) => `"${value.replaceAll('\\', '/')}"`
+    ? (value) => `'${value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)}'`
     : (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const gitleaksBin = process.env.AI_SETTING_GITLEAKS_BIN || '/opt/homebrew/bin/gitleaks';
-  const prefix = process.platform === 'win32'
-    ? `set AI_SETTING_GITLEAKS_BIN=${quote(gitleaksBin)} && `
-    : `AI_SETTING_GITLEAKS_BIN=${quote(gitleaksBin)} `;
-  const command = `${prefix}${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))}`;
+  const scriptPath = fileURLToPath(import.meta.url);
+  const invocation = `${quote(process.execPath)} ${quote(scriptPath)}`;
+  let command;
+  if (process.platform === 'win32') {
+    const gitleaksBin = process.env.AI_SETTING_GITLEAKS_BIN;
+    const paths = [process.execPath, scriptPath].map(value => value.replaceAll('\\', '/'));
+    const direct = !gitleaksBin && paths.every(value => /^[a-z]:\//i.test(value) && !/[^\w:./-]/.test(value));
+    const prefix = gitleaksBin ? `$env:AI_SETTING_GITLEAKS_BIN = ${quote(gitleaksBin)}; ` : '';
+    command = direct ? paths.join(' ')
+      : `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`${prefix}& ${invocation}`, 'utf16le').toString('base64')}`;
+  } else {
+    const gitleaksBin = process.env.AI_SETTING_GITLEAKS_BIN || '/opt/homebrew/bin/gitleaks';
+    command = `AI_SETTING_GITLEAKS_BIN=${quote(gitleaksBin)} ${invocation}`;
+  }
 
   process.stdout.write(`${JSON.stringify({
     'ai-setting-secret-checker': {
@@ -84,7 +93,7 @@ function runHook() {
     if (event.transcriptPath && existsSync(event.transcriptPath)) {
       try {
         const input = latestUserInput(event.transcriptPath);
-        if (input !== null) warning = getPromptBlockReason(input);
+        if (input !== null) warning = getPromptScanWarning(input);
       } catch {
         // 대화 기록 파싱 오류 시 정상 진행
       }
@@ -93,7 +102,7 @@ function runHook() {
     if (warning) {
       respondPreInvocation([
         {
-          ephemeralMessage: `[보안 경고] 사용자의 최신 입력에서 시크릿 후보가 감지되었습니다 (${warning}). 이 비밀값을 코드, 도구 호출 인자, 터미널 명령, 파일 저장 등에 절대 사용하거나 출력하지 마시고, 사용자에게 시크릿 노출 위험을 알리고 작업을 즉시 중단하세요.`,
+          ephemeralMessage: `[보안 경고] ${warning} 입력에 포함될 수 있는 비밀값을 코드, 도구 호출 인자, 터미널 명령, 파일 저장 등에 절대 사용하거나 출력하지 마시고, 사용자에게 위 사유를 알리고 작업을 즉시 중단하세요. 이 경고는 모델 전송을 차단하지 않습니다.`,
         },
       ]);
     } else {
