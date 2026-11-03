@@ -11,6 +11,8 @@ const state = JSON.parse(readFileSync(path, 'utf8'));
 if (state.version !== 2 || state.phase !== 'starting' || state.failed) process.exit(1);
 const excluded = new Set(['.git', '.hg', '.svn', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', '.next', 'dist', 'build', 'coverage', 'target']);
 const probePattern = /^\.ai-setting-quality-probe-[a-f0-9-]{36}\.tmp$/;
+// Git ignore rules often hide working backups; their names trigger review, never deletion.
+const backupPattern = /(?:^|\/)(?:backups?(?:[-_.][^/]*)?|[^/]+\.(?:bak|backup|orig|rej)(?:[-_.][^/]*)?|[^/]+~)(?:\/|$)/i;
 let closing = false;
 let generation = 0;
 const roots = [];
@@ -43,9 +45,7 @@ function eligible(root, filename, eventType) {
     full = resolve(root.path, filename); rel = relative(root.path, full); parts = rel.split(sep);
   }
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw Error('Invalid event path');
-  if (parts.some((part) => excluded.has(part) || probePattern.test(part))
-      || /\.(md|rst|adoc)$/i.test(rel)
-      || /^(readme|changelog|license|licence|notice|authors|contributing)(\..*)?$/i.test(parts.at(-1))) return null;
+  if (parts.some((part) => excluded.has(part) || probePattern.test(part))) return null;
   full ??= resolve(root.path, rel);
   const stateRel = relative(dirname(path), full);
   if (!stateRel.startsWith(`..${sep}`) && stateRel !== '..' && !isAbsolute(stateRel)) return null;
@@ -93,7 +93,8 @@ function flush(root) {
         if (Date.now() > deadline) throw Error('Event drain timeout');
         const requested = root.pending; root.pending = new Set();
         const names = [...requested];
-        if (state.phase === 'starting' && names.some(name => root.tracked.has(name))) { markEdited(); break; }
+        if (names.some(name => backupPattern.test(name))
+            || (state.phase === 'starting' && names.some(name => root.tracked.has(name)))) { markEdited(); break; }
         let skip;
         try { skip = root.git ? await ignored(root, names) : new Set(); }
         catch (error) { if (closing || state.changed || state.failed) return; throw error; }

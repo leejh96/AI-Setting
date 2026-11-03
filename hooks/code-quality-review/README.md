@@ -1,6 +1,6 @@
 # Codex·Gemini 완료 전 코드 품질 검토
 
-Codex와 Gemini/Antigravity의 `Stop` 훅이 같은 대화에 검토 지시를 전달합니다. 코드·스크립트·동작 설정을 변경한 구현 요청에서 요구사항, AI 슬롭, 과잉 설계, 중복 구현, 민감정보 노출을 포함한 보안과 버전 호환성을 점검합니다. 문제가 있으면 수정·검증 후 새 회차에서 재검토하고, 수정 없는 회차에서 미해결 문제가 없고 필요한 검증이 충족되면 종료합니다. 별도 모델·API 키·패키지는 필요하지 않으며 Node.js 22 이상을 사용합니다.
+Codex와 Gemini/Antigravity의 `Stop` 훅이 같은 대화에 검토 지시를 전달합니다. 코드·스크립트·동작 설정·문서·테스트·작업용 파일을 변경한 요청에서 산출물의 실제 용도와 잔여물을 확인하고, 변경에 해당하는 요구사항·AI 슬롭·과잉 설계·중복 구현·보안·버전 호환성을 점검합니다. 문제가 있으면 수정·검증 후 새 회차에서 재검토하고, 수정 없는 회차에서 미해결 문제가 없고 필요한 검증이 충족되면 종료합니다. 별도 모델·API 키·패키지는 필요하지 않으며 Node.js 22 이상을 사용합니다.
 
 이 저장소의 `gemini/`는 기존 secret checker와 같은 **Google Antigravity용**입니다. 별도 제품인 Gemini CLI의 `AfterAgent`나 `.gemini/settings.json` 설정과는 구분합니다.
 
@@ -33,7 +33,7 @@ Git ignore 분류에는 수집한 이벤트 집합을 요청 스냅샷으로 재
 
 실행 중인 감시는 코드를 다시 불러오지 않으므로 워커 수정은 다음 사용자 요청의 새 감시부터 적용됩니다.
 
-Git 프로젝트는 저장소 루트, Git이 없으면 작업 폴더를 재귀 감시합니다. 문서(`md/rst/adoc`, README 등), `.git`·`node_modules`·`.venv`·`dist`·`build`·`coverage`·`target` 등 생성/의존성 폴더, Git ignored 경로와 링크 대상의 변경은 제외합니다. Git 추적 경로는 ignore 패턴과 일치해도 포함합니다. 일반 txt·mdx는 대상입니다. 폴더 삭제·이동·교체와 분류가 불명확한 구조 변경은 보수적으로 수정으로 판단할 수 있습니다. 감시 범위 밖의 수정은 감지하지 않으며, 사용자나 다른 프로그램이 같은 범위를 수정한 경우 AI의 수정과 구분하지 못합니다.
+Git 프로젝트는 저장소 루트, Git이 없으면 작업 폴더를 재귀 감시합니다. Markdown·README 등 문서 변경도 포함합니다. `.git`·`node_modules`·`.venv`·`dist`·`build`·`coverage`·`target` 등 생성/의존성 폴더, Git ignored 경로와 링크 대상의 변경은 제외합니다. Git 추적 경로와 백업 후보 이름은 ignore 패턴과 일치해도 포함합니다. 백업 후보는 `backup`·`backups` 및 `backup-날짜` 같은 경로, `.bak`·`.backup`·`.orig`·`.rej` 확장자(날짜 접미사 포함), 끝이 `~`인 이름입니다. 생성/의존성 폴더와 링크 내부의 제외는 백업에도 우선합니다. 후보 감지는 검토를 시작할 뿐 파일을 삭제하지 않습니다. 폴더 삭제·이동·교체와 분류가 불명확한 구조 변경은 보수적으로 수정으로 판단할 수 있습니다. 감시 범위 밖의 수정은 감지하지 않으며, 사용자나 다른 프로그램이 같은 범위를 수정한 경우 AI의 수정과 구분하지 못합니다.
 
 준비와 Stop에서 감시 응답성을 확인하기 위해 각 감시 루트에 `.ai-setting-quality-probe-<UUID>.tmp` 임시 파일을 생성·삭제합니다. 이 예약 이름은 모든 감시 프로세스에서 제외합니다. 작업 폴더 쓰기 권한이 필요하며, 예기치 않은 강제 종료 시 임시 파일이 남을 수 있습니다. probe 응답은 감시 연결의 동작 확인이며 OS 이벤트 무손실을 보장하지 않습니다.
 
@@ -68,7 +68,9 @@ Antigravity 대화 기록은 작은 청크로 순차 읽고 현재 턴 판별에
 
 공통 규칙을 추가하거나 변경하면 새 구현의 기존 기능 재사용 여부와 기존 개별 구현의 중복·충돌을 양방향으로 대조하고 판단 근거를 보고합니다.
 
-미추적 파일도 직접 확인하며, 작업 전 상태나 변경 소유 범위를 확정할 수 없으면 한계를 보고하고 임의로 정리하지 않습니다. 훅은 작업 전 파일 원문을 백업하거나 검토 근거의 충분성을 자동 판정하지 않습니다. 요구사항 변경으로 남은 코드·테스트·설정도 승인 범위와 참조·계약을 확인한 뒤 정리합니다.
+검토자는 편집·실행 내역, 현재 파일 목록, Git status와 diff로 이번 작업의 산출물 전체를 대조합니다. 새 문서와 문구, 미추적·ignored 작업용 파일, 일회성 테스트·진단 스크립트, 백업·전달 사본의 현재 용도를 확인합니다. 제거한 항목과 유지한 후보의 경로·이유를 최종 응답에 짧게 남기며, 검토 증명용 Markdown 보고서는 새로 만들지 않습니다. 필요한 회귀 테스트·운영 문서·복구 사본은 보존합니다. 작업 전 상태나 변경 소유 범위를 확정할 수 없으면 한계를 보고하고 임의로 정리하지 않습니다.
+
+훅은 감지 여부와 모델의 종료 표식을 검사하며, 작업 전 파일 원문을 백업하거나 검토 근거의 충분성을 자동 판정하지 않습니다. 의미상 미사용 코드·중복 문구·불필요한 테스트의 판정은 같은 대화의 모델이 수행합니다. 자동 테스트는 감지·재요청·종료 동작을 검증하며 모델이 모든 잔여물을 찾는다는 보장은 아닙니다. 일반 ignored 파일이나 감시 밖의 사본은 자동 감지가 누락될 수 있으므로 검토자가 이번 실행 내역의 경로도 확인합니다.
 
 답변·승인 대기 또는 중단 요청은 적용 대상 변경 전이면 `skipped`, 이미 변경했다면 `blocked`이며, 중단 요청 시 추가 검토·수정을 진행하지 않습니다. `AGENTS.md`의 원래 승인·업무 규칙을 유지하며, 훅이 새 권한을 부여하지 않습니다.
 
@@ -111,10 +113,10 @@ hooks/code-quality-review/
 코드를 변경한 경우 다음 자동 테스트를 실행합니다. 운영체제별 명령 실행과 실제 대화 확인은 각 안내를 따릅니다.
 
 ```sh
-node --test hooks/code-quality-review/review-status.test.mjs hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
+node --test --test-concurrency=1 hooks/code-quality-review/review-status.test.mjs hooks/code-quality-review/review-changes.test.mjs hooks/code-quality-review/codex/codex-code-quality-review.test.mjs hooks/code-quality-review/gemini/gemini-code-quality-review.test.mjs
 ```
 
-종료 표식과 코드 펜스의 전체 조합은 공통 판별 함수를 직접 검사합니다. Codex·Antigravity의 실제 훅 테스트도 열린 펜스에서 재검토하고 닫힌 펜스 뒤에서 종료하는지 세 종료 상태별로 확인합니다.
+테스트 파일은 순차 실행해 감시 프로세스 준비와 Git 조회의 짧은 제한에 병렬 테스트 부하가 겹치지 않게 합니다. 종료 표식과 코드 펜스의 전체 조합은 공통 판별 함수를 직접 검사합니다. Codex·Antigravity의 실제 훅 테스트도 열린 펜스에서 재검토하고 닫힌 펜스 뒤에서 종료하는지 세 종료 상태별로 확인합니다.
 
 해제할 때는 Codex의 해당 UserPromptSubmit·Stop 핸들러 또는 Antigravity의 `ai-setting-code-quality-review` 키만 비활성화하거나 제거합니다. 시크릿 검사 등 다른 훅과 기존 기능 설정을 유지합니다. 이미 비활성화한 설정을 갱신할 때는 해당 상태도 보존합니다.
 

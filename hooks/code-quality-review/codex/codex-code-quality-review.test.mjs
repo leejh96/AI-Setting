@@ -124,6 +124,9 @@ test('첫 Stop은 본문 대신 적용 판단과 절대 REVIEW 경로를 전달�
   assert.match(output.reason, /서브에이전트/);
   assert.match(output.reason, /동작 설정/);
   assert.match(output.reason, /문서만 변경/);
+  assert.match(output.reason, /문서만 변경한 작업도 포함/);
+  assert.match(output.reason, /미추적 파일·문서 문구·테스트·임시 스크립트·백업 사본/);
+  assert.match(output.reason, /이 점검을 하지 않았다면 clean으로 종료하지 마세요/);
   assert.match(output.reason, /적용 전 답변·승인 대기·중단 요청[\s\S]*\[code-quality-review:skipped\]/);
   assert.match(output.reason, /적용 대상인 구현·수정 작업에서 답변·승인 대기나 중단 요청[\s\S]*\[code-quality-review:blocked\]/);
   assert.match(output.reason, /중단 요청 시에는 추가 검토·수정을 진행하지 마세요/);
@@ -132,14 +135,21 @@ test('첫 Stop은 본문 대신 적용 판단과 절대 REVIEW 경로를 전달�
   assert.match(output.reason, /읽을 수 없으면[\s\S]*\[code-quality-review:blocked\]/);
 });
 
-test('실제 수정 없는 일반 질문·문서는 프롬프트 없이 종료한다', async () => {
-  for (const operation of ['none', 'documentation']) {
+test('무변경은 종료하고 문서만 변경한 작업도 검토를 요청한다', async () => {
+  for (const operation of ['none', 'documentation', 'ignored-backup']) {
     const cwd = mkdtempSync(join(TEST_ROOT, 'unchanged-'));
     const context = { cwd, session_id: cwd, turn_id: operation };
     writeFileSync(join(cwd, 'code.mjs'), 'before');
+    if (operation === 'ignored-backup') {
+      assert.equal(spawnSync('git', ['-C', cwd, 'init', '--quiet'], { windowsHide: true }).status, 0);
+      writeFileSync(join(cwd, '.gitignore'), '*.bak\n');
+    }
     assert.deepEqual(parseOutput(runHook(HOOK_PATH, ['--prepare'], JSON.stringify({ ...context, hook_event_name: 'UserPromptSubmit' }))), {});
     if (operation === 'documentation') writeFileSync(join(cwd, 'README.md'), 'docs');
-    assert.deepEqual(parseOutput(runHook(HOOK_PATH, [], JSON.stringify({ ...context, hook_event_name: 'Stop', stop_hook_active: false }))), {}, operation);
+    if (operation === 'ignored-backup') writeFileSync(join(cwd, 'code.mjs.bak'), 'working backup');
+    const output = parseOutput(runHook(HOOK_PATH, [], JSON.stringify({ ...context, hook_event_name: 'Stop', stop_hook_active: false })));
+    if (operation === 'none') assert.deepEqual(output, {});
+    else assertReviewRequest(output);
   }
 });
 

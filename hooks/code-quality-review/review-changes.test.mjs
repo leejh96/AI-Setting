@@ -443,21 +443,41 @@ test('실제 Git 설정 손상은 비저장소로 오판하지 않고 감시 준
   assert.ok(!readFileSync(join(directory, name), 'utf8').includes('PRIVATE_INVALID_CONFIG'));
 });
 
-test('무변경·문서·제외 폴더는 내용 읽기 없이 종료하고 감시를 닫는다', async () => {
+test('무변경·제외 폴더는 내용 읽기 없이 종료하고 감시를 닫는다', async () => {
   const f = fixture();
   const guard = join(root, 'no-content-read.mjs');
   writeFileSync(guard, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const old=fs.readFileSync;fs.readFileSync=(p,...a)=>{if(String(p).startsWith(${JSON.stringify(f.cwd + sep)}))throw Error('Unexpected workspace content read');return old(p,...a)};syncBuiltinESMExports();`);
   process.env.NODE_OPTIONS = `--import=${pathToFileURL(guard).href}`;
   try { await f.prepare(); } finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
-  writeFileSync(join(f.cwd, 'README.md'), 'documentation');
   mkdirSync(join(f.cwd, 'dist')); writeFileSync(join(f.cwd, 'dist', 'generated.mjs'), 'generated');
+  mkdirSync(join(f.cwd, 'node_modules')); writeFileSync(join(f.cwd, 'node_modules', 'dependency.bak'), 'dependency backup');
   assert.equal((await f.check()).changed, false);
   assert.equal(stateFor(f.cwd).state.phase, 'closed');
 });
 
+for (const name of ['README.md', 'cleanup.md', 'guide.rst', 'guide.adoc', 'LICENSE', 'debug-test.mjs', 'source.mjs.bak']) {
+  test(`문서·작업용 파일 변경도 검토 대상이다: ${name}`, async () => {
+    const f = fixture(); await f.prepare();
+    writeFileSync(join(f.cwd, name), 'created during this request');
+    assert.equal((await f.check()).changed, true);
+  });
+}
+
+for (const name of ['source.mjs.bak', 'source.mjs.backup-20261103', 'source.mjs.orig', 'source.mjs.rej', 'source.mjs~', 'backup-20261103/source.mjs']) {
+  test(`Git ignored 백업 후보도 검토하되 삭제하지 않는다: ${name}`, async () => {
+    const f = fixture(); git(f.cwd, 'init', '--quiet');
+    writeFileSync(join(f.cwd, '.gitignore'), '*\n');
+    await f.prepare();
+    mkdirSync(join(f.cwd, name, '..'), { recursive: true });
+    writeFileSync(join(f.cwd, name), 'recovery copy');
+    assert.equal((await f.check()).changed, true);
+    assert.equal(readFileSync(join(f.cwd, name), 'utf8'), 'recovery copy');
+  });
+}
+
 for (const [name, paths, expected] of [
   ['제외 경로와 링크 내부', cwd => ['node_modules/pkg/generated.mjs', './node_modules/pkg/generated.mjs',
-    'src/../node_modules/pkg/generated.mjs', 'node_modules//pkg/generated.mjs', 'docs/README.md',
+    'src/../node_modules/pkg/generated.mjs', 'node_modules//pkg/generated.mjs',
     join(cwd, 'node_modules', 'pkg', 'generated.mjs'), 'linked/code.mjs'], 'ignored'],
   ['일반 상대 경로', () => ['src/code.mjs'], 'edited'],
   ['점 경로', () => ['./src/code.mjs'], 'edited'],

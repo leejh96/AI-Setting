@@ -97,6 +97,8 @@ function continues(output, expectedReviewPath) {
   assert.ok(output.reason.length < REVIEW.length / 3);
   assert.match(output.reason, /이번 회차에 실제로 읽고/);
   assert.match(output.reason, /문서만 변경/);
+  assert.match(output.reason, /문서만 변경한 작업도 포함/);
+  assert.match(output.reason, /미추적 파일·문서 문구·테스트·임시 스크립트·백업 사본/);
   assert.match(output.reason, /적용 전 답변·승인 대기·중단 요청[\s\S]*\[code-quality-review:skipped\]/);
   assert.match(output.reason, /적용 대상인 구현·수정 작업에서 답변·승인 대기나 중단 요청[\s\S]*\[code-quality-review:blocked\]/);
   assert.match(output.reason, /중단 요청 시에는 추가 검토·수정을 진행하지 마세요/);
@@ -118,11 +120,13 @@ test('공식 model_stop과 기존 NO_TOOL_CALL의 첫 종료에서 검토를 요
   }
 });
 
-test('실제 수정 없는 질문·문서는 추가 검토 없이 종료한다', async () => {
+test('무변경은 종료하고 문서만 변경한 작업도 검토를 요청한다', async () => {
   for (const operation of ['none', 'documentation']) {
     await fixture(({ script, event }) => {
       if (operation === 'documentation') writeFileSync(join(event.workspacePaths[0], 'README.md'), 'docs');
-      assert.deepEqual(parse(run(script, event)), {}, operation);
+      const output = parse(run(script, event));
+      if (operation === 'none') assert.deepEqual(output, {});
+      else continues(output);
     }, { changed: false });
   }
 });
