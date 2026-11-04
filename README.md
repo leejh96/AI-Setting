@@ -17,7 +17,9 @@ ai-setting/
 │   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 ├── skills/
 │   ├── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
+│   ├── concept-explanation/    # 질문에 필요한 개념과 예시 설명
 │   ├── decision-table-dev/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
+│   ├── dev-task-flow/         # 개발 작업의 진행 상태와 완료 조건 관리
 │   ├── root-cause-debugging/  # 불명확·반복 실패의 원인 분리와 최소 수정
 │   └── technical-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
@@ -50,6 +52,18 @@ Codex의 최신 공식 문서는 사용자 스킬 위치로 `~/.agents/skills`�
 - 프로젝트: `$agents-md-optimizer 이 프로젝트 AGENTS.md를 최적화해줘. 전역 지침은 참고만 해줘`
 - 초기 작성: `$agents-md-optimizer 이 저장소의 확인된 용어·실행 명령·제약으로 프로젝트 AGENTS.md를 만들어줘`
 - 함께: `$agents-md-optimizer 전역과 이 프로젝트 지침을 함께 보고 중복·충돌과 수정안을 설명해줘`
+
+## 개념 설명 스킬
+
+[`concept-explanation`](skills/concept-explanation/SKILL.md)은 개념 질문이나 전략·기획·조사 결과의 이해에 필요한 개념을 설명합니다. 답을 먼저 제시하고, 필요한 용어의 의미와 용도를 풀어 설명하며, 개념 자체를 묻는 경우 필요성과 쉬운 예시를 핵심 동작에 연결합니다. 단순 사실 조회나 명확한 실행 요청에 긴 설명을 강제하지 않습니다.
+
+Codex는 `~/.codex/skills/concept-explanation`, Antigravity는 `~/.gemini/config/skills/concept-explanation`에 위와 같은 방식으로 설치할 수 있습니다. 예를 들어 `$concept-explanation MVP가 왜 필요한지 예시와 함께 설명해줘`처럼 명시적으로 호출합니다. 자동 선택은 보장되지 않으며 저장소 원본만으로 전역 설치되지는 않습니다.
+
+## 개발 작업 진행 관리 스킬
+
+[`dev-task-flow`](skills/dev-task-flow/SKILL.md)는 기능 구현·수정, 버그 수정과 리팩터링에 필요한 작업과 완료 조건을 정리하고 현재 단계를 공유합니다. 작업 중 목록을 갱신하고 구현과 검증 상태를 구분하며, 필수 작업이나 검증이 남으면 사유와 함께 보고합니다. 단순한 작업은 별도 목록을 생략하고, 작업 추적용 문서는 만들지 않습니다.
+
+이 스킬도 위의 스킬과 같은 복사 방식으로 전역 설치·갱신합니다. Codex의 현재 설치에서 사용하는 호환 경로는 `~/.codex/skills/dev-task-flow`, Antigravity 경로는 `~/.gemini/config/skills/dev-task-flow`입니다. 스킬은 자동 선택을 허용하지만 매 요청에서 선택되거나 작업의 완전성을 보장하지는 않습니다. 저장소에 원본을 추가하는 것만으로 전역 설치되지는 않습니다.
 
 ## 원인 추적 디버깅 스킬
 
