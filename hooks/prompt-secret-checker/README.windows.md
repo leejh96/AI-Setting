@@ -9,6 +9,26 @@
 > 이 프롬프트 훅을 Windows 환경에 맞게 전역 적용해줘.
 > 기존 설정은 백업하고, Gitleaks는 winget으로 설치한 뒤 실제 대화에서 훅 동작까지 검증해줘.
 
+## 실행 파일 복사
+
+등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일이 있으면 용도를 확인해 별도로 정리합니다.
+
+```powershell
+$codexHookHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$codexHookTarget = Join-Path $codexHookHome 'hooks/prompt-secret-checker'
+$geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/prompt-secret-checker'
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini" | Out-Null
+$hookRuntimeFiles = @('secret-checker.mjs', 'gitleaks.toml')
+foreach ($hookRuntimeFile in $hookRuntimeFiles) {
+    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $codexHookTarget
+    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $geminiHookTarget
+}
+Copy-Item -LiteralPath 'hooks/prompt-secret-checker/codex/codex-secret-checker.mjs' -Destination "$codexHookTarget/codex"
+Copy-Item -LiteralPath 'hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs' -Destination "$geminiHookTarget/gemini"
+```
+
+설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.
+
 ## Gitleaks 설치와 업데이트
 
 Git for Windows, Node.js 22 이상과 winget을 준비하고 PowerShell에서 실행합니다.
@@ -48,15 +68,15 @@ winget upgrade --id Gitleaks.Gitleaks --exact --source winget
 ### Codex 설정 생성과 적용
 
 저장소 루트에서 실행하면 현재 기기의 Node와 훅 스크립트 절대 경로가 들어간 JSON 설정을 출력합니다.
-저장소를 이동하거나 Node 설치 경로를 바꾼 경우 다시 생성하세요.
+훅 설치본이나 Node의 경로를 바꾼 경우 다시 생성하세요.
 
 ```powershell
-node hooks/prompt-secret-checker/codex/codex-secret-checker.mjs --print-config
+node "$codexHookTarget/codex/codex-secret-checker.mjs" --print-config
 ```
 
 출력된 설정은 다음 위치 중 하나에 등록합니다.
 
-- 전역 적용: `$env:USERPROFILE\.codex\hooks.json`
+- 전역 적용: `$codexHookHome\hooks.json`
 - 특정 프로젝트에만 적용: 그 프로젝트의 `.codex/hooks.json`
 
 기존 설정이 있다면 변경 직전 파일 전체를 복구할 수 있도록 백업하고,
@@ -75,7 +95,7 @@ Codex를 새로 시작한 뒤 CLI의 `/hooks`에서 이 훅의 명령·출처를
 저장소 루트에서 다음 명령을 실행하면 Antigravity 설정에 등록할 JSON을 출력합니다.
 
 ```powershell
-node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
+node "$geminiHookTarget/gemini/gemini-secret-checker.mjs" --print-config
 ```
 
 출력된 설정은 다음 위치에 등록합니다:
@@ -127,4 +147,4 @@ Codex 데스크톱 앱은 재시작 전 입력이 차단되지 않았고, 재시
 ## 갱신
 
 [공통 갱신 절차](../../README.md#지침-갱신하기)에 따라 최신 내용을 받습니다.
-Node나 저장소 경로가 바뀌면 설정을 다시 생성하고 등록·검증합니다.
+Node나 설치본 경로가 바뀌면 설정을 다시 생성하고 등록·검증합니다.

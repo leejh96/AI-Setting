@@ -11,13 +11,33 @@ node --version
 
 설정 변경 전 기존 전역 파일 전체를 복구 가능한 위치에 백업합니다. 생성한 JSON으로 파일 전체를 덮어쓰지 말고, 아래 도구별 항목만 병합합니다.
 
+## 실행 파일 복사
+
+등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일이 있으면 용도를 확인해 별도로 정리합니다.
+
+```powershell
+$codexHookHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$codexHookTarget = Join-Path $codexHookHome 'hooks/code-quality-review'
+$geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/code-quality-review'
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini" | Out-Null
+$hookRuntimeFiles = @('REVIEW.md', 'review-request.mjs', 'review-status.mjs', 'review-changes.mjs', 'watch-worker.mjs')
+foreach ($hookRuntimeFile in $hookRuntimeFiles) {
+    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $codexHookTarget
+    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $geminiHookTarget
+}
+Copy-Item -LiteralPath 'hooks/code-quality-review/codex/codex-code-quality-review.mjs' -Destination "$codexHookTarget/codex"
+Copy-Item -LiteralPath 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' -Destination "$geminiHookTarget/gemini"
+```
+
+설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.
+
 ## Codex
 
 ```powershell
-node hooks/code-quality-review/codex/codex-code-quality-review.mjs --print-config
+node "$codexHookTarget/codex/codex-code-quality-review.mjs" --print-config
 ```
 
-전역 `$env:USERPROFILE\.codex\hooks.json`의 `hooks.UserPromptSubmit`과 `hooks.Stop`에 출력한 그룹을 모두 병합합니다. 앞 이벤트는 파일 감시 준비를 완료하고 Stop은 수정 기록이 있을 때만 검토를 시작합니다. 프로젝트만 적용하려면 `.codex/hooks.json`을 사용합니다. 기존 Stop 핸들러와 `UserPromptSubmit` 시크릿 검사 등을 보존하며 전역·프로젝트·인라인 설정에 중복 등록하지 않습니다. 비활성화한 품질 훅을 임의로 다시 켜지 않습니다.
+전역 `$codexHookHome\hooks.json`의 `hooks.UserPromptSubmit`과 `hooks.Stop`에 출력한 그룹을 모두 병합합니다. 앞 이벤트는 파일 감시 준비를 완료하고 Stop은 수정 기록이 있을 때만 검토를 시작합니다. 프로젝트만 적용하려면 `.codex/hooks.json`을 사용합니다. 기존 Stop 핸들러와 `UserPromptSubmit` 시크릿 검사 등을 보존하며 전역·프로젝트·인라인 설정에 중복 등록하지 않습니다. 비활성화한 품질 훅을 임의로 다시 켜지 않습니다.
 
 생성 명령은 Codex가 PowerShell에서 실행하는 형식입니다. 호출 연산자 `&`와 작은따옴표를 유지합니다. 경로의 공백·작은따옴표·곡선형 작은따옴표·`%`·`$`·백틱을 문자 그대로 전달합니다. cmd용 따옴표 형식으로 바꾸지 마세요.
 
@@ -28,7 +48,7 @@ Codex를 새로 시작하고 CLI `/hooks`에서 활성 상태·출처·명령을
 ## Gemini / Antigravity
 
 ```powershell
-node hooks/code-quality-review/gemini/gemini-code-quality-review.mjs --print-config
+node "$geminiHookTarget/gemini/gemini-code-quality-review.mjs" --print-config
 ```
 
 전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`을 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
@@ -40,7 +60,7 @@ Windows에서는 Node와 훅의 경로가 공백·셸 특수문자·비ASCII 문
 등록 전 실제 명령과 경로를 확인하려면 직접 명령은 그대로 출력하고, 인코딩된 호출문만 디코딩합니다.
 
 ```powershell
-$qualityConfig = node hooks/code-quality-review/gemini/gemini-code-quality-review.mjs --print-config | ConvertFrom-Json
+$qualityConfig = node "$geminiHookTarget/gemini/gemini-code-quality-review.mjs" --print-config | ConvertFrom-Json
 $qualityCommand = $qualityConfig.'ai-setting-code-quality-review'.Stop[0].command
 if ($qualityCommand.StartsWith('powershell.exe ')) {
     [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(($qualityCommand -split ' ')[-1]))
@@ -77,4 +97,4 @@ Windows에서는 Node의 detached 실행만으로 감시를 시작하면 PowerSh
 
 이후 사용자가 데스크톱 앱을 완전히 재시작한 뒤 같은 대화의 새 요청에서 감시 `ready/prepared`, 수정 기록 없음으로 시작한 것을 확인했습니다. 새 서브에이전트의 임시 코드 파일 생성·수정·삭제 후 수정 기록이 생겼고, 실제 Stop이 검토 프롬프트를 전달했습니다. 감시 상태를 중간에 초기화하지 않았으며 임시 파일은 삭제했습니다. 재시작 전 준비 기록 누락과 재시작 후 복구는 확인했지만, 앱 내부의 설정·신뢰 상태 갱신 중 어느 부분이 원인이었는지는 확정하지 않았습니다.
 
-Node·저장소 경로가 바뀌면 해당 도구의 설정을 다시 생성하고 갱신·등록·검증합니다. 현재 기기의 절대 경로가 든 생성 설정은 저장소에 커밋하지 않습니다.
+Node·설치본 경로가 바뀌면 해당 도구의 설정을 다시 생성하고 갱신·등록·검증합니다. 현재 기기의 절대 경로가 든 생성 설정은 저장소에 커밋하지 않습니다.

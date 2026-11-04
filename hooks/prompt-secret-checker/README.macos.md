@@ -8,6 +8,24 @@
 > 이 프롬프트 훅을 macOS 환경에 맞게 전역 적용해줘.
 > 기존 설정은 백업하고, Gitleaks는 Homebrew로 설치한 뒤 실제 대화에서 훅 동작까지 검증해줘.
 
+## 실행 파일 복사
+
+등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일이 있으면 용도를 확인해 별도로 정리합니다.
+
+```sh
+codex_hook_target="${CODEX_HOME:-$HOME/.codex}/hooks/prompt-secret-checker"
+gemini_hook_target="$HOME/.gemini/config/hooks/prompt-secret-checker"
+mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini"
+for hook_runtime_file in secret-checker.mjs gitleaks.toml; do
+  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$codex_hook_target/"
+  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$gemini_hook_target/"
+done
+cp "hooks/prompt-secret-checker/codex/codex-secret-checker.mjs" "$codex_hook_target/codex/"
+cp "hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs" "$gemini_hook_target/gemini/"
+```
+
+설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.
+
 ## Gitleaks 설치와 업데이트
 
 ```bash
@@ -34,10 +52,10 @@ PATH를 변경했다면 앱과 터미널을 완전히 종료하고 다시 실행
 현재 Node와 훅 스크립트의 절대 경로가 들어간 JSON을 생성합니다.
 
 ```bash
-node hooks/prompt-secret-checker/codex/codex-secret-checker.mjs --print-config
+node "$codex_hook_target/codex/codex-secret-checker.mjs" --print-config
 ```
 
-기존 `~/.codex/hooks.json` 전체를 백업한 뒤 기존 이벤트와 핸들러를 유지하면서
+기존 `${CODEX_HOME:-$HOME/.codex}/hooks.json` 전체를 백업한 뒤 기존 이벤트와 핸들러를 유지하면서
 출력의 `hooks.UserPromptSubmit` 그룹을 병합합니다. 특정 프로젝트에만 적용하려면 그 프로젝트의 `.codex/hooks.json`을 사용합니다.
 전역·프로젝트 양쪽 또는 `config.toml`의 인라인 훅에 같은 검사를 중복 등록하지 않습니다.
 
@@ -54,7 +72,7 @@ Codex 검사기는 기본적으로 PATH에서 Gitleaks를 찾습니다.
 실제 설치 경로를 사용하도록 아래처럼 생성합니다. Intel Mac 등 다른 설치 경로에서도 같은 방법을 사용합니다.
 
 ```bash
-AI_SETTING_GITLEAKS_BIN="$(command -v gitleaks)" node hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs --print-config
+AI_SETTING_GITLEAKS_BIN="$(command -v gitleaks)" node "$gemini_hook_target/gemini/gemini-secret-checker.mjs" --print-config
 ```
 
 기존 `~/.gemini/config/hooks.json` 전체를 백업하고 기존 훅을 유지하면서 출력된 설정을 병합합니다.
@@ -83,4 +101,4 @@ CLI에서 확인한 결과와 데스크톱 앱에서 확인한 결과를 구분�
 ## 갱신
 
 [공통 갱신 절차](../../README.md#지침-갱신하기)에 따라 최신 내용을 받습니다.
-Node나 저장소 경로가 바뀌면 설정을 다시 생성하고 등록·검증합니다.
+Node나 설치본 경로가 바뀌면 설정을 다시 생성하고 등록·검증합니다.

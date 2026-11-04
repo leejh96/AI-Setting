@@ -106,9 +106,11 @@ hooks/code-quality-review/
 - [Windows 설정](README.windows.md)
 - [macOS 설정](README.macos.md)
 
+실행 코드는 Codex의 `~/.codex/hooks/code-quality-review/`와 Antigravity의 `~/.gemini/config/hooks/code-quality-review/`에 공통 파일과 해당 도구 어댑터를 복사합니다. 운영체제별 안내의 설치본 경로에서 설정을 생성하며 저장소 원본을 직접 등록하지 않습니다. 원본 갱신 후에는 다시 복사·검증해야 합니다.
+
 기존 전역 설정 전체를 백업하고, 생성한 설정을 기존 훅·이벤트·핸들러를 보존하며 병합합니다. 전역과 프로젝트 양쪽에 같은 훅을 중복 등록하지 않습니다. 저장소를 받거나 이 파일을 수정하는 것만으로 전역 등록이 변경되지는 않습니다.
 
-기존 Codex 루트 스크립트는 제거했습니다. 이전 경로를 등록한 환경은 저장소 루트에서 `node hooks/code-quality-review/codex/codex-code-quality-review.mjs --print-config`로 설정을 다시 생성해 해당 Stop 핸들러를 갱신하고 검토·신뢰 등록합니다.
+기존 Codex 루트 스크립트는 제거했습니다. 이전 경로를 등록한 환경은 운영체제별 안내에 따라 복사한 Codex 어댑터의 `--print-config`로 설정을 다시 생성해 해당 Stop 핸들러를 갱신하고 검토·신뢰 등록합니다.
 
 코드를 변경한 경우 다음 자동 테스트를 실행합니다. 운영체제별 명령 실행과 실제 대화 확인은 각 안내를 따릅니다.
 
