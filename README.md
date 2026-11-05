@@ -16,12 +16,12 @@ ai-setting/
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
 │   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 ├── skills/
-│   ├── agents-md-optimizer/   # AGENTS.md 최적화와 전후 비교
-│   ├── concept-explanation/    # 질문에 필요한 개념과 예시 설명
-│   ├── decision-table-dev/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
-│   ├── dev-task-flow/         # 개발 작업의 진행 상태와 완료 조건 관리
-│   ├── root-cause-debugging/  # 불명확·반복 실패의 원인 분리와 최소 수정
-│   └── technical-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
+│   ├── agents-md-editor/   # AGENTS.md 최적화와 전후 비교
+│   ├── concept-explainer/    # 질문에 필요한 개념과 예시 설명
+│   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
+│   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
+│   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
+│   └── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -44,12 +44,12 @@ ai-setting/
 
 | 스킬 | 자동 선택할 작업 | 전문 절차 |
 | --- | --- | --- |
-| [agents-md-optimizer](skills/agents-md-optimizer/SKILL.md) | 전역·프로젝트 지침 평가·최적화·초기 작성 | 적용 범위·의미·예외 보존, 독립 최종 검토, 요청 시 크기·실행 비교 |
-| [concept-explanation](skills/concept-explanation/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
-| [dev-task-flow](skills/dev-task-flow/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
-| [root-cause-debugging](skills/root-cause-debugging/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
-| [decision-table-dev](skills/decision-table-dev/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
-| [technical-research](skills/technical-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
+| [agents-md-editor](skills/agents-md-editor/SKILL.md) | 전역·프로젝트 지침 평가·최적화·초기 작성 | 적용 범위·의미·예외 보존, 독립 최종 검토, 요청 시 크기·실행 비교 |
+| [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
+| [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
+| [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
+| [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
+| [tech-research](skills/tech-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
 
 여러 스킬의 적용 조건이 겹치면 각 전문 절차를 필요한 범위에서 함께 사용합니다. 예를 들어 복잡한 버그 수정은 진행 상태를 추적하면서 원인을 좁힐 수 있고, 업무 분기가 바뀌면 결정 테이블로 확인할 수 있습니다. 같은 계획·조사·검증 결과는 공유하고 중복 작성·실행하지 않습니다.
 
@@ -64,9 +64,11 @@ ai-setting/
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 
+스킬 이름이 바뀌었다면 새 이름의 폴더를 복사하고, 이전 이름의 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다.
+
 새 환경에서는 실제 지원 경로를 확인하고 한 곳에만 등록해 중복 노출을 피하세요. Codex의 `~/.codex/skills`는 이 환경에서 사용하는 호환 경로이며 공식 안내의 `~/.agents/skills`와 중복 설치하지 않습니다. [Codex 공식 안내](https://developers.openai.com/codex/skills), [Antigravity 공식 안내](https://antigravity.google/docs/skills?app=antigravity).
 
-예를 들어 “이 프로젝트 지침의 중복을 정리해줘”, “이 테스트가 계속 실패하는 원인을 찾고 수정해줘”, “이 라이브러리 조합이 공식 지원되는지 조사해줘”처럼 요청합니다. 명시적으로 지정하려면 Codex의 `$agents-md-optimizer 이 프로젝트 지침을 최적화해줘`처럼 호출할 수 있습니다. 실제 수정·설치·다른 도구로의 동기화는 각각 요청 범위를 따릅니다.
+예를 들어 “이 프로젝트 지침의 중복을 정리해줘”, “이 테스트가 계속 실패하는 원인을 찾고 수정해줘”, “이 라이브러리 조합이 공식 지원되는지 조사해줘”처럼 요청합니다. 명시적으로 지정하려면 Codex의 `$agents-md-editor 이 프로젝트 지침을 최적화해줘`처럼 호출할 수 있습니다. 실제 수정·설치·다른 도구로의 동기화는 각각 요청 범위를 따릅니다.
 
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
