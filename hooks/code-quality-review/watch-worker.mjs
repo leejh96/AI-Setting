@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { watch, lstatSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { watch, lstatSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -10,6 +9,7 @@ const path = process.argv[2];
 const state = JSON.parse(readFileSync(path, 'utf8'));
 if (state.version !== 2 || state.phase !== 'starting' || state.failed) process.exit(1);
 const excluded = new Set(['.git', '.hg', '.svn', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', '.next', 'dist', 'build', 'coverage', 'target']);
+// Older workers may still create probes in overlapping watch roots.
 const probePattern = /^\.ai-setting-quality-probe-[a-f0-9-]{36}\.tmp$/;
 // Git ignore rules often hide working backups; their names trigger review, never deletion.
 const backupPattern = /(?:^|\/)(?:backups?(?:[-_.][^/]*)?|[^/]+\.(?:bak|backup|orig|rej)(?:[-_.][^/]*)?|[^/]+~)(?:\/|$)/i;
@@ -107,25 +107,13 @@ function flush(root) {
   })().finally(() => { root.flushing = null; });
   return root.flushing;
 }
-async function probe(root) {
-  const name = `.ai-setting-quality-probe-${randomUUID()}.tmp`, target = join(root.path, name);
-  let timer;
-  try {
-    await new Promise((resolveProbe, reject) => {
-      root.probes.set(name, resolveProbe);
-      timer = setTimeout(() => reject(Error('Probe timeout')), 1500);
-      writeFileSync(target, '', { flag: 'wx', mode: 0o600 });
-    });
-    const stat = lstatSync(root.path);
-    if (!stat.isDirectory() || stat.dev !== root.dev || stat.ino !== root.ino) throw Error('Watch root replaced');
-  } finally {
-    clearTimeout(timer); root.probes.delete(name);
-    try { unlinkSync(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+function verifyRoot(root) {
+  const stat = lstatSync(root.path);
+  if (!stat.isDirectory() || stat.dev !== root.dev || stat.ino !== root.ino) throw Error('Watch root replaced');
 }
 async function checkpoint() {
   const deadline = Date.now() + 2500;
-  await Promise.all(roots.map(probe));
+  for (const root of roots) verifyRoot(root);
   let seen;
   do {
     if (Date.now() > deadline) throw Error('Checkpoint timeout');
@@ -199,12 +187,11 @@ server.listen(state.endpoint, async () => {
     for (const info of state.roots) {
       const stat = lstatSync(info.path);
       if (!stat.isDirectory()) throw Error('Invalid watch root');
-      const root = { ...info, dev: stat.dev, ino: stat.ino, pending: new Set(), probes: new Map(), tracked: new Set() };
+      const root = { ...info, dev: stat.dev, ino: stat.ino, pending: new Set(), tracked: new Set() };
       roots.push(root);
       root.watcher = watch(root.path, { recursive: true }, (eventType, filename) => {
         try {
           if (closing || state.failed) return;
-          if (root.probes.has(filename)) { root.probes.get(filename)(); return; }
           if (state.changed) return;
           const rel = eligible(root, filename, eventType);
           if (rel) {

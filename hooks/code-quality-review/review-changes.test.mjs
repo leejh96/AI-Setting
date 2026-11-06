@@ -929,7 +929,7 @@ test('반복 준비와 revised는 수정 상태를 초기화하지 않고 종료
   assert.equal(stateFor(f.cwd).state.phase, 'closed');
 });
 
-test('독립 세션과 중첩 root의 probe가 가짜 수정을 만들지 않는다', async () => {
+test('독립 세션과 중첩 root의 감시 준비가 가짜 수정을 만들지 않는다', async () => {
   const f = fixture(); mkdirSync(join(f.cwd, 'nested'));
   await f.prepare(); await prepareChanges('test', 'second', 'turn', [f.cwd, join(f.cwd, 'nested')]);
   assert.equal((await f.check()).changed, false);
@@ -1039,17 +1039,44 @@ test('잘못된 RPC 인증·응답은 무변경 응답으로 인정하지 않는
   finally { writeFileSync(original.path, JSON.stringify(original.state)); }
 });
 
-test('이벤트 경로 누락과 probe 무응답은 준비 실패로 고정한다', async () => {
+test('이벤트 경로 누락은 감시 실패로 처리하고 조용한 알림 유실은 자가점검하지 않는다', async () => {
   for (const mode of ['missing-name', 'no-events']) {
     const f = fixture(), inject = join(root, `${mode}.mjs`);
     const callback = mode === 'missing-name' ? "(...args)=>listener(args[0],null)" : '()=>{}';
     writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const old=fs.watch;fs.watch=(path,options,listener)=>old(path,options,${callback});syncBuiltinESMExports();`);
     process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
-    try { await assert.rejects(f.prepare(), ChangeWatchError); }
+    try { await f.prepare(); }
     finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
-    await unavailable(f.check());
+    writeFileSync(join(f.cwd, 'code.mjs'), 'external edit');
+    if (mode === 'missing-name') await unavailable(f.check());
+    else assert.equal((await f.check()).changed, false);
   }
 });
+
+for (const gitWorkspace of [false, true]) {
+  test(`준비·Stop·검토 반복에서 작업 폴더에 파일을 쓰거나 삭제하지 않는다: git=${gitWorkspace}`, async () => {
+    const f = fixture(), inject = join(root, `read-only-worker-${gitWorkspace}.mjs`);
+    if (gitWorkspace) { git(f.cwd, 'init', '-q'); git(f.cwd, 'add', '.'); }
+    writeFileSync(inject, `import fs from 'node:fs';import{relative,isAbsolute,sep}from'node:path';import{syncBuiltinESMExports}from'node:module';
+const workspace=${JSON.stringify(f.cwd)};
+for(const method of ['writeFileSync','unlinkSync']){const original=fs[method];fs[method]=(target,...args)=>{const rel=relative(workspace,String(target));if(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('..'+sep))throw Error('Worker attempted workspace write');return original(target,...args)}}syncBuiltinESMExports();`);
+    process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
+    try {
+      await f.prepare();
+      assert.equal((await f.check()).changed, false);
+      await f.prepare('edited');
+    } finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
+    writeFileSync(join(f.cwd, 'code.mjs'), 'external edit');
+    for (let i = 0; i < 2; i++) {
+      const gate = await f.check('edited'); assert.equal(gate.changed, true);
+      await gate.record('review-requested');
+    }
+    const finished = await (await f.check('edited')).record('review-finished');
+    assert.equal(finished.phase, 'closed');
+    assert.equal(finished.action, 'review-finished');
+    assert.deepEqual(readdirSync(f.cwd).sort(), gitWorkspace ? ['.git', 'code.mjs'] : ['code.mjs']);
+  });
+}
 
 for (const mode of ['metadata', 'missing-name', 'empty-name', 'native-error']) {
   test(`수정 감지 후 불필요한 분류를 멈추고 실제 감시 오류는 유지한다: ${mode}`, async () => {
@@ -1077,15 +1104,13 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>{const watcher=watch(path
   });
 }
 
-for (const mode of ['normal', 'no-probe', 'root-replaced', 'expired']) {
-  test(`수정 확정 후 Stop에서도 probe·루트·전체 확인 제한을 유지한다: ${mode}`, async () => {
+for (const mode of ['normal', 'root-replaced', 'expired']) {
+  test(`수정 확정 후 Stop에서도 루트·전체 확인 제한을 유지한다: ${mode}`, async () => {
     const f = fixture(), inject = join(root, `changed-checkpoint-${mode}.mjs`), trace = inject + '.log';
     writeFileSync(inject, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';
 const mode=${JSON.stringify(mode)},workspace=${JSON.stringify(f.cwd)},trace=${JSON.stringify(trace)};
 const changed=()=>JSON.parse(fs.readFileSync(process.argv[2],'utf8')).changed;
-const write=fs.writeFileSync;fs.writeFileSync=(path,...args)=>{if(String(path).includes('.ai-setting-quality-probe-')&&changed())fs.appendFileSync(trace,'probe\\n');return write(path,...args)};
-const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{const value=stat(path,...args);if(path===workspace&&changed()){fs.appendFileSync(trace,'root\\n');if(mode==='expired'){const now=Date.now;Date.now=()=>now()+3000;}}return value};
-const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event,name)=>{if(mode==='no-probe'&&name?.startsWith('.ai-setting-quality-probe-')&&changed())return;listener(event,name)});syncBuiltinESMExports();`);
+const stat=fs.lstatSync;fs.lstatSync=(path,...args)=>{const value=stat(path,...args);if(path===workspace&&changed()){fs.appendFileSync(trace,'root\\n');if(mode==='expired'){const now=Date.now;Date.now=()=>now()+3000;}}return value};syncBuiltinESMExports();`);
     process.env.NODE_OPTIONS = `--import=${pathToFileURL(inject).href}`;
     try { await f.prepare(); }
     finally { if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous.NODE_OPTIONS; }
@@ -1099,7 +1124,6 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event
         assert.equal((await gate.record('review-requested')).reviewRequests, i + 1);
       }
       const events = readFileSync(trace, 'utf8').trim().split('\n');
-      assert.equal(events.filter(event => event === 'probe').length, 2);
       assert.equal(events.filter(event => event === 'root').length, 2);
       assert.equal(stateFor(f.cwd).state.failed, undefined);
     } else {
@@ -1109,7 +1133,7 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>watch(path,options,(event
       if (mode === 'root-replaced') assert.ok(state.failed);
       else {
         assert.equal(state.failed, 'watch-check-failed');
-        assert.ok(readFileSync(trace, 'utf8').includes('probe'));
+        assert.ok(readFileSync(trace, 'utf8').includes('root'));
       }
     }
   });
