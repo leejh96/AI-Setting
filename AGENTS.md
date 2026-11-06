@@ -9,6 +9,11 @@
 - 전역 지침은 도구가 실제로 읽는 파일명·위치를 확인해 반영합니다. 현재 Codex는 `~/.codex/AGENTS.md`, Antigravity는 `~/.gemini/GEMINI.md`를 사용합니다. 전역 동기화 요청 없이 설치된 지침을 덮어쓰지 않습니다.
 - `skills/`와 `hooks/`는 배포 원본입니다. 설치본만 고쳐 원본과 다르게 남기지 않습니다.
 
+## 스킬 설치·동기화
+
+- 스킬을 설치하거나 갱신할 때 README에서 스킬별 배포 대상을 확인합니다. Codex와 Antigravity를 함께 동기화하는 경우에도 각 도구에 해당하는 스킬만 복사합니다.
+- `skills/antigravity-worker/`는 Codex 전용입니다. Codex 설치·갱신에 포함하고 Antigravity 스킬 동기화에서는 제외합니다.
+
 ## Codex·Antigravity 훅 설치·갱신
 
 - 전역 훅 코드는 각 도구의 사용자 디렉터리에 실제 파일로 복사합니다. 저장소의 스크립트를 직접 실행하도록 등록하거나 심볼릭 링크로 연결하지 않습니다.

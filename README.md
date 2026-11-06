@@ -21,7 +21,8 @@ ai-setting/
 │   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
 │   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
-│   └── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
+│   ├── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
+│   └── antigravity-worker/ # Antigravity에 작업을 위임하고 Codex에서 검토
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -50,6 +51,7 @@ ai-setting/
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
 | [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
 | [tech-research](skills/tech-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
+| [antigravity-worker](skills/antigravity-worker/SKILL.md) | Codex에서 Antigravity를 실행 워커로 위임 | Windows·macOS 별도 터미널, 작업 종료 감지, Codex 검토 |
 
 여러 스킬의 적용 조건이 겹치면 각 전문 절차를 필요한 범위에서 함께 사용합니다. 예를 들어 복잡한 버그 수정은 진행 상태를 추적하면서 원인을 좁힐 수 있고, 업무 분기가 바뀌면 결정 테이블로 확인할 수 있습니다. 같은 계획·조사·검증 결과는 공유하고 중복 작성·실행하지 않습니다.
 
@@ -61,6 +63,8 @@ ai-setting/
 | --- | --- | --- |
 | Codex | `~/.codex/skills/<스킬 이름>` | `$<스킬 이름>` |
 | Antigravity | `~/.gemini/config/skills/<스킬 이름>` | `/<스킬 이름>` |
+
+**`antigravity-worker`는 Codex 전용입니다.** Windows와 macOS의 Codex에 설치합니다. 두 에이전트를 함께 동기화할 때도 Antigravity의 스킬 설치 대상에서는 제외합니다. 각 기기에서 Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다.
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 
