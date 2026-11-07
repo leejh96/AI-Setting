@@ -1,37 +1,39 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, appendFileSync, chmodSync, constants, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, delimiter, isAbsolute, join } from 'node:path';
-import { createInterface } from 'node:readline';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stripVTControlCharacters } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
+import { display, effort, installHooks, model, recordHook, runAgy, startupGraceMs } from './agy.mjs';
 
 const runner = fileURLToPath(import.meta.url);
-const model = 'gemini-3.8-flash-high';
-const effort = 'high';
-const startupGraceMs = 45_000;
-const idleGraceMs = 12_000;
-const successfulStop = new Set(['model_stop', 'NO_TOOL_CALL']);
-const quotePowerShell = (value) => `'${value.replaceAll("'", "''")}'`;
+const requestFile = 'request.json';
+const quotePowerShell = (value) => `'${value.replace(/['\u2018-\u201b]/g, (char) => char + char)}'`;
 const quoteShell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 
-function encodePowerShell(command) {
-  return Buffer.from(command, 'utf16le').toString('base64');
-}
-
-function readJson(directory, name, optional = false) {
+function readOptional(path) {
   try {
-    return JSON.parse(readFileSync(join(directory, name), 'utf8'));
+    return readFileSync(path, 'utf8');
   } catch (error) {
-    if (optional && error.code === 'ENOENT') return null;
-    throw error;
+    if (error.code !== 'ENOENT') throw error;
+    return null;
   }
 }
 
+function readJson(directory, name) {
+  const value = readOptional(join(directory, name));
+  return value === null ? null : JSON.parse(value);
+}
+
 function writeJson(directory, name, value) {
-  const temporary = join(directory, `${name}.tmp`);
+  const temporary = join(directory, `${name}.${process.pid}.tmp`);
   writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
-  renameSync(temporary, join(directory, name));
+  try {
+    renameSync(temporary, join(directory, name));
+  } catch (error) {
+    unlinkSync(temporary);
+    throw error;
+  }
 }
 
 function findAgy() {
@@ -55,292 +57,365 @@ function findAgy() {
 }
 
 function launchTerminal(directory) {
+  let launched;
   if (process.platform === 'win32') {
-    const argumentsLine = `"${runner}" run "${directory}"`;
-    const command = `$ErrorActionPreference = 'Stop'\nStart-Process -FilePath ${quotePowerShell(process.execPath)} -ArgumentList ${quotePowerShell(argumentsLine)} -WindowStyle Normal`;
+    const args = `"${runner}" serve "${directory}"`;
+    const command = `$ErrorActionPreference = 'Stop'\nStart-Process -FilePath ${quotePowerShell(process.execPath)} -ArgumentList ${quotePowerShell(args)} -WindowStyle Normal`;
     const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(command)], { encoding: 'utf8', windowsHide: true });
+    launched = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
+      encoding: 'utf8', windowsHide: true, timeout: startupGraceMs,
+    });
+  } else if (process.platform === 'darwin') {
+    const commandFile = join(directory, 'antigravity-worker.command');
+    const command = [process.execPath, runner, 'serve', directory].map(quoteShell).join(' ');
+    writeFileSync(commandFile, `#!/bin/sh\nexec ${command}\n`, { mode: 0o700, flag: 'wx' });
+    launched = spawnSync('/usr/bin/open', ['-a', 'Terminal', commandFile], { encoding: 'utf8', timeout: startupGraceMs });
+  } else {
+    throw new Error('Use Windows or macOS.');
   }
-
-  const commandFile = join(directory, 'antigravity-worker.command');
-  const command = [process.execPath, runner, 'run', directory].map(quoteShell).join(' ');
-  writeFileSync(commandFile, `#!/bin/sh\nexec ${command}\n`, { mode: 0o700, flag: 'wx' });
-  return spawnSync('/usr/bin/open', ['-a', 'Terminal', commandFile], { encoding: 'utf8' });
+  if (launched.error || launched.status !== 0) {
+    throw new Error(launched.error?.message || launched.stderr?.trim() || 'Could not open a worker terminal.');
+  }
 }
 
-function hookConfig(directory) {
-  const handler = (phase) => {
-    const args = [process.execPath, runner, 'hook', directory, phase];
-    if (process.platform !== 'win32') return { type: 'command', command: args.map(quoteShell).join(' '), timeout: 10 };
-    const normalized = args.map((argument) => argument.replaceAll('\\', '/'));
-    if (normalized.every((argument) => /^[\w:./-]+$/.test(argument))) {
-      return { type: 'command', command: normalized.join(' '), timeout: 10 };
-    }
-    const encoded = encodePowerShell(`& ${args.map(quotePowerShell).join(' ')}; exit $LASTEXITCODE`);
-    return { type: 'command', command: `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`, timeout: 10 };
-  };
-  return { PreInvocation: [handler('active')], Stop: [handler('stop')] };
+function lockPath(cwd) {
+  return join(cwd, '.agents', '.codex-antigravity-worker.lock');
 }
 
-function replaceConfig(target, bytes, mode, directory) {
-  const temporary = `${target}.${basename(directory)}.tmp`;
-  writeFileSync(temporary, bytes, { mode, flag: 'wx' });
+function controlPath(job, action) {
+  return join(job.terminalDirectory, `${action}-${basename(job.jobDirectory)}`);
+}
+
+function reserveWorktree(job) {
+  const configDirectory = join(job.cwd, '.agents');
+  let createdDirectory = false;
   try {
-    chmodSync(temporary, mode);
-    renameSync(temporary, target);
+    mkdirSync(configDirectory);
+    createdDirectory = true;
   } catch (error) {
-    unlinkSync(temporary);
-    throw error;
+    if (error.code !== 'EEXIST') throw error;
   }
-}
-
-function installHooks(directory, cwd) {
-  const configDirectory = join(cwd, '.agents');
-  const createdDirectory = !lstatSync(configDirectory, { throwIfNoEntry: false });
-  if (createdDirectory) mkdirSync(configDirectory);
   if (realpathSync(configDirectory) !== configDirectory) throw new Error('The .agents directory must be local to the worktree.');
-  const target = join(configDirectory, 'hooks.json');
-  const lock = join(configDirectory, '.codex-antigravity-worker.lock');
-  writeFileSync(lock, directory, { flag: 'wx', mode: 0o600 });
-  function release() {
-    if (readFileSync(lock, 'utf8') !== directory) throw new Error(`Worker lock changed during execution: ${lock}`);
+  const lock = lockPath(job.cwd);
+  try {
+    writeFileSync(lock, job.jobDirectory, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    throw new Error(`The worktree is locked by ${readOptional(lock) || 'another worker'}. Check ${lock}.`);
+  }
+  return () => {
+    if (readOptional(lock) !== job.jobDirectory) throw new Error(`Worker lock changed during execution: ${lock}`);
     unlinkSync(lock);
     if (createdDirectory) {
       try {
         rmdirSync(configDirectory);
       } catch (error) {
-        if (error.code !== 'ENOTEMPTY') throw error;
+        if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error;
       }
     }
-  }
-  let original;
-  let installed;
-  let mode;
-  try {
-    const existing = lstatSync(target, { throwIfNoEntry: false });
-    if (existing && !existing.isFile()) throw new Error('The worktree hooks.json must be a regular file.');
-    mode = existing ? existing.mode & 0o777 : 0o600;
-    original = existing ? readFileSync(target) : null;
-    const config = original ? JSON.parse(original.toString('utf8').replace(/^\uFEFF/, '')) : {};
-    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Invalid worktree hooks.json.');
-    const name = 'codex-antigravity-worker';
-    if (Object.hasOwn(config, name)) throw new Error('A worker hook with this name already exists.');
-    config[name] = hookConfig(directory);
-    installed = Buffer.from(`${JSON.stringify(config, null, 2)}\n`);
-    if (original) writeFileSync(join(directory, 'original-hooks.json'), original, { mode: 0o600, flag: 'wx' });
-    replaceConfig(target, installed, mode, directory);
-  } catch (error) {
-    release();
-    throw error;
-  }
-  return () => {
-    const current = lstatSync(target, { throwIfNoEntry: false });
-    if (!current?.isFile() || !readFileSync(target).equals(installed)) {
-      throw new Error(`Worker hook configuration changed during execution. Review ${target} and the backup in ${directory}.`);
-    }
-    if (original) replaceConfig(target, original, mode, directory);
-    else unlinkSync(target);
-    release();
   };
 }
 
-function start(worktree, promptFile, timeout = '1800') {
-  if (!['win32', 'darwin'].includes(process.platform)) throw new Error('Use Windows or macOS.');
-  if (!isAbsolute(worktree) || !isAbsolute(promptFile)) throw new Error('Pass absolute worktree and prompt paths.');
-  const cwd = realpathSync(worktree);
-  if (!statSync(cwd).isDirectory() || !statSync(promptFile).isFile()) throw new Error('Expected a worktree directory and a prompt file.');
+function readJob(directory) {
+  if (!isAbsolute(directory)) throw new Error('Pass an absolute job directory.');
+  const jobDirectory = realpathSync(directory);
+  const job = readJson(jobDirectory, 'job.json');
+  if (!job) throw new Error(`No job found in ${jobDirectory}.`);
+  return { ...job, jobDirectory };
+}
+
+function terminalInfo(directory) {
+  const terminal = readJson(directory, 'terminal.json');
+  if (!terminal) return { terminalOpen: false };
+  if (readJson(directory, 'closed.json')) return { terminalOpen: false, terminalPid: terminal.pid };
+  try {
+    process.kill(terminal.pid, 0);
+    return { terminalOpen: true, terminalPid: terminal.pid };
+  } catch (error) {
+    if (error.code === 'ESRCH') return { terminalOpen: false, terminalPid: terminal.pid };
+    if (error.code === 'EPERM') return { terminalOpen: null, terminalPid: terminal.pid };
+    throw error;
+  }
+}
+
+function legacyStatus(job, result) {
+  const { jobDirectory, createdAt, seconds } = job;
+  if (result) {
+    const transcript = result.transcriptPath && statSync(result.transcriptPath, { throwIfNoEntry: false });
+    const changed = result.status === 'review-ready' && transcript?.mtimeMs > result.transcriptTimestamp;
+    return { jobDirectory, ...result, status: changed ? 'changed-after-handoff' : result.status };
+  }
+  const started = statSync(join(jobDirectory, 'started'), { throwIfNoEntry: false });
+  const elapsed = Date.now() - (started?.mtimeMs ?? createdAt);
+  const status = started
+    ? elapsed > seconds * 1000 + startupGraceMs ? 'wait-timeout' : 'running'
+    : elapsed > startupGraceMs ? 'startup-timeout' : 'starting';
+  return { jobDirectory, status };
+}
+
+function jobStatus(job) {
+  const { jobDirectory, terminalDirectory, terminalReason, createdAt } = job;
+  const result = readJson(jobDirectory, 'result.json');
+  if (!terminalDirectory) return legacyStatus(job, result);
+  const terminal = terminalInfo(terminalDirectory);
+  const base = { jobDirectory, terminalDirectory, terminalReason, ...terminal };
+  if (result) return { ...base, ...result };
+  const progress = readJson(jobDirectory, 'progress.json');
+  if (terminal.terminalPid && terminal.terminalOpen === false) {
+    const lock = lockPath(job.cwd);
+    const cleanup = readOptional(lock) === jobDirectory;
+    return {
+      ...base, ...progress, status: cleanup ? 'cleanup-needed' : 'terminal-lost',
+      ...(cleanup && { lockPath: lock, hookPath: join(job.cwd, '.agents', 'hooks.json') }),
+    };
+  }
+  if (progress) return { ...base, ...progress };
+  const launchError = readJson(jobDirectory, 'launch-error.json');
+  if (launchError) return { ...base, status: 'launch-failed', error: launchError.error };
+  const expired = Date.now() - createdAt >= startupGraceMs;
+  return { ...base, status: expired ? 'startup-timeout' : 'starting', phase: 'terminal-starting' };
+}
+
+export function status(directory) {
+  return jobStatus(readJob(directory));
+}
+
+function readPrompt(promptFile, timeout) {
+  if (!isAbsolute(promptFile) || !statSync(promptFile).isFile()) throw new Error('Pass an absolute prompt file path.');
   const seconds = Number(timeout);
   if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 14_400) throw new Error('Timeout must be 1 to 14400 seconds.');
   const prompt = readFileSync(promptFile, 'utf8').replace(/^\uFEFF/, '');
   if (!prompt.trim()) throw new Error('The prompt is empty.');
-  if (process.platform === 'win32' && prompt.length > 12_000) throw new Error('Keep the initial Windows interactive prompt to 12,000 characters.');
-  const agy = findAgy();
-  const directory = mkdtempSync(join(tmpdir(), 'codex-agy-worker-'));
-  const job = { cwd, agy, seconds, createdAt: Date.now() };
-  writeJson(directory, 'job.json', job);
-  const stagedPrompt = join(directory, 'prompt.txt');
-  writeFileSync(stagedPrompt, prompt, { mode: 0o600, flag: 'wx' });
-  try {
-    const launched = launchTerminal(directory);
-    if (launched.error || launched.status !== 0) {
-      throw new Error(launched.error?.message || launched.stderr?.trim() || 'Could not open a worker terminal.');
+  if (process.platform === 'win32' && prompt.length > 12_000) throw new Error('Keep the Windows interactive prompt to 12,000 characters.');
+  return { seconds, prompt };
+}
+
+export function start(worktree, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy } = {}) {
+  if (!isAbsolute(worktree)) throw new Error('Pass an absolute worktree path.');
+  const cwd = realpathSync(worktree);
+  if (!statSync(cwd).isDirectory()) throw new Error('Expected a worktree directory.');
+  const { seconds, prompt } = readPrompt(promptFile, timeout);
+  const lock = lockPath(cwd);
+  const owner = readOptional(lock);
+  if (owner !== null) throw new Error(`The worktree is locked by ${owner || 'another worker'}. Check ${lock}.`);
+
+  let terminalDirectory;
+  let terminalReason = newTerminal ? 'requested' : 'initial';
+  if (previous) {
+    const earlier = previous;
+    if (earlier.cwd !== cwd) throw new Error('Follow-up must use the previous job’s worktree.');
+    const prior = jobStatus(earlier);
+    if (!readJson(earlier.jobDirectory, 'result.json') && !['terminal-lost', 'startup-timeout', 'launch-failed'].includes(prior.status)) {
+      throw new Error(`The previous job is still pending or needs cleanup: ${prior.status}.`);
     }
-  } catch (error) {
-    unlinkSync(stagedPrompt);
-    writeJson(directory, 'result.json', { status: 'failed', error: error.message });
+    if (!newTerminal) {
+      const reusable = prior.terminalReusable !== false && prior.status !== 'startup-timeout';
+      if (reusable && prior.terminalOpen === null) throw new Error('Unable to verify the previous terminal from this session.');
+      if (reusable && prior.terminalOpen) terminalDirectory = earlier.terminalDirectory;
+      terminalReason = terminalDirectory ? 'reused' : 'previous-terminal-unavailable';
+    }
   }
+  const agy = locateAgy();
+  const jobDirectory = realpathSync(mkdtempSync(join(tmpdir(), 'codex-agy-worker-')));
+  terminalDirectory ??= jobDirectory;
+  const job = { cwd, agy, seconds, createdAt: Date.now(), jobDirectory, terminalDirectory, terminalReason };
+  try {
+    writeJson(jobDirectory, 'job.json', job);
+    writeFileSync(join(jobDirectory, 'prompt.txt'), prompt, { mode: 0o600, flag: 'wx' });
+    // A hard link publishes the whole request atomically and refuses to overwrite a queued job.
+    linkSync(join(jobDirectory, 'job.json'), join(terminalDirectory, requestFile));
+  } catch (error) {
+    let cleanup = '';
+    try {
+      rmSync(jobDirectory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      cleanup = ` Could not remove staged job ${jobDirectory}: ${cleanupError.message}`;
+    }
+    throw new Error(`Could not queue the job in ${terminalDirectory}: ${error.message}${cleanup}`, { cause: error });
+  }
+  if (terminalDirectory === jobDirectory) {
+    try {
+      launch(terminalDirectory);
+    } catch (error) {
+      writeJson(jobDirectory, 'launch-error.json', { error: error.message });
+    }
+  }
+  return status(jobDirectory);
+}
+
+export async function followUp(previous, promptFile, options) {
+  const earlier = readJob(previous);
+  const current = jobStatus(earlier);
+  if (earlier.terminalDirectory && current.tuiOpen && current.status === 'review-ready' && !current.finishedAt) {
+    readPrompt(promptFile, options?.timeout ?? '1800');
+    if (!current.terminalOpen) throw new Error('Unable to confirm the previous terminal is open.');
+    const deadline = Date.now() + 15_000;
+    writeJson(earlier.terminalDirectory, basename(controlPath(earlier, 'retire')), {
+      eventTimestamp: current.eventTimestamp, expiresAt: deadline,
+    });
+    while (!readJson(earlier.jobDirectory, 'result.json')) {
+      const state = jobStatus(earlier);
+      const stillReviewed = state.status === 'review-ready' && state.eventTimestamp === current.eventTimestamp;
+      if (Date.now() >= deadline || (!stillReviewed && state.status !== 'stopping')) {
+        throw new Error('Could not close the previous Antigravity screen safely. Check its status before retrying.');
+      }
+      await delay(100);
+    }
+  }
+  return start(earlier.cwd, promptFile, { ...options, previous: earlier });
+}
+
+export function cancel(directory) {
+  const job = readJob(directory);
+  const current = status(directory);
+  if (!current.terminalOpen || current.finishedAt || !['starting', 'agy-starting', 'agy-running', 'agy-settling', 'review-ready', 'changed-after-handoff', 'stopping'].includes(current.status)) {
+    throw new Error(`The worker cannot be cancelled in state ${current.status}.`);
+  }
+  writeFileSync(controlPath(job, 'cancel'), '', { mode: 0o600 });
   return status(directory);
 }
 
-function jobMarker(directory) {
-  return `[Codex worker job ${basename(directory)}]`;
-}
-
-function recordHook(directory, phase) {
-  const event = JSON.parse(readFileSync(0, 'utf8'));
-  const { conversationId, lastUserInput, terminationReason, fullyIdle, transcriptPath } = event;
-  const previous = lastHookEvent(directory);
-  const initialTask = typeof lastUserInput === 'string' && lastUserInput.includes(jobMarker(directory));
-  if (typeof conversationId === 'string' && (previous ? previous.conversationId === conversationId : initialTask)) {
-    appendFileSync(join(directory, 'events.jsonl'), `${JSON.stringify({
-      phase, conversationId, terminationReason, fullyIdle, transcriptPath, timestamp: Date.now(),
-    })}\n`, { mode: 0o600 });
-  }
-  process.stdout.write('{}');
-}
-
-function lastHookEvent(directory) {
+async function execute(job, controller, retire, run) {
+  const { jobDirectory, cwd } = job;
+  let release;
+  let restore;
+  let outcome;
   try {
-    const records = readFileSync(join(directory, 'events.jsonl'), 'utf8');
-    const lastLineEnd = records.lastIndexOf('\n');
-    if (lastLineEnd < 0) return null;
-    const start = records.lastIndexOf('\n', lastLineEnd - 1) + 1;
-    return JSON.parse(records.slice(start, lastLineEnd));
+    const staged = join(jobDirectory, 'prompt.txt');
+    const prompt = readFileSync(staged, 'utf8');
+    unlinkSync(staged);
+    if (Date.now() - job.createdAt >= startupGraceMs) return { status: 'startup-timeout', phase: 'terminal-starting' };
+    if (controller.signal.aborted) return { status: 'interrupted', phase: 'terminal-starting' };
+    release = reserveWorktree(job);
+    restore = installHooks(job, runner);
+    console.log(`\n[${basename(jobDirectory)}] ${display(job.terminalReason)}\n${display(cwd)}\n`);
+    outcome = await run(job, prompt, (progress) => writeJson(jobDirectory, 'progress.json', progress), controller.signal, { retireRequests: retire });
   } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw error;
+    outcome = { status: 'failed', error: error.message };
   }
-}
-
-function idleOutcome(directory, tuiOpen) {
-  const event = lastHookEvent(directory);
-  if (event?.phase !== 'stop' || event.fullyIdle !== true) return null;
-  const { timestamp, transcriptPath, conversationId, terminationReason } = event;
-  const transcript = transcriptPath && statSync(transcriptPath, { throwIfNoEntry: false });
-  const lastActivity = Math.max(timestamp, transcript?.mtimeMs ?? 0);
-  if (tuiOpen && Date.now() - lastActivity < idleGraceMs) return null;
-  return {
-    status: successfulStop.has(terminationReason) ? 'review-ready' : 'failed',
-    tuiOpen, conversationId, terminationReason, transcriptPath, eventTimestamp: timestamp, transcriptTimestamp: transcript?.mtimeMs,
-  };
-}
-
-function status(directory) {
-  const job = readJson(directory, 'job.json');
-  const result = readJson(directory, 'result.json', true);
-  if (result) {
-    const transcript = result.transcriptPath && statSync(result.transcriptPath, { throwIfNoEntry: false });
-    if (result.status === 'review-ready' && transcript?.mtimeMs > result.transcriptTimestamp) {
-      return { jobDirectory: directory, ...result, status: 'changed-after-handoff' };
-    }
-    return { jobDirectory: directory, ...result };
-  }
-  const started = statSync(join(directory, 'started'), { throwIfNoEntry: false });
-  const elapsed = Date.now() - (started?.mtimeMs ?? job.createdAt);
-  const state = started
-    ? elapsed > job.seconds * 1000 + startupGraceMs ? 'wait-timeout' : 'running'
-    : elapsed > startupGraceMs ? 'startup-timeout' : 'starting';
-  return { jobDirectory: directory, status: state };
-}
-
-function display(text) {
-  return stripVTControlCharacters(String(text ?? '')).replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '');
-}
-
-function runAgy(directory, job, prompt, restoreHooks) {
-  const child = spawn(job.agy, [
-    '--sandbox', '--dangerously-skip-permissions', '--model', model, '--effort', effort,
-    // Explicitly select the existing worktree so CLI 1.5.2 loads its hooks before the initial prompt.
-    '--add-dir', job.cwd,
-    '-i', `${prompt}\n\nKeep the temporary worker hook and lock files in .agents unchanged.\n${jobMarker(directory)}`,
-  ], { cwd: job.cwd, stdio: 'inherit' });
-  let handedOff = false;
-  function handoff(result) {
-    if (handedOff) return;
-    handedOff = true;
+  if (release && outcome.status !== 'cleanup-needed') {
     try {
-      restoreHooks();
+      restore?.();
+      release();
     } catch (error) {
-      result = { ...result, status: 'cleanup-needed', error: error.message };
+      outcome = { ...outcome, status: 'cleanup-needed', error: error.message };
     }
-    writeJson(directory, 'result.json', result);
   }
-  let interruption;
-  const stopSignals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  const interrupt = (signal) => {
-    if (signal === 'SIGINT') return; // Antigravity handles Ctrl+C directly in its terminal.
-    interruption = 'interrupted';
-    child.kill('SIGKILL');
-  };
-  for (const signal of stopSignals) process.on(signal, interrupt);
-  const deadline = Date.now() + job.seconds * 1000;
-  const timer = setInterval(() => {
-    const ready = idleOutcome(directory, true);
-    if (ready) {
-      clearInterval(timer);
-      handoff(ready);
+  if (outcome.status === 'cleanup-needed') {
+    outcome.lockPath = lockPath(cwd);
+    outcome.hookPath = join(cwd, '.agents', 'hooks.json');
+  }
+  return outcome;
+}
+
+export function serve(directory, run = runAgy) {
+  const terminal = readJob(directory);
+  const terminalDirectory = terminal.jobDirectory;
+  if (terminal.terminalDirectory !== terminalDirectory) throw new Error('Expected the initial job directory for this terminal.');
+  // A directory is an exclusive claim even if the same launcher is invoked twice.
+  mkdirSync(join(terminalDirectory, 'serving'), { mode: 0o700 });
+  writeJson(terminalDirectory, 'terminal.json', { pid: process.pid });
+  console.log(`Antigravity worker | ${model} | effort ${effort}\nCtrl+D exits the Antigravity screen. Ctrl+C closes the idle worker terminal.`);
+  let active;
+  let closing = false;
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const watcher = watch(terminalDirectory, (event, filename) => {
+    if (!filename || filename === requestFile || /^(cancel|retire)-/.test(filename)) receive();
+  });
+  watcher.on('error', (error) => {
+    console.error(display(error.message));
+    close();
+  });
+
+  function close() {
+    closing = true;
+    if (active) {
+      active.controller.abort();
       return;
     }
-    if (Date.now() < deadline) return;
-    clearInterval(timer);
-    interruption = 'timed-out';
-    child.kill('SIGKILL');
-  }, 1_000);
+    watcher.close();
+    for (const signal of signals) process.removeListener(signal, onSignal[signal]);
+    writeJson(terminalDirectory, 'closed.json', { timestamp: Date.now() });
+  }
 
-  return new Promise((resolve) => {
-    let spawnError;
-    child.once('error', (error) => {
-      spawnError = error.message;
-    });
-    child.once('close', (exitCode, signal) => {
-      clearInterval(timer);
-      for (const signal of stopSignals) process.removeListener(signal, interrupt);
-      const ready = !interruption && !spawnError && exitCode === 0 && idleOutcome(directory, false);
-      handoff(ready ? { ...ready, exitCode, signal } : {
-        status: interruption ?? 'failed', exitCode, signal, tuiOpen: false,
-        error: spawnError ?? (!interruption ? 'Antigravity exited without a confirmed completion hook.' : undefined),
-      });
-      resolve();
-    });
-  });
-}
+  const onSignal = {
+    SIGINT: () => { if (!active) close(); },
+    SIGTERM: close,
+    SIGHUP: close,
+  };
+  for (const signal of signals) process.on(signal, onSignal[signal]);
 
-async function run(directory) {
-  const job = readJson(directory, 'job.json');
-  mkdirSync(join(directory, 'started'), { mode: 0o700 });
-  let result;
-  try {
-    const stagedPrompt = join(directory, 'prompt.txt');
-    const prompt = readFileSync(stagedPrompt, 'utf8');
-    unlinkSync(stagedPrompt);
-    if (Date.now() - job.createdAt > startupGraceMs) {
-      result = { status: 'startup-timeout', error: 'The terminal opened after the launch deadline.' };
-    } else {
-      console.log(`Antigravity worker | ${model} | effort ${effort}\n${display(job.cwd)}\n`);
-      const restoreHooks = installHooks(directory, job.cwd);
-      try {
-        await runAgy(directory, job, prompt, restoreHooks);
-      } catch (error) {
-        restoreHooks();
-        throw error;
+  function receive() {
+    if (closing) return;
+    try {
+      if (active) {
+        if (readOptional(active.cancelFile) !== null) active.controller.abort();
+        else {
+          const request = readOptional(active.retireFile);
+          if (request !== null) {
+            unlinkSync(active.retireFile);
+            if (request) active.retire.dispatchEvent(new CustomEvent('retire', { detail: JSON.parse(request) }));
+          }
+        }
+        return;
       }
-      result = readJson(directory, 'result.json');
+      const slot = join(terminalDirectory, requestFile);
+      const job = readJson(terminalDirectory, requestFile);
+      if (!job) return;
+      if (job.terminalDirectory !== terminalDirectory || job.cwd !== terminal.cwd) throw new Error('Invalid request for this terminal.');
+      const controller = new AbortController();
+      const retire = new EventTarget();
+      const cancelFile = controlPath(job, 'cancel');
+      if (readOptional(cancelFile) !== null) controller.abort();
+      active = { cancelFile, retireFile: controlPath(job, 'retire'), controller, retire };
+      execute(job, controller, retire, run).then((result) => {
+        unlinkSync(slot);
+        writeJson(job.jobDirectory, 'result.json', { ...result, finishedAt: Date.now() });
+        if (result.terminalReusable === false) closing = true;
+        console.log(`\n[${result.status}] ${display(result.error ?? result.phase)}`);
+      }).catch((error) => {
+        console.error(display(error.message));
+        closing = true;
+      }).finally(() => {
+        active = undefined;
+        if (closing) close();
+        else receive();
+      });
+    } catch (error) {
+      console.error(display(error.message));
+      close();
     }
-  } catch (error) {
-    result = { status: 'failed', error: error.message };
   }
-  if (!readJson(directory, 'result.json', true)) writeJson(directory, 'result.json', result);
-  console.log(`\n\n[${result.status}] ${display(result.error ?? result.response)}`);
-  if (process.stdin.isTTY) {
-    const terminal = createInterface({ input: process.stdin, output: process.stdout });
-    terminal.question('Press Enter to close this window.', () => terminal.close());
-  }
+
+  receive();
+  return close;
 }
 
-try {
-  const [action, ...args] = process.argv.slice(2);
-  if (action === 'start' && [2, 3].includes(args.length)) {
-    console.log(JSON.stringify(start(...args)));
-  } else if (action === 'status' && args.length === 1) {
-    console.log(JSON.stringify(status(args[0])));
-  } else if (action === 'run' && args.length === 1) {
-    await run(args[0]);
-  } else if (action === 'hook' && args.length === 2 && ['active', 'stop'].includes(args[1])) {
-    recordHook(...args);
-  } else {
-    throw new Error('Usage: worker.mjs start <worktree> <prompt-file> [timeout-seconds] | status <job-directory>');
+function parseOptions(values) {
+  const options = {};
+  for (const value of values) {
+    if (value === '--new-terminal' && !options.newTerminal) options.newTerminal = true;
+    else if (/^\d+$/.test(value) && !options.timeout) options.timeout = value;
+    else throw new Error(`Unexpected option: ${value}`);
   }
-} catch (error) {
-  console.error(display(error.message));
-  process.exitCode = 1;
+  return options;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === runner) {
+  try {
+    const [action, ...args] = process.argv.slice(2);
+    if (action === 'start' && args.length >= 2) console.log(JSON.stringify(start(args[0], args[1], parseOptions(args.slice(2)))));
+    else if (action === 'follow-up' && args.length >= 2) console.log(JSON.stringify(await followUp(args[0], args[1], parseOptions(args.slice(2)))));
+    else if (action === 'status' && args.length === 1) console.log(JSON.stringify(status(args[0])));
+    else if (action === 'cancel' && args.length === 1) console.log(JSON.stringify(cancel(args[0])));
+    else if (action === 'serve' && args.length === 1) serve(args[0]);
+    else if (action === 'hook' && args.length === 2 && ['active', 'stop'].includes(args[1])) {
+      recordHook(args[0], args[1], JSON.parse(readFileSync(0, 'utf8')));
+      process.stdout.write('{}');
+    }
+    else throw new Error('Usage: worker.mjs start <worktree> <prompt> [seconds] | follow-up <job> <prompt> [seconds] [--new-terminal] | status <job> | cancel <job>');
+  } catch (error) {
+    console.error(display(error.message));
+    process.exitCode = 1;
+  }
 }

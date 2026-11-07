@@ -21,6 +21,7 @@ ai-setting/
 │   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
 │   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
+│   ├── task-lessons/   # 재사용할 작업 교훈의 조회·기록·정리
 │   ├── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
 │   └── antigravity-worker/ # Antigravity에 작업을 위임하고 Codex에서 검토
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
@@ -49,9 +50,10 @@ ai-setting/
 | [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
 | [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
+| [task-lessons](skills/task-lessons/SKILL.md) | 반복 실패나 뜻밖의 제약 등으로 이전 교훈이 다음 행동을 바꿀 때 | 프로젝트별 교훈 조회·기록·갱신·폐기 |
 | [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
 | [tech-research](skills/tech-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
-| [antigravity-worker](skills/antigravity-worker/SKILL.md) | Codex에서 Antigravity를 실행 워커로 위임 | Windows·macOS 별도 터미널, 작업 종료 감지, Codex 검토 |
+| [antigravity-worker](skills/antigravity-worker/SKILL.md) | Codex에서 Antigravity를 실행 워커로 위임 | Antigravity 대화형 화면, 터미널 재사용, Stop 훅 완료 감지 |
 
 여러 스킬의 적용 조건이 겹치면 각 전문 절차를 필요한 범위에서 함께 사용합니다. 예를 들어 복잡한 버그 수정은 진행 상태를 추적하면서 원인을 좁힐 수 있고, 업무 분기가 바뀌면 결정 테이블로 확인할 수 있습니다. 같은 계획·조사·검증 결과는 공유하고 중복 작성·실행하지 않습니다.
 
@@ -65,6 +67,10 @@ ai-setting/
 | Antigravity | `~/.gemini/config/skills/<스킬 이름>` | `/<스킬 이름>` |
 
 **`antigravity-worker`는 Codex 전용입니다.** Windows와 macOS의 Codex에 설치합니다. 두 에이전트를 함께 동기화할 때도 Antigravity의 스킬 설치 대상에서는 제외합니다. 각 기기에서 Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다.
+
+워커 실행에는 `skills/antigravity-worker/scripts/worker.mjs`와 같은 폴더의 `agy.mjs`가 함께 필요합니다. 같은 작업의 후속 요청은 `follow-up`으로 터미널을 재사용하고, 분리할 때는 `--new-terminal`을 붙입니다. 회귀 테스트는 저장소 루트에서 `node --test skills/antigravity-worker/worker.test.mjs`로 실행합니다. [실행 및 복구 안내](skills/antigravity-worker/SKILL.md)
+
+**`task-lessons`는 Codex 전용입니다.** 경로 계산에 Node.js 22 이상을 사용합니다. 교훈은 `~/.codex/task-lessons`에 프로젝트별로 저장하며 `CODEX_HOME` 또는 `CODEX_LESSONS_DIR` 설정을 따릅니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 
