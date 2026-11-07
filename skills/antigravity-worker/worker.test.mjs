@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { recordHook, runAgy, stopPosixTree } from './scripts/agy.mjs';
@@ -96,7 +96,7 @@ function fixture(t, { existingConfig = true, run = runFake } = {}) {
   const jobs = [];
   const terminals = new Map();
   const open = (terminal) => terminals.set(terminal, serve(terminal, run));
-  const options = { timeout: '1', locateAgy: () => process.execPath, launch: open };
+  const options = { timeout: '1', locateAgy: () => process.execPath, launch: open, jobRoot: directory };
   let promptIndex = 0;
   function prompt(message) {
     const path = join(directory, 'prompt-' + ++promptIndex + '.txt');
@@ -116,7 +116,7 @@ function fixture(t, { existingConfig = true, run = runFake } = {}) {
     rmSync(directory, { recursive: true, force: true });
   });
   return {
-    agents, config, lock, original, terminals, open,
+    agents, config, lock, original, terminals, open, jobRoot: directory, cwd,
     start: (message, overrides) => track(start(cwd, prompt(message), { ...options, ...overrides })),
     follow: async (job, message, overrides) => track(await followUp(job.jobDirectory, prompt(message), { ...options, ...overrides })),
   };
@@ -345,18 +345,93 @@ test('a busy terminal keeps its queued request and discards the rejected job dir
   writeFileSync(join(directory, 'result.json'), JSON.stringify({ status: 'review-ready', finishedAt: Date.now() }));
   const request = join(directory, 'request.json');
   const queued = readFileSync(request, 'utf8');
-  const isolatedTemp = mkdtempSync(join(tmpdir(), 'codex-agy-queue-test-'));
-  const tempVariable = process.platform === 'win32' ? 'TEMP' : 'TMPDIR';
-  const previousTemp = process.env[tempVariable];
+  const before = readdirSync(env.jobRoot).filter(name => name.startsWith('codex-agy-worker-')).sort();
+  await assert.rejects(env.follow(pending, 'normal'), /Could not queue the job/);
+  assert.deepEqual(readdirSync(env.jobRoot).filter(name => name.startsWith('codex-agy-worker-')).sort(), before);
+  assert.equal(readFileSync(request, 'utf8'), queued);
+});
+
+test('a new worker removes only old closed terminal groups with confirmed results and no lock', t => {
+  const env = fixture(t);
+  const old = Date.now() - 25 * 60 * 60 * 1000;
+  function savedJob({ terminal, cwd = env.cwd, status = 'review-ready', closedAt = old, hasResult = true } = {}) {
+    const directory = mkdtempSync(join(env.jobRoot, 'codex-agy-worker-'));
+    const save = (name, value) => writeFileSync(join(directory, name), JSON.stringify(value));
+    save('job.json', { jobDirectory: directory, terminalDirectory: terminal ?? directory, cwd, createdAt: old - 1000 });
+    if (!terminal) {
+      save('terminal.json', { pid: process.pid });
+      if (closedAt !== null) save('closed.json', { timestamp: closedAt });
+    }
+    if (hasResult) save('result.json', { status, finishedAt: old, tuiOpen: false });
+    return directory;
+  }
+  const expired = savedJob();
+  const expiredFollowUp = savedJob({ terminal: expired, status: 'interrupted' });
+  const recent = savedJob({ closedAt: Date.now() });
+  const open = savedJob({ closedAt: null });
+  const active = savedJob({ closedAt: null, hasResult: false });
+  const recoveryTerminal = savedJob();
+  const recovery = savedJob({ terminal: recoveryTerminal, status: 'cleanup-needed' });
+  writeFileSync(join(recovery, 'original-hooks.json'), env.original);
+  const incompleteTerminal = savedJob();
+  const incomplete = savedJob({ terminal: incompleteTerminal, hasResult: false });
+  const queued = savedJob();
+  writeFileSync(join(queued, 'request.json'), '{}');
+  const lockedCwd = join(env.jobRoot, 'locked workspace');
+  const locked = savedJob({ cwd: lockedCwd });
+  mkdirSync(join(lockedCwd, '.agents'), { recursive: true });
+  writeFileSync(join(lockedCwd, '.agents', '.codex-antigravity-worker.lock'), locked);
+  const symlink = join(env.jobRoot, 'codex-agy-worker-linked');
+  symlinkSync(lockedCwd, symlink, process.platform === 'win32' ? 'junction' : 'dir');
+
+  env.start('normal', { launch() {} });
+
+  assert.equal(existsSync(expired), false);
+  assert.equal(existsSync(expiredFollowUp), false);
+  for (const kept of [recent, open, active, recoveryTerminal, recovery, incompleteTerminal, incomplete, queued, locked, symlink]) {
+    assert.ok(existsSync(kept), kept);
+  }
+  assert.equal(readFileSync(join(recovery, 'original-hooks.json'), 'utf8'), env.original);
+  assert.equal(readFileSync(env.config, 'utf8'), env.original);
+});
+
+test('default starts and follow-ups store and clean records only under the Codex home', async t => {
+  const env = fixture(t);
+  const legacy = join(env.jobRoot, 'legacy temporary directory');
+  const codex = join(env.jobRoot, 'codex home');
+  mkdirSync(legacy, { mode: 0o700 });
+  const vars = { CODEX_HOME: codex, TMPDIR: legacy, TEMP: legacy, TMP: legacy };
+  const previous = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]]));
+  Object.assign(process.env, vars);
   try {
-    process.env[tempVariable] = isolatedTemp;
-    await assert.rejects(env.follow(pending, 'normal'), /Could not queue the job/);
-    assert.deepEqual(readdirSync(isolatedTemp), []);
-    assert.equal(readFileSync(request, 'utf8'), queued);
+    const old = Date.now() - 25 * 60 * 60 * 1000;
+    function archived(jobRoot) {
+      const { jobDirectory } = env.start('normal', { jobRoot, launch() {} });
+      const save = (name, value) => writeFileSync(join(jobDirectory, name), JSON.stringify(value));
+      save('job.json', { ...JSON.parse(readFileSync(join(jobDirectory, 'job.json'), 'utf8')), createdAt: old - 1000 });
+      save('terminal.json', { pid: process.pid });
+      save('closed.json', { timestamp: old });
+      save('result.json', { status: 'review-ready', finishedAt: old });
+      unlinkSync(join(jobDirectory, 'request.json'));
+      return jobDirectory;
+    }
+    const expiredLegacy = archived(legacy);
+    const expiredCurrent = archived(undefined);
+
+    const fresh = env.start('normal', { jobRoot: undefined, launch() {} });
+    const storage = realpathSync(join(codex, 'antigravity-worker', 'jobs'));
+    assert.equal(dirname(fresh.jobDirectory), storage);
+    assert.equal(existsSync(expiredCurrent), false);
+    assert.equal(existsSync(expiredLegacy), true);
+
+    const running = await reviewed(env.start('normal', { jobRoot: legacy }));
+    const follow = await reviewed(await env.follow(running, 'normal', { jobRoot: undefined }));
+    assert.equal(follow.terminalDirectory, follow.jobDirectory);
+    assert.equal(dirname(follow.jobDirectory), storage);
   } finally {
-    if (previousTemp === undefined) delete process.env[tempVariable];
-    else process.env[tempVariable] = previousTemp;
-    rmSync(isolatedTemp, { recursive: true, force: true });
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
   }
 });
 

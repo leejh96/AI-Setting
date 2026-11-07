@@ -71,6 +71,8 @@ ai-setting/
 
 워커 실행에는 `skills/antigravity-worker/scripts/worker.mjs`와 같은 폴더의 `agy.mjs`가 함께 필요합니다. 같은 작업의 후속 요청은 `follow-up`으로 터미널을 재사용하고, 분리할 때는 `--new-terminal`을 붙입니다. 회귀 테스트는 저장소 루트에서 `node --test skills/antigravity-worker/worker.test.mjs`로 실행합니다. [실행 및 복구 안내](skills/antigravity-worker/SKILL.md)
 
+새 터미널의 워커 기록은 Codex 홈 아래 `antigravity-worker/jobs/`에 저장합니다. 다음 워커 실행 때 터미널 종료 후 24시간이 지났고 작업 정리가 확인된 기록을 삭제합니다. [작업 기록 보관 기준](skills/antigravity-worker/SKILL.md#작업-기록-보관)
+
 **`task-lessons`는 Codex 전용입니다.** 경로 계산에 Node.js 22 이상을 사용합니다. 교훈은 `~/.codex/task-lessons`에 프로젝트별로 저장하며 `CODEX_HOME` 또는 `CODEX_LESSONS_DIR` 설정을 따릅니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.

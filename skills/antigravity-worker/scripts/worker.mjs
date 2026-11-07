@@ -1,13 +1,17 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
+import { accessSync, constants, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { display, effort, installHooks, model, recordHook, runAgy, startupGraceMs } from './agy.mjs';
 
 const runner = fileURLToPath(import.meta.url);
 const requestFile = 'request.json';
+const jobPrefix = 'codex-agy-worker-';
+const jobName = /^codex-agy-worker-[a-z0-9]{6}$/i;
+const retentionMs = 24 * 60 * 60 * 1000;
+const finishedStatuses = new Set(['review-ready', 'changed-after-handoff', 'interrupted', 'timed-out', 'failed', 'startup-timeout']);
 const quotePowerShell = (value) => `'${value.replace(/['\u2018-\u201b]/g, (char) => char + char)}'`;
 const quoteShell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -84,6 +88,58 @@ function lockPath(cwd) {
 
 function controlPath(job, action) {
   return join(job.terminalDirectory, `${action}-${basename(job.jobDirectory)}`);
+}
+
+function cleanupRecord(directory, name) {
+  return lstatSync(join(directory, name), { throwIfNoEntry: false })?.isFile() ? readJson(directory, name) : null;
+}
+
+function cleanupJobs(directory, protectedTerminal) {
+  let entries;
+  try { entries = readdirSync(directory, { withFileTypes: true }); }
+  catch { return; }
+  const cutoff = Date.now() - retentionMs;
+  const uid = process.getuid?.();
+  const groups = new Map();
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !jobName.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    try {
+      const identity = lstatSync(path);
+      if (!identity.isDirectory() || (uid !== undefined && identity.uid !== uid)) continue;
+      const job = cleanupRecord(path, 'job.json');
+      if (job?.jobDirectory !== path || typeof job.cwd !== 'string' || !isAbsolute(job.cwd)
+          || typeof job.terminalDirectory !== 'string' || dirname(job.terminalDirectory) !== directory
+          || !jobName.test(basename(job.terminalDirectory))) continue;
+      const group = groups.get(job.terminalDirectory) ?? [];
+      group.push({ job, identity });
+      groups.set(job.terminalDirectory, group);
+    } catch { /* Preserve records whose ownership or metadata cannot be read. */ }
+  }
+  for (const [terminal, group] of groups) {
+    const initial = group.find(({ job }) => job.jobDirectory === terminal);
+    if (!initial || terminal === protectedTerminal) continue;
+    try {
+      const closedAt = cleanupRecord(terminal, 'closed.json')?.timestamp;
+      const pid = cleanupRecord(terminal, 'terminal.json')?.pid;
+      if (!Number.isSafeInteger(closedAt) || closedAt > cutoff || !Number.isSafeInteger(pid) || pid <= 0
+          || lstatSync(join(terminal, requestFile), { throwIfNoEntry: false })
+          || lstatSync(lockPath(initial.job.cwd), { throwIfNoEntry: false })) continue;
+      if (!group.every(({ job }) => {
+        const result = cleanupRecord(job.jobDirectory, 'result.json');
+        return job.cwd === initial.job.cwd && Number.isSafeInteger(job.createdAt)
+          && finishedStatuses.has(result?.status) && (result.tuiOpen === undefined || result.tuiOpen === false)
+          && Number.isSafeInteger(result.finishedAt) && result.finishedAt >= job.createdAt && result.finishedAt <= closedAt;
+      })) continue;
+      // Keep the terminal record until its follow-up records have been removed.
+      for (const { job, identity } of [...group.filter(item => item !== initial), initial]) {
+        const current = lstatSync(job.jobDirectory, { throwIfNoEntry: false });
+        if (!current) continue;
+        if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino) break;
+        rmSync(job.jobDirectory, { recursive: true, force: true, maxRetries: 2 });
+      }
+    } catch { /* Uncertain records and inaccessible directories can be checked again on a later start. */ }
+  }
 }
 
 function reserveWorktree(job) {
@@ -190,7 +246,7 @@ function readPrompt(promptFile, timeout) {
   return { seconds, prompt };
 }
 
-export function start(worktree, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy } = {}) {
+export function start(worktree, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot } = {}) {
   if (!isAbsolute(worktree)) throw new Error('Pass an absolute worktree path.');
   const cwd = realpathSync(worktree);
   if (!statSync(cwd).isDirectory()) throw new Error('Expected a worktree directory.');
@@ -199,6 +255,14 @@ export function start(worktree, promptFile, { timeout = '1800', previous, newTer
   const owner = readOptional(lock);
   if (owner !== null) throw new Error(`The worktree is locked by ${owner || 'another worker'}. Check ${lock}.`);
 
+  const storage = jobRoot ?? join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'jobs');
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const info = lstatSync(storage);
+  const uid = process.getuid?.();
+  if (!info.isDirectory() || (uid !== undefined && (info.uid !== uid || (info.mode & 0o077)))) {
+    throw new Error('Worker storage must be a private directory owned by the current user.');
+  }
+  const root = realpathSync(storage);
   let terminalDirectory;
   let terminalReason = newTerminal ? 'requested' : 'initial';
   if (previous) {
@@ -209,14 +273,17 @@ export function start(worktree, promptFile, { timeout = '1800', previous, newTer
       throw new Error(`The previous job is still pending or needs cleanup: ${prior.status}.`);
     }
     if (!newTerminal) {
-      const reusable = prior.terminalReusable !== false && prior.status !== 'startup-timeout';
+      // The request is queued by hard link inside the selected storage root.
+      const reusable = earlier.terminalDirectory && dirname(earlier.terminalDirectory) === root
+        && prior.terminalReusable !== false && prior.status !== 'startup-timeout';
       if (reusable && prior.terminalOpen === null) throw new Error('Unable to verify the previous terminal from this session.');
       if (reusable && prior.terminalOpen) terminalDirectory = earlier.terminalDirectory;
       terminalReason = terminalDirectory ? 'reused' : 'previous-terminal-unavailable';
     }
   }
   const agy = locateAgy();
-  const jobDirectory = realpathSync(mkdtempSync(join(tmpdir(), 'codex-agy-worker-')));
+  cleanupJobs(root, previous?.terminalDirectory ?? previous?.jobDirectory);
+  const jobDirectory = realpathSync(mkdtempSync(join(root, jobPrefix)));
   terminalDirectory ??= jobDirectory;
   const job = { cwd, agy, seconds, createdAt: Date.now(), jobDirectory, terminalDirectory, terminalReason };
   try {
