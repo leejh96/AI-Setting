@@ -1,0 +1,58 @@
+name: Regression tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            archive: gitleaks_8.30.1_darwin_arm64.tar.gz
+            sha256: b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5
+          - os: windows-latest
+            archive: gitleaks_8.30.1_windows_x64.zip
+            sha256: d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.13.0'
+          package-manager-cache: false
+      - name: Install Gitleaks
+        shell: pwsh
+        env:
+          GITLEAKS_ARCHIVE: ${{ matrix.archive }}
+          GITLEAKS_SHA256: ${{ matrix.sha256 }}
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP $env:GITLEAKS_ARCHIVE
+          $bin = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'gitleaks-bin')
+          $url = 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/' + $env:GITLEAKS_ARCHIVE
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne $env:GITLEAKS_SHA256) {
+            throw 'Gitleaks archive checksum mismatch.'
+          }
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $archive -DestinationPath $bin.FullName
+          } else {
+            tar -xzf $archive -C $bin.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Could not unpack Gitleaks.' }
+          }
+          $bin.FullName >> $env:GITHUB_PATH
+      - name: Run regression tests
+        run: |
+          gitleaks version
+          node --test --test-concurrency=1

@@ -119,7 +119,7 @@ Codex와 Antigravity의 `PreToolUse`에서 강제 푸시, Git 훅 우회, 재귀
 
 ## 새 기기에서 사용하기
 
-Git과 이 private 저장소에 접근할 GitHub 인증을 준비한 뒤, 원하는 작업 폴더에서 실행합니다.
+Git을 준비한 뒤 원하는 작업 폴더에서 실행합니다.
 
 ```sh
 git clone https://github.com/leejh96/AI-Setting.git ai-setting
@@ -138,6 +138,22 @@ cd ai-setting
 | 위험한 터미널 명령 검사 | [설정 안내](hooks/command-guard/README.macos.md) | [설정 안내](hooks/command-guard/README.windows.md) |
 
 현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침과 훅이 자동 적용되지는 않습니다.
+
+## 설치 상태 점검
+
+저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅 복사본을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
+
+누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 점검은 설치 파일과 설정을 읽으며, 훅 신뢰 등록과 새 세션에서 실제 실행되는지는 앱에서 확인합니다.
+
+## 전체 회귀 테스트
+
+Node.js와 Gitleaks를 준비한 뒤 저장소 루트에서 실행합니다.
+
+```sh
+node --test --test-concurrency=1
+```
+
+GitHub Actions는 PR, `master` 푸시, 수동 실행에서 같은 명령을 macOS와 Windows에서 실행합니다. 두 러너는 Node.js `26.13.0`과 Gitleaks `8.30.1`을 사용합니다.
 
 ## 지침 갱신하기
 
