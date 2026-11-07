@@ -79,10 +79,8 @@ async function turn(entries, overrides = {}) {
 
 test('필수 메모리 출처가 뒤따라도 현재 검토의 종료 표식을 인정한다', async () => {
   const footer = '<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[verified]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>';
-  for (const status of ['clean', 'skipped', 'blocked']) {
-    assert.deepEqual(await turn([user, model('구현 완료'), request,
-      model(`검토 결과\n[code-quality-review:${status}]\n\n${footer}`)]), {});
-  }
+  assert.deepEqual(await turn([user, model('구현 완료'), request,
+    model(`검토 결과\n[code-quality-review:clean]\n\n${footer}`)]), {});
 });
 
 function continues(output, expectedReviewPath) {
@@ -339,24 +337,18 @@ test('다섯 번째 검토의 clean·skipped·blocked는 정상 종료하고 반
   }
 });
 
-test('수정 회차·누락·잘못된 표식은 반복하며 종료 표식은 재검토 이후에만 허용한다', async () => {
-  for (const content of ['', '검토 완료', '[code-quality-review:revised]',
-    '> [code-quality-review:clean]', '> 인용한 예시\n[code-quality-review:clean]', '```\n[code-quality-review:clean]\n```',
-    '[code-quality-review:clean]\n추가 내용', '[code-quality-review:Clean]']) {
+test('수정 회차·누락은 검토를 이어가고 유효한 종료 표식은 검토를 끝낸다', async () => {
+  for (const content of ['', '[code-quality-review:revised]']) {
     continues(await turn([user, model('구현 완료'), request, model(content)]));
   }
-  for (const status of ['clean', 'skipped', 'blocked']) {
-    assert.deepEqual(await turn([user, model('구현 완료'), request, model(`결과\r\n[code-quality-review:${status}]\r\n`)]), {});
-  }
+  assert.deepEqual(await turn([user, model('구현 완료'), request, model('결과\r\n[code-quality-review:clean]\r\n')]), {});
 });
 
 test('실제 훅은 코드 펜스와 인용문 제목의 종료 경계를 구분한다', async () => {
-  for (const status of ['clean', 'skipped', 'blocked']) {
-    const marker = `[code-quality-review:${status}]`;
-    continues(await turn([user, request, model('```text\r\n\tcode\tvalue\n' + marker)]));
-    assert.deepEqual(await turn([user, request, model('~~~text\n\tcode\tvalue\r\n~~~~\t\r\n' + marker)]), {});
-    assert.deepEqual(await turn([user, request, model('> 검토 결과\n> ===\n' + marker)]), {});
-  }
+  const marker = '[code-quality-review:clean]';
+  continues(await turn([user, request, model('```text\r\n\tcode\tvalue\n' + marker)]));
+  assert.deepEqual(await turn([user, request, model('~~~text\n\tcode\tvalue\r\n~~~~\t\r\n' + marker)]), {});
+  assert.deepEqual(await turn([user, request, model('> 검토 결과\n> ===\n' + marker)]), {});
 });
 
 test('같은 턴의 여러 수정 회차 후 수정 없는 회차에서 종료한다', async () => {

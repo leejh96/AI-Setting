@@ -12,14 +12,25 @@ const openFencePrefixes = ['```text\n', '~~~text\n', '   ```text\r\n',
   '````text\n```\n', '~~~text\n```\n', '```text\n```not-a-close\n',
   '```text\n    ```\n', '- item\n\n```text\n',
   '- item\n\n# heading\n   ```text\n', '- item\n\ntext\n   ```text\n',
-  '* * *\n  ```text\n', '- - -\n  ~~~text\n'];
+  '* * *\n  ```text\n', '- - -\n  ~~~text\n', '```text\r\n\tcode\tvalue\n'];
 const terminalPrefixes = ['', '```text\nexample\n```\n', '~~~text\nexample\n~~~~\n',
   '   ```text\r\nexample\r\n ```\t\r\n', '```not `a fence`\n', '    ```text\n',
   '- ```text\n  example\n  ```\n\n', '1. ~~~text\n   example\n   ~~~\n\n',
   '- item\n  ```text\n  example\n  ```\n\n', '- ```text\n  example\n\n',
   '- item\n  ~~~text\n  example\n\n', '> ```text\n> example\n> ```\n\n',
   '> ```text\n> example\n\n', '- item\nlazy continuation\n  ```text\n  example\n\n',
-  '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n'];
+  '* * *\n  ```text\nexample\n  ```\n', '- - -\n  ~~~text\nexample\n  ~~~\n',
+  '~~~text\n\tcode\tvalue\r\n~~~~\t\r\n'];
+
+test('정확한 종료 표식이 마지막 독립 줄에 있어야 한다', () => {
+  for (const status of ['clean', 'skipped', 'blocked']) {
+    assert.equal(hasTerminalReviewStatus(`결과\r\n[code-quality-review:${status}]\r\n`), true);
+  }
+  const rejected = [undefined, null, '', '검토 완료', '검토했습니다.', '[code-quality-review:revised]',
+    '> [code-quality-review:clean]', '[code-quality-review:clean]\n추가 내용',
+    '[code-quality-review:Clean]', '[code-quality-review:unknown]'];
+  for (const message of rejected) assert.equal(hasTerminalReviewStatus(message), false, JSON.stringify(message));
+});
 
 test('필수 메모리 출처 블록 하나만 분리하고 기존 본문 종료 조건은 유지한다', () => {
   const noIds = memoryFooter.replace('01a192af-b0fc-7812-ad30-3d47668c1bbe\n', '');
@@ -59,7 +70,7 @@ test('임의·손상·중복 메타데이터와 표식 뒤 설명은 종료를 �
 });
 
 test('인용문의 이어지는 문단은 종료 표식으로 인정하지 않고 인용 밖 표식만 허용한다', () => {
-  const quoted = ['> quoted paragraph\n', '> quoted paragraph\ncontinued\n',
+  const quoted = ['> quoted paragraph\n', '> 인용한 예시\n', '> quoted paragraph\ncontinued\n',
     '> > nested paragraph\n', '> - quoted list paragraph\n', '> > ```text\n> outer paragraph\n',
     '> 1000. ```text\n>       code\n>       ```\n> quote paragraph\n',
     '> - ```text\n> quote paragraph\n'];
@@ -75,7 +86,7 @@ test('인용문의 이어지는 문단은 종료 표식으로 인정하지 않�
 });
 
 test('인용문 밑줄 제목 뒤의 종료 표식만 허용하고 깊이·목록·들여쓰기 경계를 보존한다', () => {
-  const accepted = ['> heading\n> ===\n', '> heading\n> -\n', '> heading\n> --\n',
+  const accepted = ['> 검토 결과\n> ===\n', '> heading\n> -\n', '> heading\n> --\n',
     '> heading\n>   ===\t\n', '> > heading\n> > ===\n', '> - heading\n>   ===\n',
     '> 1000. heading\n>       ===\n', '> first\n> second\n> ===\n',
     '> 1000. first\n> - second\n>   ===\n'];
