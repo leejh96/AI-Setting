@@ -17,6 +17,9 @@ let closing = false;
 let generation = 0;
 const roots = [];
 const startup = new AbortController();
+const EVENT_DRAIN_INTERVAL_MS = 20;
+// libuv batches macOS FSEvents for 50 ms. Allow for delivery to the JS callback too.
+const STOP_EVENT_WAIT_MS = process.platform === 'darwin' ? 100 : EVENT_DRAIN_INTERVAL_MS;
 const persist = () => { state.updatedAt = Date.now(); saveWatch(path, state); };
 const markEdited = () => {
   state.changed = true; state.action = 'edited'; persist();
@@ -111,15 +114,17 @@ function verifyRoot(root) {
   const stat = lstatSync(root.path);
   if (!stat.isDirectory() || stat.dev !== root.dev || stat.ino !== root.ino) throw Error('Watch root replaced');
 }
-async function checkpoint() {
+async function checkpoint(initialWaitMs = EVENT_DRAIN_INTERVAL_MS) {
   const deadline = Date.now() + 2500;
   for (const root of roots) verifyRoot(root);
+  let waitMs = initialWaitMs;
   let seen;
   do {
     if (Date.now() > deadline) throw Error('Checkpoint timeout');
     if (state.changed) break;
     seen = generation;
-    await delay(20);
+    await delay(waitMs);
+    waitMs = EVENT_DRAIN_INTERVAL_MS;
     await Promise.all(roots.map(flush));
   } while (seen !== generation || roots.some((root) => root.pending.size || root.flushing));
   if (state.failed) throw Error('Watcher failed');
@@ -159,7 +164,7 @@ const server = createServer({ allowHalfOpen: true }, (socket) => {
         if (request.command === 'check') {
           if (state.phase === 'closed') { socket.end(`${JSON.stringify(view())}\n`); return; }
           if (state.phase !== 'ready') throw Error('Not ready');
-          await checkpoint(); state.stops++;
+          await checkpoint(STOP_EVENT_WAIT_MS); state.stops++;
           if (!state.changed) { finish('unchanged'); socket.end(`${JSON.stringify(view())}\n`); return; }
           state.action = 'review-required'; persist();
         } else if (request.command === 'record') {
