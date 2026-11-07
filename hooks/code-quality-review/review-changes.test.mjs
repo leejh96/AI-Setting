@@ -1097,8 +1097,10 @@ const watch=fs.watch;fs.watch=(path,options,listener)=>{const watcher=watch(path
       assert.equal(state.failed, 'watch-error', `OS error code: ${state.errorCode ?? 'none'}`);
       await unavailable(f.check());
     } else {
-      assert.equal((await f.check()).changed, true);
-      assert.equal(stateFor(f.cwd).state.failed, undefined);
+      const changes = await f.check();
+      const state = stateFor(f.cwd).state;
+      assert.equal(changes.changed, true, `Watch state: ${state.phase}, ${state.failed ?? 'no failure'}, ${state.errorCode ?? 'no OS code'}`);
+      assert.equal(state.failed, undefined);
       assert.equal(readdirSync(root).includes(`metadata-${mode}.log`), false, 'classified an event after the edit was already known');
     }
   });

@@ -96,7 +96,7 @@ function removeTempDirectory(directory) {
 }
 
 function assertReviewRequest(output, hookPath = HOOK_PATH) {
-  assert.equal(output.decision, 'block');
+  assert.equal(output.decision, 'block', output.systemMessage ?? 'Stop did not request review');
   const reviewPath = join(dirname(hookPath), '..', 'REVIEW.md');
   assert.ok(output.reason.includes(JSON.stringify(reviewPath)));
   assert.ok(!output.reason.includes(readFileSync(reviewPath, 'utf8').trim()));
