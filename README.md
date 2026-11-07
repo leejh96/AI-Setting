@@ -102,6 +102,12 @@ Codex와 Gemini/Antigravity에서 코드 수정 후 요구사항 충족, AI 슬�
 기본 구현 원칙은 `global/AGENTS.md`에 유지하고 상세 점검 절차는 훅의 `REVIEW.md`에서 관리합니다.
 동작 범위, 추가 continuation과 사용량, 설치·신뢰 등록·검증은 [코드 품질 검토 훅 안내](hooks/code-quality-review/README.md)를 확인하세요.
 
+## Codex·Antigravity 터미널 명령 검사
+
+Codex와 Antigravity의 `PreToolUse`에서 강제 푸시, Git 훅 우회, 재귀 파일 삭제와 권한 완화 등 위험 명령을 차단하고 그 이유를 표시합니다.
+
+검사 정책과 운영체제별 설치 방법은 [터미널 명령 검사 훅 안내](hooks/command-guard/README.md)를 확인하세요.
+
 ## Codex·Antigravity 훅의 복사 설치
 
 훅 실행 코드는 저장소를 직접 참조하지 않고 각 도구의 사용자 디렉터리에 복사합니다. Codex는 `~/.codex/hooks/<훅 이름>/`, Antigravity는 `~/.gemini/config/hooks/<훅 이름>/`를 사용합니다. `CODEX_HOME`을 별도로 지정한 Codex는 설치 경로와 등록 파일 `hooks.json` 모두 해당 홈을 기준으로 합니다.
