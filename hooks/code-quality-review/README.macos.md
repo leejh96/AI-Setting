@@ -37,7 +37,7 @@ node "$codex_hook_target/codex/codex-code-quality-review.mjs" --print-config
 
 기존 `${CODEX_HOME:-$HOME/.codex}/hooks.json` 전체를 백업하고 출력의 `hooks.UserPromptSubmit`과 `hooks.Stop` 그룹을 기존 이벤트·핸들러를 유지하며 함께 병합합니다. 준비 이벤트에서 파일 감시가 시작돼야 Stop이 수정 기록과 감시 정상 여부를 확인할 수 있습니다. 프로젝트만 적용하려면 `.codex/hooks.json`을 사용합니다. 전역·프로젝트·인라인 설정에 같은 훅을 중복 등록하지 않으며 비활성화 상태를 보존합니다.
 
-Codex를 재시작하고 CLI `/hooks`에서 출처와 명령을 검토해 신뢰 등록합니다. 프로젝트에 등록했다면 프로젝트도 신뢰되어야 합니다. 검토 우회 옵션을 일상 설정에 추가하거나 신뢰 상태를 수동으로 만들지 않습니다. 훅 명령이 바뀌면 다시 검토·등록합니다. 공통 `REVIEW.md` 변경 내용도 검토합니다.
+Codex를 재시작하고 CLI `/hooks`에서 출처와 명령을 검토해 신뢰 등록합니다. 프로젝트에 등록했다면 프로젝트도 신뢰되어야 합니다. 검토 우회 옵션을 일상 설정에 추가하거나 신뢰 상태를 수동으로 만들지 않습니다. 훅 정의가 바뀌면 다시 검토·등록합니다. 공통 `REVIEW.md` 변경 내용도 검토합니다.
 
 ## Gemini / Antigravity
 

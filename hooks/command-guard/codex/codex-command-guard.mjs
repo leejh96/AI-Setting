@@ -6,7 +6,10 @@ runHook(
     hooks: {
       PreToolUse: [{
         matcher: '^Bash$',
-        hooks: [{ type: 'command', command: hookCommand(import.meta.url, false), timeout: 5 }],
+        hooks: [{
+          type: 'command', command: hookCommand(import.meta.url, false), timeout: 5,
+          statusMessage: '위험한 터미널 명령 검사',
+        }],
       }],
     },
   }),

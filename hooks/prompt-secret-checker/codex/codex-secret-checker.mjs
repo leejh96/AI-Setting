@@ -15,7 +15,10 @@ function printConfig() {
   process.stdout.write(`${JSON.stringify({
     description: '사용자 입력의 시크릿 후보를 Gitleaks로 검사합니다.',
     hooks: {
-      UserPromptSubmit: [{ hooks: [{ type: 'command', command, timeout: 45 }] }],
+      UserPromptSubmit: [{ hooks: [{
+        type: 'command', command, timeout: 45,
+        statusMessage: '사용자 입력 시크릿 검사',
+      }] }],
     },
   }, null, 2)}\n`);
 }
