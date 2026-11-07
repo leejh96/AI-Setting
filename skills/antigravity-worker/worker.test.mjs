@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -82,7 +82,7 @@ const reviewed = (job) => until(job, (current) => current.status === 'review-rea
 const finished = (job) => until(job, (current) => current.finishedAt);
 
 function fixture(t, { existingConfig = true, run = runFake } = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'codex-agy-test-'));
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-test-'));
   const cwd = join(directory, 'work tree 한글');
   mkdirSync(cwd);
   const agents = join(cwd, '.agents');
@@ -140,6 +140,27 @@ test('Stop hook confirms completion while the native screen stays open, includin
   assert.equal((await finished(job)).status, 'interrupted');
   assert.equal(readFileSync(env.config, 'utf8'), env.original);
   assert.equal(existsSync(env.lock), false);
+});
+
+test('a completed Stop is read before the work deadline even without file notifications', async (t) => {
+  const env = fixture(t, {
+    run(job, prompt, report, signal, controls) {
+      return runFake(job, prompt, report, signal, {
+        ...controls,
+        watchEvents: () => ({ on() {}, close() {} }),
+      });
+    },
+  });
+  const job = env.start('running hang', { timeout: '60' });
+  await until(job, ({ status }) => status === 'agy-running');
+  recordHook(job.jobDirectory, 'stop', {
+    conversationId: 'test-turn',
+    lastUserInput: `[Codex worker job ${basename(job.jobDirectory)}]`,
+    fullyIdle: true,
+    terminationReason: 'NO_TOOL_CALL',
+    executionNum: 0,
+  });
+  assert.equal((await reviewed(job)).terminationReason, 'NO_TOOL_CALL');
 });
 
 test('unrelated, non-idle and failed Stop signals do not produce a successful handoff', async (t) => {

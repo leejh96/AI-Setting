@@ -179,13 +179,13 @@ function saveTerminalMode() {
 
 export function runAgy(job, prompt, report, signal, {
   spawnChild = spawn, terminate = stopProcess, startupMs = startupGraceMs, settleMs = 750, retireRequests,
-  saveTerminal = saveTerminalMode,
+  saveTerminal = saveTerminalMode, watchEvents = watch,
 } = {}) {
   const restoreTerminal = saveTerminal();
   const eventPath = join(job.jobDirectory, 'events.jsonl');
   writeFileSync(eventPath, '', { flag: 'wx', mode: 0o600 });
   const content = prompt + '\n\nPreserve .agents/hooks.json and the worker lock. Wait for any work you start to finish before responding.\n' + marker(job.jobDirectory);
-  const watcher = watch(eventPath, { persistent: false });
+  const watcher = watchEvents(eventPath, { persistent: false });
   let child;
   try {
     child = spawnChild(job.agy, [
@@ -230,6 +230,7 @@ export function runAgy(job, prompt, report, signal, {
       clearTimeout(timer);
       clearTimeout(settling);
       clearTimeout(stopTimer);
+      clearInterval(eventPoll);
       signal.removeEventListener('abort', interrupt);
       retireRequests?.removeEventListener('retire', retire);
       watcher.close();
@@ -361,6 +362,8 @@ export function runAgy(job, prompt, report, signal, {
 
     watcher.on('change', receive);
     watcher.on('error', (error) => stop({ status: 'failed', error: error.message }));
+    // A notification can arrive between appends without a second notification for the remaining events.
+    const eventPoll = setInterval(receive, 250).unref();
     child.once('error', (error) => { spawnError = error.message; });
     child.once('close', async (exitCode, exitSignal) => {
       if (finished) return;

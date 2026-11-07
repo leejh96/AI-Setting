@@ -33,7 +33,7 @@ node <runner> cancel <job-directory>
 ## 실패와 복구
 
 - 터미널이 요청을 받는 기한과 `agy`의 첫 훅 대기 기한은 각각 45초입니다. 작업 실행 한도는 기본 1,800초이며 1~14,400초를 지정할 수 있습니다. `timed-out`이면 `phase`와 `eventPath`를 확인합니다.
-- 현재 요청의 정상 `Stop` 이벤트와 `fullyIdle: true`가 확인되면 검토를 시작합니다. 완료 신호 없이 화면이 닫히거나 CLI가 예기치 않게 종료되면, 하위 작업이 남을 수 있어 `cleanup-needed`로 잠금을 유지합니다. 이때 `exitStatus`는 각각 `completion-missing` 또는 `failed`입니다. 워커는 작업 폴더의 `.agents/hooks.json`에 훅을 임시로 추가하며, 정상 완료 후 화면을 닫거나 중단이 확인되면 기존 설정을 복원하고 잠금을 해제합니다.
+- 현재 요청의 정상 `Stop` 이벤트와 `fullyIdle: true`가 확인되면 검토를 시작합니다. 파일 변경 알림이 누락될 때를 대비해 실행 중에는 이벤트 기록도 주기적으로 확인합니다. 완료 신호 없이 화면이 닫히거나 CLI가 예기치 않게 종료되면, 하위 작업이 남을 수 있어 `cleanup-needed`로 잠금을 유지합니다. 이때 `exitStatus`는 각각 `completion-missing` 또는 `failed`입니다. 워커는 작업 폴더의 `.agents/hooks.json`에 훅을 임시로 추가하며, 정상 완료 후 화면을 닫거나 중단이 확인되면 기존 설정을 복원하고 잠금을 해제합니다.
 - macOS에서는 화면을 시작하기 전 터미널 입력 설정을 저장하고 화면이 닫힌 뒤 복구합니다. 복구에 실패하면 `terminalError`를 기록하고 해당 터미널은 후속 요청에서 교체합니다.
 - `cleanup-needed`이면 다음 순서로 복구합니다.
   1. `workerPid`와 `terminalPid`로 이전 작업을 식별하고 Antigravity 및 그 작업이 시작한 프로세스가 종료됐는지 확인합니다.

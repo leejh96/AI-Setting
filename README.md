@@ -14,7 +14,8 @@ ai-setting/
 ├── hooks/
 │   ├── prompt-secret-checker/  # 사용자 입력 검사와 OS별 README
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
-│   └── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
+│   ├── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
+│   └── command-guard/          # 위험한 터미널 명령 검사와 OS별 README
 ├── skills/
 │   ├── agents-md-editor/   # AGENTS.md 최적화와 전후 비교
 │   ├── concept-explainer/    # 질문에 필요한 개념과 예시 설명
@@ -134,6 +135,7 @@ cd ai-setting
 | 프롬프트 시크릿 검사 | [설정 안내](hooks/prompt-secret-checker/README.macos.md) | [설정 안내](hooks/prompt-secret-checker/README.windows.md) |
 | Git 커밋 시크릿 검사 | [설정 안내](hooks/commit-secret-checker/README.macos.md) | [설정 안내](hooks/commit-secret-checker/README.windows.md) |
 | 코드 품질 검토 | [설정 안내](hooks/code-quality-review/README.macos.md) | [설정 안내](hooks/code-quality-review/README.windows.md) |
+| 위험한 터미널 명령 검사 | [설정 안내](hooks/command-guard/README.macos.md) | [설정 안내](hooks/command-guard/README.windows.md) |
 
 현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침과 훅이 자동 적용되지는 않습니다.
 

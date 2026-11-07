@@ -48,9 +48,13 @@ const cases = {
     'git push --prune origin',
     'git clean -fd -- tmp',
     'git reset --hard HEAD',
+    'git --no-lazy-fetch reset --hard',
+    'git --exec-path=/example/git-core reset --hard',
     'git restore --source=HEAD --staged --worktree .',
     'git restore -SW .',
+    'git checkout .',
     'git checkout -- .',
+    'git checkout HEAD .',
     'git branch -D feature',
     'git branch -df feature',
     'git worktree remove --force ./tmp',
@@ -64,6 +68,8 @@ const cases = {
   ],
   allow: [
     'git status --short',
+    'git --no-lazy-fetch status --short',
+    'git --exec-path',
     'git push',
     'git push origin HEAD:develop',
     'git push origin :',
@@ -75,6 +81,8 @@ const cases = {
     'git clean -ndx',
     'git restore --staged .',
     'git restore -- src/file.js',
+    'git checkout develop',
+    'git checkout -- src/file.js',
     'git reset --soft HEAD~1',
     'git branch -d feature',
     'git worktree remove ./tmp',
@@ -159,6 +167,7 @@ for (const [name, client] of Object.entries(clients)) {
   test(name + '의 허용·차단 응답과 입력 오류', () => {
     const run = input => parseResult(spawnSync(process.execPath, [client.script], { input, encoding: 'utf8' }));
     assert.equal(client.decision(run(JSON.stringify(client.event('git status')))), 'allow');
+    assert.equal(client.decision(run(JSON.stringify(client.event('git checkout .')))), 'deny');
     const denied = run(JSON.stringify(client.event('git push -f https://example.invalid/PRIVATE feature')));
     assert.equal(client.decision(denied), 'deny');
     assert.doesNotMatch(JSON.stringify(denied), /PRIVATE|example\.invalid/);

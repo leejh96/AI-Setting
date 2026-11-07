@@ -61,7 +61,7 @@ function gitCommand(args) {
       hookOverride ||= /^core\.hookspath(?:=|$)/i.test(value ?? '');
     } else if (['-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix'].includes(arg)) {
       index++;
-    } else if (!/^(?:-C.+|--(?:git-dir|work-tree|namespace|super-prefix)=.*|--bare|--no-pager|-P|--paginate|-p|--literal-pathspecs|--no-optional-locks|--no-replace-objects)$/.test(arg)) {
+    } else if (!/^(?:-C.+|--(?:git-dir|work-tree|namespace|super-prefix|exec-path)=.*|--bare|--no-pager|-P|--paginate|-p|--literal-pathspecs|--no-optional-locks|--no-replace-objects|--no-lazy-fetch)$/.test(arg)) {
       return;
     }
   }
@@ -112,7 +112,7 @@ function gitCommand(args) {
     && !flags.has('--worktree') && !flags.has('-W');
   if ((operation === 'reset' && flags.has('--hard'))
     || (operation === 'restore' && entireTree && !stagedOnly)
-    || (operation === 'checkout' && (forced || entireTree && argumentsAfterOperation.includes('--')))) {
+    || (operation === 'checkout' && (forced || entireTree))) {
     return deny('작업 공간의 미커밋 변경이 사라질 수 있습니다.');
   }
   if ((operation === 'branch' && (flags.has('-D') || forced && (flags.has('-d') || flags.has('--delete'))))
