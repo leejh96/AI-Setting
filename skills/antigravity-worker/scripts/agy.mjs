@@ -186,12 +186,17 @@ export function runAgy(job, prompt, report, signal, {
   writeFileSync(eventPath, '', { flag: 'wx', mode: 0o600 });
   const content = prompt + '\n\nPreserve .agents/hooks.json and the worker lock. Wait for any work you start to finish before responding.\n' + marker(job.jobDirectory);
   const watcher = watchEvents(eventPath, { persistent: false });
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    const key = process.platform === 'win32' ? name.toUpperCase() : name;
+    if (key === 'NO_COLOR' || (key === 'TERM' && env[name] === 'dumb')) delete env[name];
+  }
   let child;
   try {
     child = spawnChild(job.agy, [
       '--sandbox', '--dangerously-skip-permissions', '--model', model, '--effort', effort,
       '--add-dir', job.cwd, '-i', content,
-    ], { cwd: job.cwd, stdio: 'inherit' });
+    ], { cwd: job.cwd, stdio: 'inherit', env });
   } catch (error) {
     watcher.close();
     throw error;

@@ -54,6 +54,11 @@ function runFake(job, prompt, report, signal, controls) {
         '--add-dir', job.cwd, '-i',
       ]);
       assert.equal(options.stdio, 'inherit');
+      assert.notEqual(options.env, process.env);
+      const normalizeKey = (name) => process.platform === 'win32' ? name.toUpperCase() : name;
+      const childEnvironment = new Map(Object.entries(options.env).map(([name, value]) => [normalizeKey(name), value]));
+      assert.equal(childEnvironment.has('NO_COLOR'), false);
+      assert.equal(childEnvironment.get('TERM'), process.env.TERM === 'dumb' ? undefined : process.env.TERM);
       assert.match(args.at(-1), /Preserve \.agents\/hooks\.json/);
       child = spawn(file, ['--input-type=module', '-e', fakeAgy, '--', job.jobDirectory, args.at(-1)], options);
       return child;
