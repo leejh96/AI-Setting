@@ -69,7 +69,7 @@ ai-setting/
 
 **`antigravity-worker`는 Codex 전용입니다.** Windows와 macOS의 Codex에 설치합니다. 두 에이전트를 함께 동기화할 때도 Antigravity의 스킬 설치 대상에서는 제외합니다. 각 기기에서 Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다.
 
-워커 실행에는 `skills/antigravity-worker/scripts/worker.mjs`와 같은 폴더의 `agy.mjs`가 함께 필요합니다. 같은 작업의 후속 요청은 `follow-up`으로 터미널을 재사용하고, 분리할 때는 `--new-terminal`을 붙입니다. 회귀 테스트는 저장소 루트에서 `node --test skills/antigravity-worker/worker.test.mjs`로 실행합니다. [실행 및 복구 안내](skills/antigravity-worker/SKILL.md)
+워커 실행에는 `skills/antigravity-worker/scripts/worker.mjs`와 같은 폴더의 `agy.mjs`, `workspace.mjs`가 함께 필요합니다. 같은 작업의 후속 요청은 `follow-up`으로 터미널을 재사용하고, 분리할 때는 `--new-terminal`을 붙입니다. `prepare`로 만든 전용 워크트리와 임시 폴더는 결과 반영을 확인한 뒤 `finish`로 정리합니다. 회귀 테스트는 저장소 루트에서 `node --test skills/antigravity-worker/worker.test.mjs`로 실행합니다. [실행 및 복구 안내](skills/antigravity-worker/SKILL.md)
 
 새 터미널의 워커 기록은 Codex 홈 아래 `antigravity-worker/jobs/`에 저장합니다. 다음 워커 실행 때 터미널 종료 후 24시간이 지났고 작업 정리가 확인된 기록을 삭제합니다. [작업 기록 보관 기준](skills/antigravity-worker/SKILL.md#작업-기록-보관)
 

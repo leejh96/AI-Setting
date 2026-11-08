@@ -10,7 +10,7 @@ Codex가 작업 범위와 완료 조건을 정합니다. Antigravity가 작업�
 ## 작업 전달
 
 - Node.js 22 이상과 로그인된 Antigravity 명령줄 도구(CLI) `agy`가 필요합니다. `gemini-3.8-flash-high`, `--effort high`, 대화형 시작 프롬프트(`-i`)와 워크스페이스 훅을 지원하는 버전을 사용합니다.
-- 변경 작업은 가능한 경우 승인 범위 안에서 별도 Git 워크트리에 위임합니다. 이미 지정된 작업 트리가 있으면 사용자 변경과 워커 변경을 구분할 수 있게 시작 전 상태를 확인합니다. 같은 워크트리에서 Codex와 워커가 동시에 편집하지 않습니다.
+- 변경 작업은 가능한 경우 승인 범위 안에서 `prepare <original-worktree>`로 만든 별도 Git 워크트리에 위임합니다. 이 워크트리는 원본의 현재 커밋에서 시작합니다. Git이 필요 없는 일회성 작업 폴더는 인자 없이 `prepare`로 만듭니다. 이미 지정된 작업 경로를 사용할 때는 시작 전 상태를 확인합니다. 같은 경로에서 Codex와 워커가 동시에 편집하지 않습니다.
 - 저장소 밖 UTF-8 파일에 목표, 절대 작업 경로, 수정 범위, 수용 조건, 검증 방법을 씁니다. 워커에 허용된 셸·MCP·브라우저와 리소스를 명시합니다. 초기 프롬프트는 실행 인자로 전달하므로 비밀값을 넣지 않고, Windows에서는 12,000자 이내로 작성합니다.
 - 실행기는 `--dangerously-skip-permissions`와 `--sandbox` 옵션을 사용합니다. 해당 환경에서 터미널 샌드박스가 지원되는지 확인하고, 외부 전송·운영 데이터 변경·커밋·푸시·배포는 현재 사용자 승인 범위에 따릅니다. 브라우저 검증은 별도 요청에 허용된 브라우저 작업과 범위를 적습니다. Chrome 원격 디버깅 승인과 조직 정책은 각 환경에서 확인합니다.
 - Codex의 실행 제한으로 CLI 인증, 네트워크 또는 터미널 접근이 막히면 해당 실행에 필요한 승인 절차를 사용합니다. `terminalOpen: null`은 현재 세션에서 터미널 프로세스의 생존 여부를 확인할 권한이 없다는 뜻입니다.
@@ -20,15 +20,21 @@ Codex가 작업 범위와 완료 조건을 정합니다. Antigravity가 작업�
 `<runner>`는 이 스킬 폴더의 `scripts/worker.mjs` 절대 경로입니다. 아래 인자는 각각 절대 경로를 사용합니다.
 
 ```text
+node <runner> prepare [original-worktree]
 node <runner> start <worktree> <prompt-file> [timeout-seconds]
 node <runner> follow-up <job-directory> <prompt-file> [timeout-seconds] [--new-terminal]
+node <runner> finish <job-directory> [published-directory]
 node <runner> status <job-directory>
 node <runner> cancel <job-directory>
 ```
 
-1. 최초 요청은 `start`로 전달합니다. Windows PowerShell과 macOS Terminal.app에서 Antigravity 대화형 화면이 열립니다. 반환된 `jobDirectory`로 `status`를 조회합니다. `starting`은 터미널 시작, `agy-starting`은 첫 훅 대기, `agy-running`은 작업 실행, `agy-settling`은 종료 이벤트 확인 단계입니다.
+1. `prepare`를 사용했다면 반환된 `cwd`를 `start`에 전달합니다. Windows PowerShell과 macOS Terminal.app에서 Antigravity 대화형 화면이 열립니다. 반환된 `jobDirectory`로 `status`를 조회합니다. `starting`은 터미널 시작, `agy-starting`은 첫 훅 대기, `agy-running`은 작업 실행, `agy-settling`은 종료 이벤트 확인 단계입니다.
 2. `review-ready`가 되면 화면 또는 `transcriptPath`에서 응답을 읽고 아래 검토 체크리스트를 적용합니다. 수정이 필요하면 `follow-up`으로 전달합니다. 이전 대화형 프로세스가 종료된 뒤 같은 터미널에서 다음 대화가 열립니다. 종료 요청과 새 훅 이벤트가 겹쳐 검토 상태가 해제되면, 상태를 다시 확인하고 새 `review-ready`에서 후속 요청을 재시도합니다. 별도 창을 원하면 `--new-terminal`을 사용합니다. 이전 터미널을 사용할 수 없고 작업 잠금이 정리된 상태라면 새 터미널을 엽니다. 각 자동 요청은 새로운 `agy` 대화이므로 후속 프롬프트에 필요한 문맥을 넣습니다.
-3. 화면에 직접 새 프롬프트를 보내면 `changed-after-handoff`로 표시됩니다. 그 작업의 변경분을 다시 확인하고, 화면을 종료한 다음 자동 후속 요청을 보냅니다. `Ctrl+D`는 Antigravity 화면을 종료하고, `cancel`은 워커에 중단을 요청합니다. 빈 워커 터미널은 `Ctrl+C`로 닫습니다. 터미널 재사용이 끝날 때까지 최초 작업의 디렉터리를 보관합니다.
+3. 화면에 직접 새 프롬프트를 보내면 `changed-after-handoff`로 표시됩니다. 그 작업의 변경분을 다시 확인하고, 화면을 종료한 다음 자동 후속 요청을 보냅니다. `Ctrl+D`는 Antigravity 화면을 종료하고, `cancel`은 워커에 중단을 요청합니다. 빈 워커 터미널은 `Ctrl+C`로 닫습니다.
+4. `prepare`로 만든 경로는 후속 작업까지 끝나고 결과가 원본이나 전달 위치에 반영됐음을 Codex가 확인한 뒤, 마지막 작업의 `jobDirectory`로 `finish`를 실행합니다. `finish`는 검토가 끝난 화면을 닫고 잠금이 해제됐는지 확인한 뒤 아래 조건이 맞으면 작업 경로를 제거합니다. 기존에 지정된 작업 경로와 종료가 확인되지 않은 작업 경로는 보관합니다.
+   - Git 워크트리는 작업 커밋이 원본의 현재 커밋 이력에 포함되고 미커밋·미추적·무시 파일이 없을 때 일반 `git worktree remove`로 제거합니다. 파일 복사, 스쿼시, 체리픽만 적용한 경우에는 작업 커밋 이력이 이어지지 않아 보관합니다. 커밋은 승인 범위를 따릅니다.
+   - 임시 폴더는 워커의 관리 저장소 밖에 있는 `published-directory`의 같은 상대 경로에 내용과 실행 권한이 일치하는 파일이 모두 있을 때 제거합니다. 결과 파일이 없는 작업은 경로 인자 없이 정리할 수 있습니다. 링크나 비교할 수 없는 파일이 있으면 보관합니다.
+   - 정리 조건이 맞지 않으면 남은 경로와 이유를 보고합니다. 필요한 반영과 확인을 마친 뒤 같은 작업의 `finish`를 다시 실행할 수 있습니다.
 
 ### 검토 체크리스트
 
@@ -47,7 +53,7 @@ Codex는 매 검토에서 아래 항목을 확인하고, 변경의 성격과 영
 
 작업 기록은 `~/.codex/antigravity-worker/jobs/`에 저장합니다. `CODEX_HOME`을 지정했다면 그 위치를 기준으로 합니다. 후속 요청은 같은 저장 경로에 있는 터미널을 재사용할 수 있습니다.
 
-다음 `start` 또는 `follow-up` 실행 시, 이 경로에서 터미널이 닫힌 지 24시간이 지났고 같은 터미널의 모든 작업에 최종 결과가 있으며 작업 폴더 잠금이 해제된 경우에만 작업 기록을 지웁니다. 현재 `follow-up`에서 참조하는 기록, `cleanup-needed`, 종료를 확인할 수 없는 기록은 보관합니다.
+다음 `start` 또는 `follow-up` 실행 시, 이 경로에서 터미널이 닫힌 지 24시간이 지났고 같은 터미널의 모든 작업에 최종 결과가 있으며 작업 폴더 잠금이 해제된 경우에만 작업 기록을 지웁니다. `finish`를 재시도할 수 있도록 전용 작업 폴더가 남아 있는 기록도 보관합니다. 현재 `follow-up`에서 참조하는 기록, `cleanup-needed`, 종료를 확인할 수 없는 기록 역시 보관합니다.
 
 ## 실패와 복구
 

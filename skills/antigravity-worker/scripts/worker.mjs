@@ -5,6 +5,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { display, effort, installHooks, model, recordHook, runAgy, startupGraceMs } from './agy.mjs';
+import { lockWorkspace, managedWorkspace, prepareWorkspace, removeWorkspace } from './workspace.mjs';
 
 const runner = fileURLToPath(import.meta.url);
 const requestFile = 'request.json';
@@ -14,6 +15,7 @@ const retentionMs = 24 * 60 * 60 * 1000;
 const finishedStatuses = new Set(['review-ready', 'changed-after-handoff', 'interrupted', 'timed-out', 'failed', 'startup-timeout']);
 const quotePowerShell = (value) => `'${value.replace(/['\u2018-\u201b]/g, (char) => char + char)}'`;
 const quoteShell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const jobsDirectory = () => join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'jobs');
 
 function readOptional(path) {
   try {
@@ -125,6 +127,7 @@ function cleanupJobs(directory, protectedTerminal) {
       if (!Number.isSafeInteger(closedAt) || closedAt > cutoff || !Number.isSafeInteger(pid) || pid <= 0
           || lstatSync(join(terminal, requestFile), { throwIfNoEntry: false })
           || lstatSync(lockPath(initial.job.cwd), { throwIfNoEntry: false })) continue;
+      if (lstatSync(initial.job.cwd, { throwIfNoEntry: false }) && managedWorkspace(initial.job.cwd, directory)) continue;
       if (!group.every(({ job }) => {
         const result = cleanupRecord(job.jobDirectory, 'result.json');
         return job.cwd === initial.job.cwd && Number.isSafeInteger(job.createdAt)
@@ -246,16 +249,26 @@ function readPrompt(promptFile, timeout) {
   return { seconds, prompt };
 }
 
-export function start(worktree, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot } = {}) {
+export function start(worktree, promptFile, options = {}) {
   if (!isAbsolute(worktree)) throw new Error('Pass an absolute worktree path.');
   const cwd = realpathSync(worktree);
   if (!statSync(cwd).isDirectory()) throw new Error('Expected a worktree directory.');
+  const workspace = managedWorkspace(cwd, options.jobRoot ?? jobsDirectory());
+  const unlock = workspace && lockWorkspace(workspace);
+  try {
+    return queueJob(cwd, promptFile, options);
+  } finally {
+    unlock?.();
+  }
+}
+
+function queueJob(cwd, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot = jobsDirectory() }) {
   const { seconds, prompt } = readPrompt(promptFile, timeout);
   const lock = lockPath(cwd);
   const owner = readOptional(lock);
   if (owner !== null) throw new Error(`The worktree is locked by ${owner || 'another worker'}. Check ${lock}.`);
 
-  const storage = jobRoot ?? join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'jobs');
+  const storage = jobRoot;
   mkdirSync(storage, { recursive: true, mode: 0o700 });
   const info = lstatSync(storage);
   const uid = process.getuid?.();
@@ -315,21 +328,59 @@ export async function followUp(previous, promptFile, options) {
   const current = jobStatus(earlier);
   if (earlier.terminalDirectory && current.tuiOpen && current.status === 'review-ready' && !current.finishedAt) {
     readPrompt(promptFile, options?.timeout ?? '1800');
-    if (!current.terminalOpen) throw new Error('Unable to confirm the previous terminal is open.');
-    const deadline = Date.now() + 15_000;
-    writeJson(earlier.terminalDirectory, basename(controlPath(earlier, 'retire')), {
-      eventTimestamp: current.eventTimestamp, expiresAt: deadline,
-    });
-    while (!readJson(earlier.jobDirectory, 'result.json')) {
-      const state = jobStatus(earlier);
-      const stillReviewed = state.status === 'review-ready' && state.eventTimestamp === current.eventTimestamp;
-      if (Date.now() >= deadline || (!stillReviewed && state.status !== 'stopping')) {
-        throw new Error('Could not close the previous Antigravity screen safely. Check its status before retrying.');
-      }
-      await delay(100);
-    }
+    await retireReviewed(earlier, current);
   }
   return start(earlier.cwd, promptFile, { ...options, previous: earlier });
+}
+
+async function retireReviewed(job, current) {
+  if (!current.terminalOpen) throw new Error('Unable to confirm the previous terminal is open.');
+  const deadline = Date.now() + 15_000;
+  writeJson(job.terminalDirectory, basename(controlPath(job, 'retire')), {
+    eventTimestamp: current.eventTimestamp, expiresAt: deadline,
+  });
+  while (!readJson(job.jobDirectory, 'result.json')) {
+    const state = jobStatus(job);
+    const stillReviewed = state.status === 'review-ready' && state.eventTimestamp === current.eventTimestamp;
+    if (Date.now() >= deadline || (!stillReviewed && state.status !== 'stopping')) {
+      throw new Error('Could not close the previous Antigravity screen safely. Check its status before retrying.');
+    }
+    await delay(100);
+  }
+}
+
+export async function finish(directory, published, jobs = jobsDirectory()) {
+  jobs = realpathSync(jobs);
+  const job = readJob(directory);
+  if (dirname(job.jobDirectory) !== jobs || !jobName.test(basename(job.jobDirectory))) throw new Error('Expected a local worker job.');
+  const workspace = managedWorkspace(job.cwd, jobs);
+  if (!workspace) throw new Error('Only a workspace created by prepare can be removed.');
+  const unlock = lockWorkspace(workspace);
+  try {
+    for (const entry of readdirSync(jobs, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !jobName.test(entry.name)) continue;
+      const path = join(jobs, entry.name);
+      if (path === job.jobDirectory) continue;
+      const other = cleanupRecord(path, 'job.json');
+      if (other?.cwd !== job.cwd) continue;
+      const result = cleanupRecord(path, 'result.json');
+      if (other.createdAt >= job.createdAt || !finishedStatuses.has(result?.status) || result.tuiOpen === true || !result.finishedAt) {
+        throw new Error('Another job for this workspace is active, newer or needs cleanup.');
+      }
+    }
+    const current = jobStatus(job);
+    if (current.status !== 'review-ready') throw new Error('The worker result is not ready to finish.');
+    if (!current.finishedAt) await retireReviewed(job, current);
+    const result = jobStatus(job);
+    if (result.status !== 'review-ready' || result.tuiOpen !== false || !result.finishedAt || lstatSync(lockPath(job.cwd), { throwIfNoEntry: false })) {
+      throw new Error('The worker screen and workspace lock have not been safely released.');
+    }
+    removeWorkspace(workspace, published);
+  } finally {
+    unlock();
+  }
+  rmdirSync(workspace.directory);
+  return { status: 'workspace-removed', cwd: workspace.cwd };
 }
 
 export function cancel(directory) {
@@ -471,8 +522,10 @@ function parseOptions(values) {
 if (process.argv[1] && resolve(process.argv[1]) === runner) {
   try {
     const [action, ...args] = process.argv.slice(2);
-    if (action === 'start' && args.length >= 2) console.log(JSON.stringify(start(args[0], args[1], parseOptions(args.slice(2)))));
+    if (action === 'prepare' && args.length <= 1) console.log(JSON.stringify(prepareWorkspace(jobsDirectory(), args[0])));
+    else if (action === 'start' && args.length >= 2) console.log(JSON.stringify(start(args[0], args[1], parseOptions(args.slice(2)))));
     else if (action === 'follow-up' && args.length >= 2) console.log(JSON.stringify(await followUp(args[0], args[1], parseOptions(args.slice(2)))));
+    else if (action === 'finish' && args.length >= 1 && args.length <= 2) console.log(JSON.stringify(await finish(args[0], args[1])));
     else if (action === 'status' && args.length === 1) console.log(JSON.stringify(status(args[0])));
     else if (action === 'cancel' && args.length === 1) console.log(JSON.stringify(cancel(args[0])));
     else if (action === 'serve' && args.length === 1) serve(args[0]);
@@ -480,7 +533,7 @@ if (process.argv[1] && resolve(process.argv[1]) === runner) {
       recordHook(args[0], args[1], JSON.parse(readFileSync(0, 'utf8')));
       process.stdout.write('{}');
     }
-    else throw new Error('Usage: worker.mjs start <worktree> <prompt> [seconds] | follow-up <job> <prompt> [seconds] [--new-terminal] | status <job> | cancel <job>');
+    else throw new Error('Usage: worker.mjs prepare [original-worktree] | start <worktree> <prompt> [seconds] | follow-up <job> <prompt> [seconds] [--new-terminal] | finish <job> [published-directory] | status <job> | cancel <job>');
   } catch (error) {
     console.error(display(error.message));
     process.exitCode = 1;

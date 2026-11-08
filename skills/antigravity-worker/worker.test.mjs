@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { recordHook, runAgy, stopPosixTree } from './scripts/agy.mjs';
-import { cancel, followUp, serve, start, status } from './scripts/worker.mjs';
+import { cancel, finish, followUp, serve, start, status } from './scripts/worker.mjs';
+import { prepareWorkspace } from './scripts/workspace.mjs';
 
 const hookModule = new URL('./scripts/agy.mjs', import.meta.url).href;
 const fakeAgy = [
@@ -86,10 +87,42 @@ async function until(job, accept) {
 const reviewed = (job) => until(job, (current) => current.status === 'review-ready' && current.tuiOpen);
 const finished = (job) => until(job, (current) => current.finishedAt);
 
-function fixture(t, { existingConfig = true, run = runFake } = {}) {
+function fixture(t, { existingConfig = true, run = runFake, workspace } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-test-'));
-  const cwd = join(directory, 'work tree 한글');
-  mkdirSync(cwd);
+  const jobs = [];
+  const terminals = new Map();
+  t.after(async () => {
+    for (const close of terminals.values()) close();
+    try {
+      for (const job of jobs) {
+        if (terminals.has(job.terminalDirectory)) await finished(job);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  const jobRoot = workspace ? join(directory, 'worker-storage', 'jobs') : directory;
+  let git;
+  let originalWorktree;
+  if (workspace === 'git') {
+    originalWorktree = join(directory, 'original repo');
+    mkdirSync(originalWorktree);
+    git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
+    git(originalWorktree, 'init', '-q');
+    const hooks = join(directory, 'empty-git-hooks');
+    mkdirSync(hooks);
+    git(originalWorktree, 'config', 'core.hooksPath', hooks);
+    git(originalWorktree, 'config', 'user.name', 'Worker Test');
+    git(originalWorktree, 'config', 'user.email', 'worker-test@example.test');
+    git(originalWorktree, 'config', 'commit.gpgSign', 'false');
+    git(originalWorktree, 'config', 'core.autocrlf', 'false');
+    writeFileSync(join(originalWorktree, '.gitignore'), '*.ignored\n');
+    writeFileSync(join(originalWorktree, 'result.md'), 'initial\n');
+    git(originalWorktree, 'add', '.');
+    git(originalWorktree, 'commit', '-qm', 'Initial');
+  }
+  const cwd = workspace ? prepareWorkspace(jobRoot, originalWorktree).cwd : join(directory, 'work tree 한글');
+  if (!workspace) mkdirSync(cwd);
   const agents = join(cwd, '.agents');
   const config = join(agents, 'hooks.json');
   const lock = join(agents, '.codex-antigravity-worker.lock');
@@ -98,10 +131,8 @@ function fixture(t, { existingConfig = true, run = runFake } = {}) {
     mkdirSync(agents);
     writeFileSync(config, original);
   }
-  const jobs = [];
-  const terminals = new Map();
   const open = (terminal) => terminals.set(terminal, serve(terminal, run));
-  const options = { timeout: '1', locateAgy: () => process.execPath, launch: open, jobRoot: directory };
+  const options = { timeout: '1', locateAgy: () => process.execPath, launch: open, jobRoot };
   let promptIndex = 0;
   function prompt(message) {
     const path = join(directory, 'prompt-' + ++promptIndex + '.txt');
@@ -112,20 +143,81 @@ function fixture(t, { existingConfig = true, run = runFake } = {}) {
     jobs.push(job);
     return job;
   }
-  t.after(async () => {
-    for (const close of terminals.values()) close();
-    for (const job of jobs) {
-      if (terminals.has(job.terminalDirectory)) await finished(job);
-    }
-    for (const job of jobs) rmSync(job.jobDirectory, { recursive: true, force: true });
-    rmSync(directory, { recursive: true, force: true });
-  });
   return {
-    agents, config, lock, original, terminals, open, jobRoot: directory, cwd,
+    agents, config, lock, original, terminals, open, jobRoot, cwd, directory, git, originalWorktree,
     start: (message, overrides) => track(start(cwd, prompt(message), { ...options, ...overrides })),
     follow: async (job, message, overrides) => track(await followUp(job.jobDirectory, prompt(message), { ...options, ...overrides })),
   };
 }
+
+test('finish preserves an external workspace and a managed workspace with a newer worker job', async (t) => {
+  const external = fixture(t);
+  const unmanaged = await reviewed(external.start('normal'));
+  await assert.rejects(finish(unmanaged.jobDirectory, undefined, external.jobRoot), /created by prepare/);
+  assert.equal(status(unmanaged.jobDirectory).tuiOpen, true);
+
+  const env = fixture(t, { workspace: 'temporary', existingConfig: false });
+  const first = await reviewed(env.start('normal'));
+  const second = await reviewed(await env.follow(first, 'normal'));
+  await assert.rejects(finish(first.jobDirectory, undefined, env.jobRoot), /Another job/);
+  assert.equal(status(second.jobDirectory).tuiOpen, true);
+  const result = await finish(second.jobDirectory, undefined, env.jobRoot);
+  assert.equal(result.status, 'workspace-removed');
+  assert.equal(existsSync(dirname(env.cwd)), false);
+});
+
+test('finish keeps temporary files until all results are published at the same relative paths', async (t) => {
+  const env = fixture(t, { workspace: 'temporary', existingConfig: false });
+  const published = join(env.directory, 'published');
+  for (const directory of [env.cwd, published]) mkdirSync(join(directory, 'sub'), { recursive: true });
+  writeFileSync(join(env.cwd, 'first.txt'), 'first');
+  writeFileSync(join(env.cwd, 'sub', 'result.txt'), 'result');
+  writeFileSync(join(published, 'first.txt'), 'first');
+  writeFileSync(join(published, 'sub', 'result.txt'), 'change');
+  const job = await reviewed(env.start('normal'));
+
+  await assert.rejects(finish(job.jobDirectory, published, env.jobRoot), /Published result differs/);
+  assert.equal(readFileSync(join(env.cwd, 'first.txt'), 'utf8'), 'first');
+  assert.equal(readFileSync(join(env.cwd, 'sub', 'result.txt'), 'utf8'), 'result');
+  assert.equal(status(job.jobDirectory).tuiOpen, false);
+  assert.equal(existsSync(env.lock), false);
+  await assert.rejects(finish(job.jobDirectory, env.cwd, env.jobRoot), /outside managed/);
+  await assert.rejects(finish(job.jobDirectory, job.jobDirectory, env.jobRoot), /outside managed/);
+
+  const link = join(env.cwd, 'linked-directory');
+  symlinkSync(published, link, 'junction');
+  await assert.rejects(finish(job.jobDirectory, published, env.jobRoot), /unsupported published result/);
+  unlinkSync(link);
+  writeFileSync(join(published, 'sub', 'result.txt'), 'result');
+  await finish(job.jobDirectory, published, env.jobRoot);
+  assert.equal(existsSync(dirname(env.cwd)), false);
+  assert.equal(readFileSync(join(published, 'sub', 'result.txt'), 'utf8'), 'result');
+});
+
+test('finish removes a clean Git worktree only after its commit reaches the original history', async (t) => {
+  const env = fixture(t, { workspace: 'git', existingConfig: false });
+  const { cwd, git, originalWorktree } = env;
+  writeFileSync(join(cwd, 'result.md'), 'worker output\n');
+  git(cwd, 'commit', '-qam', 'Worker result');
+  const commit = git(cwd, 'rev-parse', 'HEAD');
+  const job = await reviewed(env.start('normal'));
+  await assert.rejects(finish(job.jobDirectory, undefined, env.jobRoot), /not in the original worktree history/);
+  assert.equal(git(cwd, 'rev-parse', 'HEAD'), commit);
+
+  git(originalWorktree, 'merge', '--ff-only', commit);
+  const local = join(cwd, 'local.ignored');
+  writeFileSync(local, 'keep local data');
+  await assert.rejects(finish(job.jobDirectory, undefined, env.jobRoot), /contains local changes or ignored files/);
+  assert.equal(readFileSync(local, 'utf8'), 'keep local data');
+  unlinkSync(local);
+  git(cwd, 'update-index', '--assume-unchanged', 'result.md');
+  await assert.rejects(finish(job.jobDirectory, undefined, env.jobRoot), /contains local changes or ignored files/);
+  git(cwd, 'update-index', '--no-assume-unchanged', 'result.md');
+  await finish(job.jobDirectory, undefined, env.jobRoot);
+  assert.equal(existsSync(dirname(cwd)), false);
+  assert.equal(git(originalWorktree, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree ')).length, 1);
+  assert.equal(git(originalWorktree, 'show', 'HEAD:result.md'), 'worker output');
+});
 
 test('Stop hook confirms completion while the native screen stays open, including delayed and repeated events', async (t) => {
   const env = fixture(t);
