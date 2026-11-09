@@ -22,6 +22,7 @@ ai-setting/
 │   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
 │   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
+│   ├── korean-writing/  # 한국어 업무 문서 작성·퇴고
 │   ├── task-lessons/   # 재사용할 작업 교훈의 조회·기록·정리
 │   ├── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
 │   └── antigravity-worker/ # Antigravity에 작업을 위임하고 Codex에서 검토
@@ -51,6 +52,7 @@ ai-setting/
 | [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
 | [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
+| [korean-writing](skills/korean-writing/SKILL.md) | 한국어 메일·보고서·공지·기획서 등 업무 문서 작성·퇴고 | 독자와 목적에 맞는 말투, 번역투 점검, 사실·약속·불확실성 대조 |
 | [task-lessons](skills/task-lessons/SKILL.md) | 반복 실패나 뜻밖의 제약 등으로 이전 교훈이 다음 행동을 바꿀 때 | 프로젝트별 교훈 조회·기록·갱신·폐기 |
 | [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
 | [tech-research](skills/tech-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
