@@ -106,6 +106,7 @@ function fixture(t, { existingConfig = true, run = runFake, workspace } = {}) {
   const jobRoot = workspace ? join(directory, 'worker-storage', 'jobs') : directory;
   let git;
   let originalWorktree;
+  let prepareTarget;
   if (workspace === 'git') {
     originalWorktree = join(directory, 'original repo');
     mkdirSync(originalWorktree);
@@ -122,8 +123,10 @@ function fixture(t, { existingConfig = true, run = runFake, workspace } = {}) {
     writeFileSync(join(originalWorktree, 'result.md'), 'initial\n');
     git(originalWorktree, 'add', '.');
     git(originalWorktree, 'commit', '-qm', 'Initial');
+    const caseAlias = join(directory, 'ORIGINAL REPO');
+    prepareTarget = existsSync(caseAlias) ? caseAlias : originalWorktree;
   }
-  const cwd = workspace ? prepareWorkspace(jobRoot, originalWorktree).cwd : join(directory, 'work tree 한글');
+  const cwd = workspace ? prepareWorkspace(jobRoot, prepareTarget).cwd : join(directory, 'work tree 한글');
   if (!workspace) mkdirSync(cwd);
   const agents = join(cwd, '.agents');
   const config = join(agents, 'hooks.json');
@@ -199,6 +202,9 @@ test('finish keeps temporary files until all results are published at the same r
 test('finish removes a clean Git worktree only after its commit reaches the original history', async (t) => {
   const env = fixture(t, { workspace: 'git', existingConfig: false });
   const { cwd, git, originalWorktree } = env;
+  const subdirectory = join(originalWorktree, 'subdirectory');
+  mkdirSync(subdirectory);
+  assert.throws(() => prepareWorkspace(env.jobRoot, subdirectory), /Pass the root of the original Git worktree/);
   writeFileSync(join(cwd, 'result.md'), 'worker output\n');
   git(cwd, 'commit', '-qam', 'Worker result');
   const commit = git(cwd, 'rev-parse', 'HEAD');

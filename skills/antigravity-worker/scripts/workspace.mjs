@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 const prefix = 'codex-agy-workspace-';
@@ -23,6 +23,12 @@ function sameEntry(a, b) {
   return a.dev === b.dev && a.ino === b.ino;
 }
 
+function sameDirectory(path, otherPath) {
+  const entry = statSync(path, { bigint: true });
+  const other = statSync(otherPath, { bigint: true });
+  return entry.isDirectory() && other.isDirectory() && sameEntry(entry, other);
+}
+
 function localDirectory(path) {
   if (!isAbsolute(path) || !lstatSync(path).isDirectory() || realpathSync(path) !== path) {
     throw new Error('Expected a canonical local directory: ' + path);
@@ -37,7 +43,7 @@ export function prepareWorkspace(jobs, target) {
     if (!isAbsolute(target)) throw new Error('Pass an absolute original Git worktree path.');
     original = realpathSync(target);
     const top = git(original, ['rev-parse', '--show-toplevel']).stdout.trim();
-    if (realpathSync(top) !== original) throw new Error('Pass the root of the original Git worktree.');
+    if (!sameDirectory(top, original)) throw new Error('Pass the root of the original Git worktree.');
     commit = git(original, ['rev-parse', '--verify', 'HEAD^{commit}']).stdout.trim();
   }
   mkdirSync(dirname(jobs), { recursive: true, mode: 0o700 });
@@ -129,10 +135,10 @@ export function removeWorkspace(workspace, published) {
     localDirectory(original);
     for (const path of [cwd, original]) {
       const top = git(path, ['rev-parse', '--show-toplevel']).stdout.trim();
-      if (realpathSync(top) !== path) throw new Error('Git worktree path changed: ' + path);
+      if (!sameDirectory(top, path)) throw new Error('Git worktree path changed: ' + path);
     }
     const commonDir = (path) => git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim();
-    if (commonDir(cwd) !== commonDir(original)) throw new Error('Original Git repository changed.');
+    if (!sameDirectory(commonDir(cwd), commonDir(original))) throw new Error('Original Git repository changed.');
     const head = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']).stdout.trim();
     if (git(original, ['merge-base', '--is-ancestor', head, 'HEAD'], [0, 1]).status !== 0) {
       throw new Error('The worker commit is not in the original worktree history.');
