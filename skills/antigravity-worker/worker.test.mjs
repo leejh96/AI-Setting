@@ -50,7 +50,7 @@ function runFake(job, prompt, report, signal, controls) {
     spawnChild(file, args, options) {
       assert.equal(file, process.execPath);
       assert.deepEqual(args.slice(0, -1), [
-        '--sandbox', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high', '--effort', 'high',
+        '--sandbox', '--dangerously-skip-permissions', '--model', 'gemini-4-hydrogen-high', '--effort', 'high',
         '--add-dir', job.cwd, '-i',
       ]);
       assert.equal(options.stdio, 'inherit');

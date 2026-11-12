@@ -4,7 +4,7 @@ import { basename, isAbsolute, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stripVTControlCharacters } from 'node:util';
 
-export const model = 'gemini-3.8-flash-high';
+export const model = 'gemini-4-hydrogen-high';
 export const effort = 'high';
 export const startupGraceMs = 45_000;
 const hookName = 'codex-antigravity-worker';
