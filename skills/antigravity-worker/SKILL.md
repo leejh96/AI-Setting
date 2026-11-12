@@ -21,14 +21,14 @@ Codex가 작업 범위와 완료 조건을 정합니다. Antigravity가 작업�
 
 ```text
 node <runner> prepare [original-worktree]
-node <runner> start <worktree> <prompt-file> [timeout-seconds]
-node <runner> follow-up <job-directory> <prompt-file> [timeout-seconds] [--new-terminal]
+node <runner> start <worktree> <prompt-file>
+node <runner> follow-up <job-directory> <prompt-file> [--new-terminal]
 node <runner> finish <job-directory> [published-directory]
 node <runner> status <job-directory>
 node <runner> cancel <job-directory>
 ```
 
-1. `prepare`를 사용했다면 반환된 `cwd`를 `start`에 전달합니다. Windows PowerShell과 macOS Terminal.app에서 Antigravity 대화형 화면이 열립니다. 반환된 `jobDirectory`로 `status`를 조회합니다. `starting`은 터미널 시작, `agy-starting`은 첫 훅 대기, `agy-running`은 작업 실행, `agy-settling`은 종료 이벤트 확인 단계입니다.
+1. `prepare`를 사용했다면 반환된 `cwd`를 `start`에 전달합니다. Windows PowerShell과 macOS Terminal.app에서 Antigravity 대화형 화면이 열립니다. 반환된 `jobDirectory`로 `status`를 주기적으로 확인하며 정상 완료까지 기다립니다. `starting`은 터미널 시작, `agy-starting`은 첫 훅 대기, `agy-running`은 작업 실행, `agy-settling`은 종료 이벤트 확인 단계입니다.
 2. `review-ready`가 되면 화면 또는 `transcriptPath`에서 응답을 읽고 아래 검토 체크리스트를 적용합니다. 수정이 필요하면 `follow-up`으로 전달합니다. 이전 대화형 프로세스가 종료된 뒤 같은 터미널에서 다음 대화가 열립니다. 종료 요청과 새 훅 이벤트가 겹쳐 검토 상태가 해제되면, 상태를 다시 확인하고 새 `review-ready`에서 후속 요청을 재시도합니다. 별도 창을 원하면 `--new-terminal`을 사용합니다. 이전 터미널을 사용할 수 없고 작업 잠금이 정리된 상태라면 새 터미널을 엽니다. 각 자동 요청은 새로운 `agy` 대화이므로 후속 프롬프트에 필요한 문맥을 넣습니다.
 3. 화면에 직접 새 프롬프트를 보내면 `changed-after-handoff`로 표시됩니다. 그 작업의 변경분을 다시 확인하고, 화면을 종료한 다음 자동 후속 요청을 보냅니다. `Ctrl+D`는 Antigravity 화면을 종료하고, `cancel`은 워커에 중단을 요청합니다. 빈 워커 터미널은 `Ctrl+C`로 닫습니다.
 4. `prepare`로 만든 경로는 후속 작업까지 끝나고 결과가 원본이나 전달 위치에 반영됐음을 Codex가 확인한 뒤, 마지막 작업의 `jobDirectory`로 `finish`를 실행합니다. `finish`는 검토가 끝난 화면을 닫고 잠금이 해제됐는지 확인한 뒤 아래 조건이 맞으면 작업 경로를 제거합니다. 기존에 지정된 작업 경로와 종료가 확인되지 않은 작업 경로는 보관합니다.
@@ -57,7 +57,8 @@ Codex는 매 검토에서 아래 항목을 확인하고, 변경의 성격과 영
 
 ## 실패와 복구
 
-- 터미널이 요청을 받는 기한과 `agy`의 첫 훅 대기 기한은 각각 45초입니다. 작업 실행 한도는 기본 1,800초이며 1~14,400초를 지정할 수 있습니다. `timed-out`이면 `phase`와 `eventPath`를 확인합니다.
+- 터미널이 요청을 받는 기한은 45초입니다. `agy`가 시작되면 실행기는 프로세스 생존 여부, 현재 대화의 훅, 대화 로그 파일의 변경을 5초마다 `status.health`에 반영합니다. 첫 훅 대기가 45초를 넘거나 훅·로그 변경이 2분간 없으면 `quiet`로 표시하며 프로세스와 작업 잠금을 유지합니다. `checkedAt`은 점검 시각입니다. 실제 진행 여부는 `lastHookAt`과 `lastTranscriptChangeAt`으로 확인합니다.
+- `quiet`가 이어지거나 점검 시각이 갱신되지 않으면 `workerPid`, `eventPath`, `transcriptPath`와 대화형 화면을 확인해 입력 대기·오류·계속 실행 중인 작업을 구분합니다. 새 활동이 관찰되면 정상 완료까지 기다립니다. 화면에서 필요한 입력을 확인하거나 종료가 필요한 근거가 생겼을 때 `cancel`로 중단할 수 있습니다. 이전 실행 기록의 `timed-out`은 당시 `phase`와 `eventPath`를 확인합니다.
 - 현재 요청의 정상 `Stop` 이벤트와 `fullyIdle: true`가 확인되면 검토를 시작합니다. 파일 변경 알림이 누락될 때를 대비해 실행 중에는 이벤트 기록도 주기적으로 확인합니다. 완료 신호 없이 화면이 닫히거나 CLI가 예기치 않게 종료되면, 하위 작업이 남을 수 있어 `cleanup-needed`로 잠금을 유지합니다. 이때 `exitStatus`는 각각 `completion-missing` 또는 `failed`입니다. 워커는 작업 폴더의 `.agents/hooks.json`에 훅을 임시로 추가하며, 정상 완료 후 화면을 닫거나 중단이 확인되면 기존 설정을 복원하고 잠금을 해제합니다.
 - macOS에서는 화면을 시작하기 전 터미널 입력 설정을 저장하고 화면이 닫힌 뒤 복구합니다. 복구에 실패하면 `terminalError`를 기록하고 해당 터미널은 후속 요청에서 교체합니다.
 - `cleanup-needed`이면 다음 순서로 복구합니다.

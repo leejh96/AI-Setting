@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, chmodSync, closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, renameSync, unlinkSync, watch, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { appendFileSync, chmodSync, closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stripVTControlCharacters } from 'node:util';
 
@@ -10,6 +10,8 @@ export const startupGraceMs = 45_000;
 const hookName = 'codex-antigravity-worker';
 const successfulStops = new Set(['model_stop', 'NO_TOOL_CALL']);
 const marker = (directory) => '[Codex worker job ' + basename(directory) + ']';
+const healthPollMs = 5_000;
+const quietAfterMs = 120_000;
 
 export function display(value) {
   return stripVTControlCharacters(String(value ?? '')).replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '');
@@ -177,15 +179,30 @@ function saveTerminalMode() {
   return () => stty(mode);
 }
 
+function workerProcessStatus(child) {
+  if (!child.pid) return 'starting';
+  if (child.exitCode !== null || child.signalCode !== null) return 'exited';
+  try {
+    process.kill(child.pid, 0);
+    return 'alive';
+  } catch (error) {
+    return error.code === 'ESRCH' ? 'exited' : 'unknown';
+  }
+}
+
 export function runAgy(job, prompt, report, signal, {
-  spawnChild = spawn, terminate = stopProcess, startupMs = startupGraceMs, settleMs = 750, retireRequests,
+  spawnChild = spawn, terminate = stopProcess, settleMs = 750, retireRequests,
+  firstHookQuietMs = startupGraceMs, quietMs = quietAfterMs, checkEveryMs = healthPollMs,
   saveTerminal = saveTerminalMode, watchEvents = watch,
 } = {}) {
   const restoreTerminal = saveTerminal();
   const eventPath = join(job.jobDirectory, 'events.jsonl');
   writeFileSync(eventPath, '', { flag: 'wx', mode: 0o600 });
   const content = prompt + '\n\nPreserve .agents/hooks.json and the worker lock. Wait for any work you start to finish before responding.\n' + marker(job.jobDirectory);
-  const watcher = watchEvents(eventPath, { persistent: false });
+  let watcher;
+  try {
+    watcher = watchEvents(eventPath, { persistent: false });
+  } catch { /* Polling also detects hook events when file watching is unavailable. */ }
   const env = { ...process.env };
   for (const name of Object.keys(env)) {
     const key = process.platform === 'win32' ? name.toUpperCase() : name;
@@ -198,7 +215,7 @@ export function runAgy(job, prompt, report, signal, {
       '--add-dir', job.cwd, '-i', content,
     ], { cwd: job.cwd, stdio: 'inherit', env });
   } catch (error) {
-    watcher.close();
+    watcher?.close();
     throw error;
   }
 
@@ -207,10 +224,8 @@ export function runAgy(job, prompt, report, signal, {
     let position = 0;
     let conversationId;
     let phase = 'agy-starting';
-    let timer;
     let settling;
     let stopTimer;
-    let workDeadlineAt;
     let stopping;
     let candidate;
     let reviewed;
@@ -220,25 +235,58 @@ export function runAgy(job, prompt, report, signal, {
     let finished = false;
     let lastInvocation = -1;
     let lastExecution = -1;
+    let lastHookAt;
+    let transcriptPath;
+    let transcriptVersion;
+    let lastTranscriptChangeAt;
+    let lastHookError;
 
-    function progress(status, details = {}) {
+    function healthSnapshot() {
+      const checkedAt = Date.now();
+      let transcriptReadable;
+      if (transcriptPath) {
+        try {
+          const info = statSync(transcriptPath, { throwIfNoEntry: false });
+          transcriptReadable = Boolean(info?.isFile());
+          if (transcriptReadable) {
+            const version = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+            if (version !== transcriptVersion) {
+              transcriptVersion = version;
+              lastTranscriptChangeAt = checkedAt;
+            }
+          }
+        } catch {
+          transcriptReadable = false;
+        }
+      }
+      const lastActivityAt = Math.max(lastHookAt ?? startedAt, lastTranscriptChangeAt ?? startedAt);
+      const quiet = checkedAt - lastActivityAt >= (lastHookAt === undefined ? firstHookQuietMs : quietMs);
+      return {
+        state: quiet ? 'quiet' : lastHookAt === undefined ? 'waiting-for-hook' : 'active',
+        process: workerProcessStatus(child), checkedAt, lastHookAt, lastTranscriptChangeAt, transcriptReadable, lastHookError,
+      };
+    }
+
+    function progress(status, details = {}, refresh = false) {
       try {
-        report({ status, phase, workerPid: child.pid, startedAt, eventPath, ...details });
+        const health = status === 'agy-starting' || status === 'agy-running' ? healthSnapshot() : undefined;
+        report({ status, phase, workerPid: child.pid, startedAt, eventPath, transcriptPath, health, ...details });
       } catch (error) {
-        stop({ status: 'failed', error: 'Cannot publish worker status: ' + error.message });
+        // A failed periodic refresh can recover on the next check.
+        if (!refresh) stop({ status: 'failed', error: 'Cannot publish worker status: ' + error.message });
       }
     }
 
     function complete(outcome) {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
       clearTimeout(settling);
       clearTimeout(stopTimer);
       clearInterval(eventPoll);
+      clearInterval(healthPoll);
       signal.removeEventListener('abort', interrupt);
       retireRequests?.removeEventListener('retire', retire);
-      watcher.close();
+      watcher?.close();
       if (restoreTerminal && outcome.tuiOpen === false) {
         try {
           restoreTerminal();
@@ -251,7 +299,6 @@ export function runAgy(job, prompt, report, signal, {
 
     function stop(outcome) {
       if (stopping || finished) return;
-      clearTimeout(timer);
       clearTimeout(settling);
       stopping = Promise.resolve().then(() => child.pid && terminate(child.pid)).then(
         () => outcome,
@@ -264,18 +311,9 @@ export function runAgy(job, prompt, report, signal, {
       if (outcome.status !== 'failed') progress('stopping');
     }
 
-    function deadline(ms) {
-      if (stopping) return;
-      clearTimeout(timer);
-      const watchdog = setTimeout(() => {
-        receive();
-        if (timer === watchdog && !reviewed && !candidate && !manualActivity) stop({ status: 'timed-out' });
-      }, ms);
-      timer = watchdog;
-    }
-
     function accept(event) {
-      if (stopping) return;
+      if (stopping || !event || !['active', 'stop'].includes(event.phase) ||
+          typeof event.conversationId !== 'string' || !event.conversationId) return;
       if (!conversationId && event.matches) conversationId = event.conversationId;
       if (event.conversationId !== conversationId) return;
       if (event.hasInput && !event.matches) {
@@ -283,28 +321,29 @@ export function runAgy(job, prompt, report, signal, {
         manualIdle = event.phase === 'stop' && event.fullyIdle === true && successfulStops.has(event.terminationReason);
         reviewed = candidate = undefined;
         clearTimeout(settling);
-        clearTimeout(timer);
         progress('changed-after-handoff', { tuiOpen: true });
         return;
       }
       if (manualActivity) return;
+      if (event.phase === 'active' && Number.isInteger(event.invocationNum)) {
+        if (event.invocationNum <= lastInvocation) return;
+        lastInvocation = event.invocationNum;
+      }
+      lastHookAt = Date.now();
+      if (typeof event.transcriptPath === 'string' && isAbsolute(event.transcriptPath) && event.transcriptPath !== transcriptPath) {
+        transcriptPath = event.transcriptPath;
+        transcriptVersion = undefined;
+      }
       if (phase === 'agy-starting') {
         phase = 'agy-running';
-        workDeadlineAt = Date.now() + job.seconds * 1000;
         progress(phase);
-        deadline(Math.max(0, workDeadlineAt - Date.now()));
       }
       if (event.phase === 'active') {
-        if (Number.isInteger(event.invocationNum)) {
-          if (event.invocationNum <= lastInvocation) return;
-          lastInvocation = event.invocationNum;
-        }
         if (!candidate && !reviewed) return;
         reviewed = candidate = undefined;
         clearTimeout(settling);
         phase = 'agy-running';
         progress(phase);
-        deadline(Math.max(0, workDeadlineAt - Date.now()));
         return;
       }
       if (event.fullyIdle !== true || candidate || reviewed) return;
@@ -314,7 +353,7 @@ export function runAgy(job, prompt, report, signal, {
       }
       candidate = {
         status: successfulStops.has(event.terminationReason) ? 'review-ready' : 'failed',
-        conversationId, transcriptPath: event.transcriptPath, terminationReason: event.terminationReason,
+        conversationId, transcriptPath, terminationReason: event.terminationReason,
         eventTimestamp: event.timestamp,
       };
       phase = 'agy-settling';
@@ -326,7 +365,6 @@ export function runAgy(job, prompt, report, signal, {
           stop(candidate);
           return;
         }
-        clearTimeout(timer);
         reviewed = candidate;
         candidate = undefined;
         phase = 'agy-review';
@@ -346,12 +384,21 @@ export function runAgy(job, prompt, report, signal, {
           const end = buffer.lastIndexOf(10, count - 1);
           if (count === 0 || end < 0) return;
           position += end + 1;
-          for (const line of buffer.toString('utf8', 0, end).split('\n')) accept(JSON.parse(line));
+          for (const line of buffer.toString('utf8', 0, end).split('\n')) {
+            let event;
+            try {
+              event = JSON.parse(line);
+            } catch (error) {
+              lastHookError = 'Invalid worker hook record: ' + error.message;
+              continue;
+            }
+            accept(event);
+          }
         } finally {
           closeSync(fd);
         }
       } catch (error) {
-        stop({ status: 'failed', error: error.message });
+        lastHookError = error.message;
       }
     }
 
@@ -365,10 +412,13 @@ export function runAgy(job, prompt, report, signal, {
       if (reviewed && reviewed.eventTimestamp === eventTimestamp && Date.now() < expiresAt) stop(reviewed);
     }
 
-    watcher.on('change', receive);
-    watcher.on('error', (error) => stop({ status: 'failed', error: error.message }));
+    watcher?.on('change', receive);
+    watcher?.on('error', () => watcher.close());
     // A notification can arrive between appends without a second notification for the remaining events.
     const eventPoll = setInterval(receive, 250).unref();
+    const healthPoll = setInterval(() => {
+      if (!stopping && !manualActivity && (phase === 'agy-starting' || phase === 'agy-running')) progress(phase, {}, true);
+    }, checkEveryMs).unref();
     child.once('error', (error) => { spawnError = error.message; });
     child.once('close', async (exitCode, exitSignal) => {
       if (finished) return;
@@ -401,7 +451,6 @@ export function runAgy(job, prompt, report, signal, {
     signal.addEventListener('abort', interrupt, { once: true });
     retireRequests?.addEventListener('retire', retire);
     progress(phase);
-    deadline(startupMs);
     if (signal.aborted) interrupt();
   });
 }

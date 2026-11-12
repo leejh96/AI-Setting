@@ -47,7 +47,6 @@ const fakeAgy = [
 function runFake(job, prompt, report, signal, controls) {
   let child;
   return runAgy(job, prompt, report, signal, {
-    ...controls,
     spawnChild(file, args, options) {
       assert.equal(file, process.execPath);
       assert.deepEqual(args.slice(0, -1), [
@@ -68,8 +67,11 @@ function runFake(job, prompt, report, signal, controls) {
       assert.equal(pid, child.pid);
       assert.ok(child.kill('SIGKILL'));
     },
-    startupMs: 900,
+    firstHookQuietMs: 250,
+    quietMs: 250,
+    checkEveryMs: 35,
     settleMs: 60,
+    ...controls,
   });
 }
 
@@ -132,7 +134,7 @@ function fixture(t, { existingConfig = true, run = runFake, workspace } = {}) {
     writeFileSync(config, original);
   }
   const open = (terminal) => terminals.set(terminal, serve(terminal, run));
-  const options = { timeout: '1', locateAgy: () => process.execPath, launch: open, jobRoot };
+  const options = { locateAgy: () => process.execPath, launch: open, jobRoot };
   let promptIndex = 0;
   function prompt(message) {
     const path = join(directory, 'prompt-' + ++promptIndex + '.txt');
@@ -239,16 +241,16 @@ test('Stop hook confirms completion while the native screen stays open, includin
   assert.equal(existsSync(env.lock), false);
 });
 
-test('a completed Stop is read before the work deadline even without file notifications', async (t) => {
+test('polling reads a completed Stop when file watching is unavailable', async (t) => {
   const env = fixture(t, {
     run(job, prompt, report, signal, controls) {
       return runFake(job, prompt, report, signal, {
         ...controls,
-        watchEvents: () => ({ on() {}, close() {} }),
+        watchEvents: () => { throw new Error('file watching unavailable'); },
       });
     },
   });
-  const job = env.start('running hang', { timeout: '60' });
+  const job = env.start('running hang');
   await until(job, ({ status }) => status === 'agy-running');
   recordHook(job.jobDirectory, 'stop', {
     conversationId: 'test-turn',
@@ -260,22 +262,68 @@ test('a completed Stop is read before the work deadline even without file notifi
   assert.equal((await reviewed(job)).terminationReason, 'NO_TOOL_CALL');
 });
 
-test('unrelated, non-idle and failed Stop signals do not produce a successful handoff', async (t) => {
+test('quiet jobs keep their worker and lock until cancellation or a confirmed failed Stop', async (t) => {
   const env = fixture(t, { existingConfig: false });
   let job;
   for (const [message, expected, phase] of [
-    ['wrong conversation', 'timed-out', 'agy-running'],
+    ['wrong conversation', 'interrupted', 'agy-running'],
     ['failed', 'failed', 'agy-settling'],
-    ['startup hang', 'timed-out', 'agy-starting'],
-    ['running hang', 'timed-out', 'agy-running'],
-    ['invalid idle flag', 'timed-out', 'agy-running'],
+    ['startup hang', 'interrupted', 'agy-starting'],
+    ['running hang', 'interrupted', 'agy-running'],
+    ['invalid idle flag', 'interrupted', 'agy-running'],
   ]) {
     job = job ? await env.follow(job, message) : env.start(message);
+    if (expected === 'interrupted') {
+      const quiet = await until(job, ({ health }) => health?.state === 'quiet');
+      assert.equal(quiet.status, phase, message);
+      assert.equal(quiet.health.process, 'alive', message);
+      assert.equal(readFileSync(env.lock, 'utf8'), job.jobDirectory);
+      cancel(job.jobDirectory);
+    }
     const result = await finished(job);
     assert.equal(result.status, expected, message);
     assert.equal(result.phase, phase, message);
     assert.equal(existsSync(env.agents), false, message);
   }
+});
+
+test('the worker survives the old deadline and resumes health on both hook and transcript activity', async (t) => {
+  const env = fixture(t, {
+    run(job, prompt, report, signal, controls) {
+      return runFake({ ...job, seconds: 1 }, prompt, report, signal, controls);
+    },
+  });
+  const job = env.start('startup hang');
+  const quiet = await until(job, ({ health }) => health?.state === 'quiet');
+  assert.equal(quiet.status, 'agy-starting');
+  assert.equal(quiet.health.process, 'alive');
+  const transcriptPath = join(env.directory, 'transcript.jsonl');
+  writeFileSync(transcriptPath, '{}\n');
+  const payload = {
+    conversationId: 'test-turn',
+    lastUserInput: `[Codex worker job ${basename(job.jobDirectory)}]`,
+    transcriptPath,
+  };
+  recordHook(job.jobDirectory, 'active', { ...payload, invocationNum: 0 });
+  const active = await until(job, ({ health }) => health?.state === 'active' && health.transcriptReadable);
+  assert.equal(active.transcriptPath, transcriptPath);
+  assert.ok(active.health.lastHookAt);
+  assert.ok(active.health.lastTranscriptChangeAt);
+
+  const idle = await until(job, ({ health }) => health?.state === 'quiet');
+  writeFileSync(transcriptPath, '{}\n{}\n');
+  const resumed = await until(job, ({ health }) => health?.lastTranscriptChangeAt > idle.health.lastTranscriptChangeAt);
+  assert.equal(resumed.health.state, 'active');
+  assert.equal(resumed.health.lastHookAt, idle.health.lastHookAt);
+  assert.equal(resumed.health.process, 'alive');
+
+  await delay(1_100);
+  const stillRunning = status(job.jobDirectory);
+  assert.equal(stillRunning.status, 'agy-running');
+  assert.equal(stillRunning.health.process, 'alive');
+  assert.equal(readFileSync(env.lock, 'utf8'), job.jobDirectory);
+  recordHook(job.jobDirectory, 'stop', { ...payload, fullyIdle: true, terminationReason: 'NO_TOOL_CALL' });
+  assert.equal((await reviewed(job)).transcriptPath, transcriptPath);
 });
 
 test('unconfirmed CLI exit preserves hooks and the worktree lock', async (t) => {
@@ -344,7 +392,7 @@ test('follow-up defaults to the existing terminal and supports a requested or re
 
 test('follow-up can be retried after fresh activity revokes a handoff', async (t) => {
   const env = fixture(t);
-  const first = await reviewed(env.start('normal', { timeout: '5' }));
+  const first = await reviewed(env.start('normal'));
   const payload = { conversationId: 'test-turn', lastUserInput: `[Codex worker job ${basename(first.jobDirectory)}]` };
 
   recordHook(first.jobDirectory, 'active', { ...payload, invocationNum: 1 });

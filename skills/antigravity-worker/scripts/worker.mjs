@@ -198,17 +198,14 @@ function terminalInfo(directory) {
 }
 
 function legacyStatus(job, result) {
-  const { jobDirectory, createdAt, seconds } = job;
+  const { jobDirectory, createdAt } = job;
   if (result) {
     const transcript = result.transcriptPath && statSync(result.transcriptPath, { throwIfNoEntry: false });
     const changed = result.status === 'review-ready' && transcript?.mtimeMs > result.transcriptTimestamp;
     return { jobDirectory, ...result, status: changed ? 'changed-after-handoff' : result.status };
   }
   const started = statSync(join(jobDirectory, 'started'), { throwIfNoEntry: false });
-  const elapsed = Date.now() - (started?.mtimeMs ?? createdAt);
-  const status = started
-    ? elapsed > seconds * 1000 + startupGraceMs ? 'wait-timeout' : 'running'
-    : elapsed > startupGraceMs ? 'startup-timeout' : 'starting';
+  const status = started ? 'running' : Date.now() - createdAt > startupGraceMs ? 'startup-timeout' : 'starting';
   return { jobDirectory, status };
 }
 
@@ -239,14 +236,12 @@ export function status(directory) {
   return jobStatus(readJob(directory));
 }
 
-function readPrompt(promptFile, timeout) {
+function readPrompt(promptFile) {
   if (!isAbsolute(promptFile) || !statSync(promptFile).isFile()) throw new Error('Pass an absolute prompt file path.');
-  const seconds = Number(timeout);
-  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 14_400) throw new Error('Timeout must be 1 to 14400 seconds.');
   const prompt = readFileSync(promptFile, 'utf8').replace(/^\uFEFF/, '');
   if (!prompt.trim()) throw new Error('The prompt is empty.');
   if (process.platform === 'win32' && prompt.length > 12_000) throw new Error('Keep the Windows interactive prompt to 12,000 characters.');
-  return { seconds, prompt };
+  return prompt;
 }
 
 export function start(worktree, promptFile, options = {}) {
@@ -262,8 +257,8 @@ export function start(worktree, promptFile, options = {}) {
   }
 }
 
-function queueJob(cwd, promptFile, { timeout = '1800', previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot = jobsDirectory() }) {
-  const { seconds, prompt } = readPrompt(promptFile, timeout);
+function queueJob(cwd, promptFile, { previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot = jobsDirectory() }) {
+  const prompt = readPrompt(promptFile);
   const lock = lockPath(cwd);
   const owner = readOptional(lock);
   if (owner !== null) throw new Error(`The worktree is locked by ${owner || 'another worker'}. Check ${lock}.`);
@@ -298,7 +293,7 @@ function queueJob(cwd, promptFile, { timeout = '1800', previous, newTerminal = f
   cleanupJobs(root, previous?.terminalDirectory ?? previous?.jobDirectory);
   const jobDirectory = realpathSync(mkdtempSync(join(root, jobPrefix)));
   terminalDirectory ??= jobDirectory;
-  const job = { cwd, agy, seconds, createdAt: Date.now(), jobDirectory, terminalDirectory, terminalReason };
+  const job = { cwd, agy, createdAt: Date.now(), jobDirectory, terminalDirectory, terminalReason };
   try {
     writeJson(jobDirectory, 'job.json', job);
     writeFileSync(join(jobDirectory, 'prompt.txt'), prompt, { mode: 0o600, flag: 'wx' });
@@ -327,7 +322,7 @@ export async function followUp(previous, promptFile, options) {
   const earlier = readJob(previous);
   const current = jobStatus(earlier);
   if (earlier.terminalDirectory && current.tuiOpen && current.status === 'review-ready' && !current.finishedAt) {
-    readPrompt(promptFile, options?.timeout ?? '1800');
+    readPrompt(promptFile);
     await retireReviewed(earlier, current);
   }
   return start(earlier.cwd, promptFile, { ...options, previous: earlier });
@@ -509,22 +504,14 @@ export function serve(directory, run = runAgy) {
   return close;
 }
 
-function parseOptions(values) {
-  const options = {};
-  for (const value of values) {
-    if (value === '--new-terminal' && !options.newTerminal) options.newTerminal = true;
-    else if (/^\d+$/.test(value) && !options.timeout) options.timeout = value;
-    else throw new Error(`Unexpected option: ${value}`);
-  }
-  return options;
-}
-
 if (process.argv[1] && resolve(process.argv[1]) === runner) {
   try {
     const [action, ...args] = process.argv.slice(2);
     if (action === 'prepare' && args.length <= 1) console.log(JSON.stringify(prepareWorkspace(jobsDirectory(), args[0])));
-    else if (action === 'start' && args.length >= 2) console.log(JSON.stringify(start(args[0], args[1], parseOptions(args.slice(2)))));
-    else if (action === 'follow-up' && args.length >= 2) console.log(JSON.stringify(await followUp(args[0], args[1], parseOptions(args.slice(2)))));
+    else if (action === 'start' && args.length === 2) console.log(JSON.stringify(start(args[0], args[1])));
+    else if (action === 'follow-up' && (args.length === 2 || (args.length === 3 && args[2] === '--new-terminal'))) {
+      console.log(JSON.stringify(await followUp(args[0], args[1], { newTerminal: args[2] === '--new-terminal' })));
+    }
     else if (action === 'finish' && args.length >= 1 && args.length <= 2) console.log(JSON.stringify(await finish(args[0], args[1])));
     else if (action === 'status' && args.length === 1) console.log(JSON.stringify(status(args[0])));
     else if (action === 'cancel' && args.length === 1) console.log(JSON.stringify(cancel(args[0])));
@@ -533,7 +520,7 @@ if (process.argv[1] && resolve(process.argv[1]) === runner) {
       recordHook(args[0], args[1], JSON.parse(readFileSync(0, 'utf8')));
       process.stdout.write('{}');
     }
-    else throw new Error('Usage: worker.mjs prepare [original-worktree] | start <worktree> <prompt> [seconds] | follow-up <job> <prompt> [seconds] [--new-terminal] | finish <job> [published-directory] | status <job> | cancel <job>');
+    else throw new Error('Usage: worker.mjs prepare [original-worktree] | start <worktree> <prompt> | follow-up <job> <prompt> [--new-terminal] | finish <job> [published-directory] | status <job> | cancel <job>');
   } catch (error) {
     console.error(display(error.message));
     process.exitCode = 1;
