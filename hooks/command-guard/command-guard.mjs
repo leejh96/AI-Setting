@@ -3,7 +3,15 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { shellCommands } from './shell-commands.mjs';
 
-const protectedBranches = new Set(['main', 'master', 'develop']);
+const protectedBranches = new Set(['main', 'master', 'develop', 'test', 'prod']);
+const featureBranchRef = /^refs\/heads\/feature\/[\p{L}\p{M}\p{N}._/-]+$/u;
+const literalPushArgument = /^(?!@)[\p{L}\p{M}\p{N}._/:@=+-]+$/u;
+const pushValueOptions = ['--repo', '--receive-pack', '--exec', '--push-option', '-o'];
+const pushLongOptions = [
+  ...pushValueOptions.filter(option => option.startsWith('--')),
+  '--delete', '--dry-run', '--no-dry-run', '--force', '--force-with-lease', '--force-if-includes',
+  '--mirror', '--no-verify', '--no-verbose', '--prune', '--progress', '--porcelain', '--recurse-submodules',
+];
 const shellPrefixes = new Set(['!', '{', 'if', 'then', 'elif', 'else', 'while', 'until', 'do']);
 const commandWrappers = new Set(['command', 'exec', 'env', 'sudo', 'nohup', 'time']);
 const shellExecutables = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
@@ -17,7 +25,7 @@ function deny(reason) {
   return { decision: 'deny', reason };
 }
 
-function options(args, valueOptions = [], attachedValueOptions = []) {
+function options(args, valueOptions = [], attachedValueOptions = [], longOptions = []) {
   const flags = new Set();
   const operands = [];
   let parsingOptions = true;
@@ -26,9 +34,11 @@ function options(args, valueOptions = [], attachedValueOptions = []) {
     if (parsingOptions && arg === '--') {
       parsingOptions = false;
     } else if (parsingOptions && arg.startsWith('--')) {
-      const option = arg.split('=', 1)[0];
+      const written = arg.split('=', 1)[0];
+      const matches = longOptions.filter(option => option.startsWith(written));
+      const option = matches.length === 1 ? matches[0] : written;
       flags.add(option);
-      if (arg === option && valueOptions.includes(option)) i++;
+      if (arg === written && valueOptions.includes(option)) i++;
     } else if (parsingOptions && /^-[^-]/.test(arg)) {
       for (const [offset, char] of [...arg.slice(1)].entries()) {
         const option = '-' + char;
@@ -68,23 +78,26 @@ function gitCommand(args) {
   const operation = args[index++];
   const argumentsAfterOperation = args.slice(index);
   if (operation === 'push') {
-    const { flags, operands } = options(argumentsAfterOperation, [
-      '--repo', '--receive-pack', '--exec', '--push-option', '-o',
-    ]);
+    const { flags, operands } = options(argumentsAfterOperation, pushValueOptions, [], pushLongOptions);
     if (dryRun(flags)) return;
     if (hookOverride || flags.has('--no-verify')) return deny('Git push의 로컬 검사를 우회하는 옵션입니다.');
     if (flags.has('-f') || flags.has('--force') || flags.has('--mirror') || operands.some(arg => arg.startsWith('+'))) {
       return deny('원격 Git 이력을 강제로 덮어쓰거나 삭제할 수 있습니다.');
     }
     const deleteFlag = flags.has('-d') || flags.has('--delete');
-    const refspecs = flags.has('--repo') ? operands : operands.slice(1);
-    const destinations = refspecs.filter(arg => arg !== ':' && (arg.startsWith(':') || deleteFlag))
-      .map(arg => arg.replace(/^:/, '').replace(/^refs\/heads\//, ''));
-    if (destinations.some(branch => protectedBranches.has(branch))) {
+    const refspecs = operands.slice(1);
+    const deletions = deleteFlag ? refspecs : refspecs.filter(ref => ref.startsWith(':') && ref !== ':')
+      .map(ref => ref.slice(1));
+    if (deletions.some(ref => protectedBranches.has(ref.replace(/^refs\/heads\//, '')))) {
       return deny('보호 대상 원격 브랜치를 삭제하는 명령입니다.');
     }
-    if (deleteFlag || destinations.length || flags.has('--prune')) return deny('원격 Git ref가 삭제될 수 있습니다.');
     if (flags.has('--force-with-lease')) return deny('원격 Git 이력을 다시 쓰는 명령입니다.');
+    if (flags.has('--prune')) return deny('원격 Git ref가 삭제될 수 있습니다.');
+    if ((deleteFlag || deletions.length) && (deletions.length === 0 || deletions.length !== refspecs.length
+      || !deletions.every(ref => featureBranchRef.test(ref))
+      || !argumentsAfterOperation.every(arg => literalPushArgument.test(arg)))) {
+      return deny('원격 삭제는 refs/heads/feature/ 아래 브랜치를 명시한 경우에만 허용됩니다.');
+    }
     return;
   }
 

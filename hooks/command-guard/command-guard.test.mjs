@@ -45,6 +45,20 @@ const cases = {
     'git push --force-with-lease=feature:abc origin feature',
     'git push origin :feature',
     'git push develop --delete feature',
+    'git push origin --delete feature/topic',
+    'git push origin :refs/tags/feature/topic',
+    'git push origin :refs/heads/release/topic',
+    'git push origin :refs/heads/feature/',
+    'git push origin :refs/heads/feature/topic :refs/heads/main',
+    'git push origin :refs/heads/feature/topic :',
+    'git push origin -d refs/heads/feature/topic refs/heads/release/topic',
+    'git push origin -d refs/heads/feature/$BRANCH',
+    'git push $REMOTE :refs/heads/feature/topic',
+    'git push origin --pru :refs/heads/feature/topic',
+    'git push origin --force-with-l :refs/heads/feature/topic',
+    'git push origin --no-verify :refs/heads/feature/topic',
+    'git push origin --dry-run --no-dry -d refs/heads/main',
+    ...['main', 'master', 'develop', 'test', 'prod'].map(branch => `git push origin --del refs/heads/${branch}`),
     'git push --prune origin',
     'git clean -fd -- tmp',
     'git reset --hard HEAD',
@@ -73,6 +87,11 @@ const cases = {
     'git push',
     'git push origin HEAD:develop',
     'git push origin :',
+    'git push origin --delete refs/heads/feature/topic',
+    'git push origin -d refs/heads/feature/a refs/heads/feature/team/b',
+    'git push origin :refs/heads/feature/topic',
+    'git push --push-o option origin :refs/heads/feature/topic',
+    'git push origin --dry-run --delete refs/heads/prod',
     'git push -n --force origin feature',
     'git push -o --force origin feature',
     'git commit -m "--no-verify"',
@@ -118,6 +137,8 @@ test('워크스페이스 밖의 다른 Git 저장소 루트도 재귀 삭제를 
 test('Windows 실행 파일 경로와 PowerShell 재귀 삭제를 판별한다', () => {
   const inspect = (command) => inspectCommand(command, 'C:\\work\\repo', 'win32').decision;
   assert.equal(inspect('& "C:\\Program Files\\Git\\bin\\git.exe" push --force origin feature'), 'deny');
+  assert.equal(inspect('& "C:\\Program Files\\Git\\bin\\git.exe" push origin --delete "refs/heads/feature/한글"'), 'allow');
+  assert.equal(inspect('git push origin --delete refs/heads/prod'), 'deny');
   assert.equal(inspect('Remove-Item -LiteralPath C:\\work\\repo -Recurse -Force'), 'deny');
   assert.equal(inspect('Remove-Item -Recurse -Force .\\tmp'), 'deny');
   assert.equal(inspect('rmdir /s /q C:\\'), 'deny');
@@ -167,6 +188,8 @@ for (const [name, client] of Object.entries(clients)) {
   test(name + '의 허용·차단 응답과 입력 오류', () => {
     const run = input => parseResult(spawnSync(process.execPath, [client.script], { input, encoding: 'utf8' }));
     assert.equal(client.decision(run(JSON.stringify(client.event('git status')))), 'allow');
+    assert.equal(client.decision(run(JSON.stringify(client.event('git push origin :refs/heads/feature/topic')))), 'allow');
+    assert.equal(client.decision(run(JSON.stringify(client.event('git push origin :refs/heads/test')))), 'deny');
     assert.equal(client.decision(run(JSON.stringify(client.event('git checkout .')))), 'deny');
     const denied = run(JSON.stringify(client.event('git push -f https://example.invalid/PRIVATE feature')));
     assert.equal(client.decision(denied), 'deny');

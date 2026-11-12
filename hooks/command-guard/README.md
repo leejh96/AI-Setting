@@ -6,9 +6,11 @@
 
 | 결과 | 예시 |
 |---|---|
-| Git 명령 차단 | `git push --force`, `-f`, `+refspec`, `--mirror`, `--force-with-lease`, 원격 ref 삭제, Git 훅 우회, `git clean`, `git reset --hard`, 작업 트리 전체 복원, 로컬 브랜치 강제 삭제, stash 삭제, 강제 worktree 제거 |
+| Git 명령 차단 | `git push --force`, `-f`, `+refspec`, `--mirror`, `--force-with-lease`, `--prune`, 허용 범위 밖의 원격 ref 삭제, Git 훅 우회, `git clean`, `git reset --hard`, 작업 트리 전체 복원, 로컬 브랜치 강제 삭제, stash 삭제, 강제 worktree 제거 |
 | 파일 명령 차단 | 재귀 삭제, `find -delete`, `rsync --delete` 계열, 재귀 `chmod 777` |
-| 기존 권한 정책 적용 | 일반 `git push`, 일반 커밋, `git clean -n` 등 미리보기, 안전한 파일 작업 |
+| 기존 권한 정책 적용 | 일반 `git push`, `refs/heads/feature/`를 명시한 브랜치 삭제, 일반 커밋, `git clean -n` 등 미리보기, 안전한 파일 작업 |
+
+원격 기능 브랜치를 삭제할 때는 `git push origin --delete refs/heads/feature/example` 또는 `git push origin :refs/heads/feature/example`을 사용합니다. 삭제 대상은 `refs/heads/feature/` 아래 브랜치 이름을 명령에 직접 적습니다. `main`, `master`, `develop`, `test`, `prod`와 태그 삭제, 다른 ref를 섞은 삭제는 차단합니다.
 
 `--no-verify`와 커밋·푸시에서 `core.hooksPath`를 일회성으로 덮어쓰는 Git 옵션을 검사합니다. Windows에서는 일반적인 PowerShell `Remove-Item -Recurse`와 `rmdir /s` 형태도 검사합니다. 한 호출에 차단 대상 명령이 있으면 도구 호출 전체를 차단합니다.
 
