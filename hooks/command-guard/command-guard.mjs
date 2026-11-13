@@ -18,7 +18,7 @@ const commandWrappers = new Set(['command', 'exec', 'env', 'sudo', 'nohup', 'tim
 const shellExecutables = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const assignment = /^[a-z_]\w*=/i;
 const directWorktreeRemove = /^[ \t]*git(?:\.exe)?[ \t]+worktree[ \t]+remove[ \t]+(?:--[ \t]+)?(?:'([^'\r\n]+)'|"([^"\r\n]+)"|([^ \t\r\n]+))[ \t]*$/i;
-const literalWorktreePath = /^(?![- ])[\p{L}\p{M}\p{N}_.@+ /:-]+$/u;
+const literalWorktreePath = /^(?![- ])[\p{L}\p{M}\p{N}_.@+ /:~-]+$/u;
 const gitRepositoryOverride = /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|CONFIG(?:_.*)?|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|GRAFT_FILE|SHALLOW_FILE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)$/i;
 
 function executable(word) {
@@ -68,8 +68,8 @@ function worktreeRemove(command, cwd, windows) {
   const match = directWorktreeRemove.exec(command);
   const target = match?.slice(1).find(part => part !== undefined);
   if (!target || !literalWorktreePath.test(target) || /[\r\n]/.test(command)
-    || !windows && target.includes(':')
-    || windows && (/^[a-z]:(?!\/)/i.test(target) || target.startsWith('/')
+    || !windows && /[:~]/.test(target)
+    || windows && (/^[a-z]:(?!\/)/i.test(target) || /^[\/~]/.test(target)
       || target.replace(/^[a-z]:/i, '').includes(':'))) {
     return deny('워크트리 제거는 git worktree remove에 경로 하나를 직접 지정할 때만 허용됩니다.');
   }
@@ -88,12 +88,20 @@ function worktreeRemove(command, cwd, windows) {
     });
   }
 
-  const targetPath = path.resolve(cwd, target);
+  let targetPath = path.resolve(cwd, target);
   const samePath = (left, right) => path.relative(left, right) === '';
   try {
     const literalPath = path.isAbsolute(target) ? target : cwd + path.sep + target;
-    if (!samePath(targetPath, realpathSync.native(literalPath))
-      || !lstatSync(path.join(targetPath, '.git')).isFile()) return deny(unverifiable);
+    const canonicalPath = realpathSync.native(literalPath);
+    if (!samePath(targetPath, canonicalPath)) {
+      if (!windows || !samePath(realpathSync.native(targetPath), canonicalPath)) return deny(unverifiable);
+      // Windows short names can resolve to the registered long path. Reject links along the path.
+      for (let ancestor = targetPath; ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
+        if (!lstatSync(ancestor).isDirectory()) return deny(unverifiable);
+      }
+      targetPath = canonicalPath;
+    }
+    if (!lstatSync(path.join(targetPath, '.git')).isFile()) return deny(unverifiable);
   } catch {
     return deny(unverifiable);
   }
