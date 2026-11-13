@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { shellCommands } from './shell-commands.mjs';
@@ -16,6 +17,9 @@ const shellPrefixes = new Set(['!', '{', 'if', 'then', 'elif', 'else', 'while', 
 const commandWrappers = new Set(['command', 'exec', 'env', 'sudo', 'nohup', 'time']);
 const shellExecutables = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const assignment = /^[a-z_]\w*=/i;
+const directWorktreeRemove = /^[ \t]*git(?:\.exe)?[ \t]+worktree[ \t]+remove[ \t]+(?:--[ \t]+)?(?:'([^'\r\n]+)'|"([^"\r\n]+)"|([^ \t\r\n]+))[ \t]*$/i;
+const literalWorktreePath = /^(?![- ])[\p{L}\p{M}\p{N}_.@+ /:-]+$/u;
+const gitRepositoryOverride = /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|CONFIG(?:_.*)?|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|GRAFT_FILE|SHALLOW_FILE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)$/i;
 
 function executable(word) {
   return word.split(/[/\\]/).at(-1).replace(/\.exe$/i, '').toLowerCase();
@@ -60,7 +64,69 @@ function dryRun(flags) {
   return !flags.has('--no-dry-run') && (flags.has('-n') || flags.has('--dry-run'));
 }
 
-function gitCommand(args) {
+function worktreeRemove(command, cwd, windows) {
+  const match = directWorktreeRemove.exec(command);
+  const target = match?.slice(1).find(part => part !== undefined);
+  if (!target || !literalWorktreePath.test(target) || /[\r\n]/.test(command)
+    || !windows && target.includes(':')
+    || windows && (/^[a-z]:(?!\/)/i.test(target) || target.startsWith('/')
+      || target.replace(/^[a-z]:/i, '').includes(':'))) {
+    return deny('워크트리 제거는 git worktree remove에 경로 하나를 직접 지정할 때만 허용됩니다.');
+  }
+
+  const unverifiable = 'Git에 등록된 연결 워크트리와 작업 상태를 확인하지 못했습니다.';
+  if (windows !== (process.platform === 'win32') || !path.isAbsolute(cwd)
+    || Object.keys(process.env).some(key => gitRepositoryOverride.test(key))) return deny(unverifiable);
+
+  const deadline = Date.now() + 3500;
+  function git(directory, ...args) {
+    return spawnSync('git', [
+      '--no-optional-locks', '--no-replace-objects', '--no-lazy-fetch',
+      '-c', 'core.fsmonitor=false', '-C', directory, ...args,
+    ], {
+      encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), windowsHide: true,
+    });
+  }
+
+  const targetPath = path.resolve(cwd, target);
+  const samePath = (left, right) => path.relative(left, right) === '';
+  try {
+    const literalPath = path.isAbsolute(target) ? target : cwd + path.sep + target;
+    if (!samePath(targetPath, realpathSync.native(literalPath))
+      || !lstatSync(path.join(targetPath, '.git')).isFile()) return deny(unverifiable);
+  } catch {
+    return deny(unverifiable);
+  }
+
+  const listing = git(cwd, 'worktree', 'list', '--porcelain', '-z');
+  if (listing.status !== 0) return deny(unverifiable);
+  const worktrees = listing.stdout.split('\0\0').map(entry => entry.split('\0'));
+  // Git lists the main worktree or bare repository first.
+  const fields = worktrees.slice(1).find(([entry]) => entry.startsWith('worktree ')
+    && samePath(entry.slice('worktree '.length), targetPath));
+  if (!fields || fields.some(field => /^(?:locked|prunable|bare)(?: |$)/.test(field))) return deny(unverifiable);
+  const head = fields.find(field => /^HEAD (?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(field))?.slice('HEAD '.length);
+  if (!head) return deny(unverifiable);
+
+  const common = git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const checkout = git(targetPath, 'rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel', 'HEAD');
+  if (common.status !== 0 || checkout.status !== 0) return deny(unverifiable);
+  const [targetCommon, topLevel, targetHead] = checkout.stdout.trimEnd().split(/\r?\n/);
+  if (!targetCommon || !topLevel || targetHead !== head || !samePath(common.stdout.trimEnd(), targetCommon)
+    || !samePath(targetPath, topLevel)) return deny(unverifiable);
+
+  const develop = git(cwd, 'show-ref', '--verify', '--hash', '--', 'refs/heads/develop');
+  if (develop.status !== 0
+    || git(cwd, 'merge-base', '--is-ancestor', head, develop.stdout.trimEnd()).status !== 0) {
+    return deny('워크트리의 커밋이 로컬 develop에 포함됐는지 확인하지 못했습니다.');
+  }
+  const status = git(targetPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+    '--ignored=matching', '--ignore-submodules=none');
+  if (status.status !== 0) return deny(unverifiable);
+  if (status.stdout) return deny('워크트리에 커밋하지 않은 변경, 미추적 파일 또는 Git이 무시하는 파일이 있습니다.');
+}
+
+function gitCommand(args, context) {
   let hookOverride = false;
   let index = 0;
   while (args[index]?.startsWith('-')) {
@@ -116,6 +182,9 @@ function gitCommand(args) {
     '-s', '--source', '-b', '-B', '--pathspec-from-file', '-e', '--exclude',
   ]);
   const forced = flags.has('-f') || flags.has('--force');
+  if (operation === 'worktree' && operands[0] === 'remove' && !forced) {
+    return worktreeRemove(context.command, context.cwd, context.windows);
+  }
   if (operation === 'clean' && !dryRun(flags)) {
     if (flags.has('-x') || flags.has('-X')) return deny('Git이 무시하는 파일까지 강제로 삭제할 수 있습니다.');
     return deny('Git에서 추적하지 않는 파일을 삭제할 수 있습니다.');
@@ -203,7 +272,7 @@ function classifyWords(words, context, depth) {
   if (index >= words.length) return;
   const program = executable(words[index]);
   const args = words.slice(index + 1);
-  if (program === 'git') return gitCommand(args);
+  if (program === 'git') return gitCommand(args, context);
   if (depth < 4 && shellExecutables.has(program)) {
     const commandFlag = args.findIndex(arg => /^-[a-z]*c[a-z]*$/.test(arg));
     if (commandFlag !== -1 && args[commandFlag + 1]) return classify(args[commandFlag + 1], context, depth + 1);
@@ -220,5 +289,5 @@ function classify(command, context, depth) {
 }
 
 export function inspectCommand(command, cwd, platform = process.platform) {
-  return classify(command, { cwd, windows: platform === 'win32' }, 0);
+  return classify(command, { command, cwd, windows: platform === 'win32' }, 0);
 }

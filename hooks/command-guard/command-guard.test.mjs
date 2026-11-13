@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,9 @@ const cases = {
     'git branch -D feature',
     'git branch -df feature',
     'git worktree remove --force ./tmp',
+    'git worktree remove ./tmp',
+    'git -C ./repo worktree remove ./tmp',
+    'git worktree remove -- ./tmp; git status',
     'git stash clear',
     'git stash drop stash@{0}',
     'rm -rf ./build-cache',
@@ -104,7 +107,6 @@ const cases = {
     'git checkout -- src/file.js',
     'git reset --soft HEAD~1',
     'git branch -d feature',
-    'git worktree remove ./tmp',
     'rsync -avn --delete ./src/ ./dst/',
     "find ./tmp -name '-delete'",
     'rm ./tmp/report.txt',
@@ -143,6 +145,81 @@ test('Windows 실행 파일 경로와 PowerShell 재귀 삭제를 판별한다',
   assert.equal(inspect('Remove-Item -Recurse -Force .\\tmp'), 'deny');
   assert.equal(inspect('rmdir /s /q C:\\'), 'deny');
   assert.equal(inspect('Remove-Item -LiteralPath .\\tmp\\result.txt'), 'allow');
+});
+
+test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허용한다', (t) => {
+  const fixture = mkdtempSync(path.join(tmpdir(), 'command-guard-'));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const repo = path.join(fixture, 'repo');
+  const linked = path.join(fixture, 'linked worktree');
+  const detached = path.join(fixture, 'detached');
+  const plain = path.join(fixture, 'plain');
+  const git = (cwd, ...args) => {
+    const result = spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.',
+      '-c', 'user.name=Guard Test', '-c', 'user.email=guard@example.invalid', ...args], { cwd, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trimEnd();
+  };
+  const inspect = command => inspectCommand(command, repo).decision;
+  const remove = target => 'git worktree remove -- "' + target.replaceAll(path.sep, '/') + '"';
+  git(fixture, 'init', '-b', 'develop', repo);
+  writeFileSync(path.join(repo, '.gitignore'), 'ignored.txt\n');
+  git(repo, 'add', '.gitignore');
+  git(repo, 'commit', '-m', 'base');
+  git(repo, 'worktree', 'add', '-b', 'feature/linked', linked);
+  writeFileSync(path.join(linked, 'tracked.txt'), 'feature\n');
+  git(linked, 'add', 'tracked.txt');
+  git(linked, 'commit', '-m', 'feature');
+  assert.equal(inspect(remove(linked)), 'deny');
+  git(repo, 'merge', '--ff-only', 'feature/linked');
+  assert.equal(inspect(remove(linked)), 'allow');
+  assert.equal(inspect(remove('../linked worktree')), 'allow');
+
+  const codex = clients.codex;
+  const command = codex.event(remove(linked));
+  command.tool_input.workdir = repo;
+  const result = parseResult(spawnSync(process.execPath, [codex.script], {
+    input: JSON.stringify(command), encoding: 'utf8',
+  }));
+  assert.equal(codex.decision(result), 'allow');
+  const overridden = parseResult(spawnSync(process.execPath, [codex.script], {
+    input: JSON.stringify(command), encoding: 'utf8', env: { ...process.env, GIT_DIR: path.join(repo, '.git') },
+  }));
+  assert.equal(codex.decision(overridden), 'deny');
+
+  mkdirSync(plain);
+  for (const command of [remove(repo), remove(plain), remove('$TARGET'), remove('linked worktree'),
+    remove(linked) + ' && git status', 'git -C . worktree remove -- "' + linked + '"',
+    'git worktree remove --force -- "' + linked + '"', 'rm -rf "' + linked + '"']) {
+    assert.equal(inspect(command), 'deny', command);
+  }
+  if (process.platform === 'win32') {
+    assert.equal(inspect('Remove-Item -LiteralPath "' + linked + '" -Recurse'), 'deny');
+  }
+
+  git(repo, 'worktree', 'lock', linked);
+  assert.equal(inspect(remove(linked)), 'deny');
+  git(repo, 'worktree', 'unlock', linked);
+  for (const file of ['ignored.txt', 'untracked.txt', 'tracked.txt']) {
+    const name = path.join(linked, file);
+    writeFileSync(name, 'uncommitted\n');
+    assert.equal(inspect(remove(linked)), 'deny', file);
+    if (file === 'tracked.txt') git(linked, 'restore', file);
+    else rmSync(name);
+  }
+
+  git(repo, 'worktree', 'add', '--detach', detached, 'HEAD');
+  assert.equal(inspect(remove(detached)), 'allow');
+  git(repo, 'branch', '-m', 'develop', 'main');
+  git(repo, 'tag', 'refs/heads/develop', 'HEAD');
+  assert.equal(inspect(remove(detached)), 'deny');
+  git(repo, 'tag', '-d', 'refs/heads/develop');
+  git(repo, 'branch', '-m', 'main', 'develop');
+  assert.equal(inspect(remove(linked)), 'allow');
+  git(repo, 'worktree', 'remove', '--', linked);
+  assert.equal(existsSync(linked), false);
+  assert.equal(git(repo, 'branch', '--list', 'feature/linked'), '  feature/linked');
 });
 
 const clients = {

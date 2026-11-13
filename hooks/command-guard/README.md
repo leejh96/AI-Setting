@@ -6,11 +6,13 @@
 
 | 결과 | 예시 |
 |---|---|
-| Git 명령 차단 | `git push --force`, `-f`, `+refspec`, `--mirror`, `--force-with-lease`, `--prune`, 허용 범위 밖의 원격 ref 삭제, Git 훅 우회, `git clean`, `git reset --hard`, 작업 트리 전체 복원, 로컬 브랜치 강제 삭제, stash 삭제, 강제 worktree 제거 |
+| Git 명령 차단 | `git push --force`, `-f`, `+refspec`, `--mirror`, `--force-with-lease`, `--prune`, 허용 범위 밖의 원격 ref 삭제, Git 훅 우회, `git clean`, `git reset --hard`, 작업 트리 전체 복원, 로컬 브랜치 강제 삭제, stash 삭제, 아래 조건을 충족하지 않는 워크트리 제거 |
 | 파일 명령 차단 | 재귀 삭제, `find -delete`, `rsync --delete` 계열, 재귀 `chmod 777` |
 | 기존 권한 정책 적용 | 일반 `git push`, `refs/heads/feature/`를 명시한 브랜치 삭제, 일반 커밋, `git clean -n` 등 미리보기, 안전한 파일 작업 |
 
 원격 기능 브랜치를 삭제할 때는 `git push origin --delete refs/heads/feature/example` 또는 `git push origin :refs/heads/feature/example`을 사용합니다. 삭제 대상은 `refs/heads/feature/` 아래 브랜치 이름을 명령에 직접 적습니다. `main`, `master`, `develop`, `test`, `prod`와 태그 삭제, 다른 ref를 섞은 삭제는 차단합니다.
+
+워크트리를 정리할 때는 저장소에서 `git worktree remove -- "../작업 폴더"`처럼 경로 하나를 지정한 단독 명령을 사용합니다. Windows에서도 경로 구분자는 `/`를 사용합니다. Git에 등록된 연결 워크트리가 잠겨 있지 않고, 현재 커밋이 같은 저장소의 로컬 `develop` 이력에 포함되며, 미커밋 변경·미추적 파일·무시 파일이 없어야 합니다. 스쿼시 병합이나 체리픽으로 새 커밋만 들어간 경우, 강제 제거, `git -C`를 붙인 제거는 차단합니다. 브랜치 삭제는 별도의 Git 명령입니다.
 
 `--no-verify`와 커밋·푸시에서 `core.hooksPath`를 일회성으로 덮어쓰는 Git 옵션을 검사합니다. Windows에서는 일반적인 PowerShell `Remove-Item -Recurse`와 `rmdir /s` 형태도 검사합니다. 한 호출에 차단 대상 명령이 있으면 도구 호출 전체를 차단합니다.
 
@@ -27,4 +29,4 @@
 - [macOS 설치 안내](README.macos.md)
 - [Windows 설치 안내](README.windows.md)
 
-저장소 루트에서 `node --test hooks/command-guard/command-guard.test.mjs`를 실행합니다. 테스트는 명령을 문자열로 검사하고 두 어댑터에 가짜 훅 입력을 전달합니다.
+저장소 루트에서 `node --test hooks/command-guard/command-guard.test.mjs`를 실행합니다. 테스트는 명령을 문자열로 검사하고 두 어댑터에 가짜 훅 입력을 전달합니다. 워크트리 제거 규칙은 임시 Git 저장소에서 실제 커밋과 워크트리를 만들어 검증합니다.
