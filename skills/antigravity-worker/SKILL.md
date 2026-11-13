@@ -10,7 +10,7 @@ Codex가 작업 범위와 완료 조건을 정합니다. Antigravity는 작업 �
 ## 작업 전달
 
 - Node.js 22 이상과 로그인된 Antigravity 명령줄 도구(CLI) `agy`가 필요합니다. `gemini-4-hydrogen-high`, `--effort high`, 대화형 시작 프롬프트(`-i`)와 워크스페이스 훅을 지원하는 버전을 사용합니다.
-- 변경 작업은 가능한 경우 승인 범위 안에서 `prepare <original-worktree>`로 만든 별도 Git 워크트리에 위임합니다. 이 워크트리는 원본의 현재 커밋에서 시작합니다. Git이 필요 없는 일회성 작업 폴더는 인자 없이 `prepare`로 만듭니다. 이미 지정된 작업 경로를 사용할 때는 시작 전 상태를 확인합니다. 같은 경로에서 Codex와 워커가 동시에 편집하지 않습니다.
+- 변경 작업은 가능한 경우 승인 범위 안에서 `prepare <original-worktree>`로 만든 별도 Git 워크트리에 위임합니다. 이 워크트리는 원본의 현재 커밋에서 시작합니다. Git 연결 없이 작업하려면 `prepare --copy <original-worktree>`를 사용합니다. 로컬 `develop`이 있으면 해당 커밋, 없으면 기본 브랜치의 커밋에서 일반 파일을 복사하고 시작 커밋을 기록합니다. 인자 없이 만든 일회성 폴더는 비교할 저장소와 기준 커밋이 없어 자동으로 정리할 수 없습니다. 같은 경로에서 Codex와 워커가 동시에 편집하지 않습니다.
 - 저장소 밖 UTF-8 파일에 목표, 절대 작업 경로, 수정 범위, 수용 조건, 검증 방법을 씁니다. 워커에 허용된 셸·MCP·브라우저와 리소스를 명시합니다. 초기 프롬프트는 실행 인자로 전달하므로 비밀값을 넣지 않고, Windows에서는 12,000자 이내로 작성합니다.
 - 실행기는 `--dangerously-skip-permissions`와 `--sandbox` 옵션을 사용합니다. 해당 환경에서 터미널 샌드박스가 지원되는지 확인하고, 외부 전송·운영 데이터 변경·커밋·푸시·배포는 현재 사용자 승인 범위에 따릅니다. 브라우저 검증은 별도 요청에 허용된 브라우저 작업과 범위를 적습니다. Chrome 원격 디버깅 승인과 조직 정책은 각 환경에서 확인합니다.
 - Codex의 실행 제한으로 CLI 인증, 네트워크 또는 터미널 접근이 막히면 해당 실행에 필요한 승인 절차를 사용합니다. `terminalOpen: null`은 현재 세션에서 터미널 프로세스의 생존 여부를 확인할 권한이 없다는 뜻입니다.
@@ -21,11 +21,10 @@ Codex가 작업 범위와 완료 조건을 정합니다. Antigravity는 작업 �
 
 ```text
 node <runner> prepare [original-worktree]
+node <runner> prepare --copy <original-worktree>
 node <runner> start <worktree> <prompt-file>
 node <runner> follow-up <job-directory> <prompt-file> [--new-terminal]
-node <runner> finish <job-directory> [published-directory]
-node <runner> finish <job-directory> --applied [published-directory]
-node <runner> finish <job-directory> --discard
+node <runner> finish <job-directory> [--applied | --discard]
 node <runner> status <job-directory>
 node <runner> cancel <job-directory>
 ```
@@ -34,8 +33,10 @@ node <runner> cancel <job-directory>
 2. `review-ready`가 되면 화면 또는 `transcriptPath`에서 응답을 읽고 아래 검토 체크리스트를 적용합니다. 수정이 필요하면 `follow-up`으로 전달합니다. 이전 대화형 프로세스가 종료된 뒤 같은 터미널에서 다음 대화가 열립니다. 종료 요청과 새 훅 이벤트가 겹쳐 검토 상태가 해제되면, 상태를 다시 확인하고 새 `review-ready`에서 후속 요청을 재시도합니다. 별도 창을 원하면 `--new-terminal`을 사용합니다. 이전 터미널을 사용할 수 없고 작업 잠금이 정리된 상태라면 새 터미널을 엽니다. 각 자동 요청은 새로운 `agy` 대화이므로 후속 프롬프트에 필요한 문맥을 넣습니다.
 3. 화면에 직접 새 프롬프트를 보내면 `changed-after-handoff`로 표시됩니다. 그 작업의 변경분을 다시 확인하고, 화면을 종료한 다음 자동 후속 요청을 보냅니다. `Ctrl+D`는 Antigravity 화면을 종료하고, `cancel`은 워커에 중단을 요청합니다. 빈 워커 터미널은 `Ctrl+C`로 닫습니다.
 4. 후속 작업까지 마치면 Codex가 마지막 작업의 `jobDirectory`로 `finish`를 실행합니다. 실행기는 `prepare`가 만든 경로와 작업 종료 및 잠금 해제를 확인한 뒤 정리합니다.
-   - **결과 반영 확인** — Codex가 변경분을 검토하고 필요한 결과가 원본이나 전달 위치에 반영됐음을 확인하면 `--applied`로 정리합니다. 원본에서 후속 편집을 했거나 파일 복사·스쿼시·체리픽으로 반영한 경우에도 사용할 수 있습니다. 임시 폴더는 워커 저장소 밖의 `published-directory`를 전달하고, Git 워크트리는 기록된 원본을 사용합니다. 기본 `finish`는 파일과 실행 권한이 일치하는 임시 폴더 및 원본 이력에 반영된 깨끗한 Git 워크트리를 검증해 제거합니다.
-   - **중단·실패 후 정리** — `cancel` 뒤 종료 결과가 기록되고 화면과 잠금이 해제될 때까지 확인합니다. 필요한 변경이 있으면 먼저 반영하고 `--applied`로 정리합니다. 남길 변경이 없거나 폐기가 승인된 사본은 `--discard`로 제거합니다. `--discard`는 전달 위치를 받지 않습니다.
+   - **반영 브랜치 확인** — 로컬 `develop`이나 기본 브랜치 중 한 곳에 전체 작업이 반영됐는지 확인합니다. 기본 브랜치는 로컬 `origin/HEAD`가 가리키는 이름의 로컬 브랜치입니다. `origin/HEAD`가 없으면 로컬 `main`과 `master` 중 하나만 있을 때 기본 브랜치로 사용합니다. 기존 `--applied`와 `--discard`에도 같은 검증을 적용합니다.
+   - **Git 워크트리** — 미커밋·미추적·무시된 파일이 있으면 보존합니다. 최종 커밋이 반영 브랜치 이력에 있거나, 스쿼시 등으로 이력이 달라진 경우 공통 조상 이후 바뀐 경로의 최종 내용·모드·삭제 상태가 반영 브랜치와 일치해야 합니다. 연결된 로컬 `feature/…` 브랜치는 다른 워크트리에서 사용 중이 아니며 검증한 커밋 그대로일 때 정리합니다.
+   - **Git 연결 없는 작업 폴더** — `prepare --copy`로 기록한 시작 커밋과 비교해 추가·수정·삭제를 찾고 반영 브랜치의 커밋 내용과 일치할 때만 정리합니다. 링크나 Git 하위 모듈이 있는 파일 작업은 자동 정리 대상에서 제외합니다. Windows에서 새 파일은 일반 파일 모드로 비교합니다.
+   - **중단 또는 재시도** — `cancel` 뒤 종료 결과와 잠금 해제를 확인합니다. 정리 도중 Git 등록과 `.git` 연결이 사라졌다면 `finish`를 다시 실행합니다. 기존 검증 기록이 있으면 반영 여부를 다시 확인하고 남은 파일을 정리합니다. 그 기록이 없거나 검증에 실패하면 폴더를 보존합니다. 잔여 파일의 심볼릭 링크와 Windows 디렉터리 연결은 연결만 제거합니다.
    - 종료가 확인되지 않거나 정리가 막히면 남은 경로와 이유를 보고합니다. 작업 폴더가 `cleanup-needed`이면 아래 복구 절차를 따릅니다.
 
 ### 검토 체크리스트
