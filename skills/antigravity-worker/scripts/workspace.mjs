@@ -353,7 +353,9 @@ export function removeWorkspace(workspace) {
     throw new Error('Original Git worktree is no longer at the recorded path.');
   }
   const branches = integrationBranches(original);
-  const registered = worktrees(original).filter(item => isWithin(directory, item.path));
+  const canonicalDirectory = realpathSync.native(directory);
+  const registered = worktrees(original).filter(item =>
+    isWithin(directory, item.path) || isWithin(canonicalDirectory, item.path));
   const link = lstatSync(join(cwd, '.git'), { throwIfNoEntry: false });
   const recorded = readCleanup(directory);
   let proof = recorded;
