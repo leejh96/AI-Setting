@@ -52,7 +52,7 @@ function identity(client, session, turn, paths) {
   return { directory, owner, path: join(directory, `${digest(JSON.stringify([owner, turn]))}.json`) };
 }
 
-export function requestWatch(state, command, action) {
+export function requestWatch(state, command, action, timeout = 3500) {
   return new Promise((resolveRequest, reject) => {
     const socket = connect(state.endpoint);
     let response = '', settled = false;
@@ -62,7 +62,7 @@ export function requestWatch(state, command, action) {
       if (error) reject(error); else resolveRequest(value);
     };
     const fail = (error) => finish(new ChangeWatchError('Watcher unavailable', { cause: error }));
-    const timer = setTimeout(fail, 3500);
+    const timer = setTimeout(() => fail({ code: 'ETIMEDOUT' }), timeout);
     socket.on('error', fail);
     socket.on('close', () => { if (!settled) fail(); });
     socket.on('connect', () => socket.write(`${JSON.stringify({ token: state.token, command, action })}\n`));
@@ -128,8 +128,8 @@ export async function stopChanges(client, session, turn, paths) {
   saveWatch(path, { ...state, version: 2, owner, phase: 'closed', failed: state.failed || 'watch-unavailable', action: 'watch-failed', updatedAt: Date.now() });
 }
 
-async function ready(path) {
-  let deadline = Date.now() + 9000, starting = false;
+async function ready(path, deadline = Date.now() + 9000) {
+  let starting = false;
   while (Date.now() < deadline) {
     let state;
     state = JSON.parse(readFileSync(path, 'utf8'));
@@ -138,14 +138,14 @@ async function ready(path) {
     if (state.phase === 'preparing') { await delay(25); continue; }
     if (!starting) { starting = true; deadline = Math.min(deadline, Date.now() + 4500); }
     try {
-      const status = await requestWatch(state, 'status');
+      const status = await requestWatch(state, 'status', undefined, Math.min(3500, Math.max(1, deadline - Date.now())));
       if (status.phase === 'ready') return state;
     } catch (error) {
       if (state.phase === 'ready') throw error;
     }
     await delay(25);
   }
-  throw new ChangeWatchError('Watcher startup timed out');
+  throw new ChangeWatchError('Watcher startup timed out', { cause: { code: 'ETIMEDOUT' } });
 }
 
 // Serialize only owner registration, never Git lookups or worker RPCs. Unique
@@ -354,18 +354,20 @@ async function startChanges(client, session, turn, paths, canStart) {
   saveWatch(key.path, state);
   const worker = fileURLToPath(new URL('./watch-worker.mjs', import.meta.url));
   if (process.platform === 'win32') {
+    const deadline = Date.now() + 7500;
     // ShellExecute keeps the watcher from inheriting the hook's PowerShell output pipes.
     const quote = (value) => `'${value.replaceAll('\\', '/').replace(/['\u2018-\u201b]/g, (char) => char + char)}'`;
     const command = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath ${quote(process.execPath)} -ArgumentList ${quote(`"${worker.replaceAll('\\', '/')}" "${key.path.replaceAll('\\', '/')}"`)} -WindowStyle Hidden`;
     const launched = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
-      stdio: 'ignore', windowsHide: true, timeout: 3000,
+      stdio: 'ignore', windowsHide: true, timeout: 6000,
     });
     if (launched.status !== 0) throw launched.error ?? new ChangeWatchError('Watcher launch failed');
-  } else {
-    const child = spawn(process.execPath, [worker, key.path], { detached: true, stdio: 'ignore' });
-    child.on('error', () => {});
-    child.unref();
+    await ready(key.path, deadline);
+    return;
   }
+  const child = spawn(process.execPath, [worker, key.path], { detached: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
   await ready(key.path);
 }
 

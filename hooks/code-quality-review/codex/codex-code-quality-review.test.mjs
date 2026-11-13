@@ -57,11 +57,15 @@ async function runEvent(hookPath, event) {
   const cwd = mkdtempSync(join(TEST_ROOT, 'workspace-'));
   const context = { cwd, session_id: cwd, turn_id: 'test-turn' };
   try {
-  writeFileSync(join(cwd, 'code.mjs'), 'export const value = 1;');
-  parseOutput(runHook(hookPath, ['--prepare'], JSON.stringify({ ...context, hook_event_name: 'UserPromptSubmit' })));
-  writeFileSync(join(cwd, 'code.mjs'), 'export const value = 2;');
-  if (event.stop_hook_active) runHook(hookPath, [], JSON.stringify({ ...context, hook_event_name: 'Stop', stop_hook_active: false }));
-  return parseOutput(runHook(hookPath, [], JSON.stringify({ ...context, ...event })));
+    writeFileSync(join(cwd, 'code.mjs'), 'export const value = 1;');
+    const prepared = parseOutput(runHook(hookPath, ['--prepare'], JSON.stringify({ ...context, hook_event_name: 'UserPromptSubmit' })));
+    assert.deepEqual(prepared, {}, 'watch preparation must succeed before testing Stop');
+    writeFileSync(join(cwd, 'code.mjs'), 'export const value = 2;');
+    if (event.stop_hook_active) {
+      const initial = parseOutput(runHook(hookPath, [], JSON.stringify({ ...context, hook_event_name: 'Stop', stop_hook_active: false })));
+      if (hookPath === HOOK_PATH) assertReviewRequest(initial);
+    }
+    return parseOutput(runHook(hookPath, [], JSON.stringify({ ...context, ...event })));
   } finally {
     const before = { TMP: process.env.TMP, TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR };
     Object.assign(process.env, { TMP: TEST_ROOT, TEMP: TEST_ROOT, TMPDIR: TEST_ROOT });

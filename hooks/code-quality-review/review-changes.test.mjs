@@ -145,6 +145,29 @@ await prepareChanges('test',${JSON.stringify(f.cwd)},'turn',[${JSON.stringify(f.
   assert.equal((await f.check()).changed, true);
 });
 
+test('Windows 실행기 시작이 3초를 넘어도 시간 예산 안에서 감시를 준비한다', { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture();
+  const originalSpawn = childProcess.spawnSync;
+  let intercepted = false;
+  childProcess.spawnSync = (file, args, options) => {
+    if (file !== 'powershell.exe') return originalSpawn(file, args, options);
+    intercepted = true;
+    const command = Buffer.from(args.at(-1), 'base64').toString('utf16le');
+    const delayed = Buffer.from('Start-Sleep -Milliseconds 3200; ' + command, 'utf16le').toString('base64');
+    return originalSpawn(file, [...args.slice(0, -1), delayed], options);
+  };
+  syncBuiltinESMExports();
+  try {
+    await f.prepare();
+  } finally {
+    childProcess.spawnSync = originalSpawn;
+    syncBuiltinESMExports();
+  }
+  assert.ok(intercepted);
+  writeFileSync(join(f.cwd, 'code.mjs'), 'edited after delayed preparation');
+  assert.equal((await f.check()).changed, true);
+});
+
 test('Windows 실행기 직전 새 턴이 준비되어도 늦은 워커가 소유권을 되찾지 않는다', { skip: process.platform !== 'win32' }, async () => {
   const f = fixture(), originalSpawn = childProcess.spawnSync;
   let newer, intercepted = false;
