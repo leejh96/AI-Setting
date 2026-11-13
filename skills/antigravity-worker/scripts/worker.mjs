@@ -344,7 +344,9 @@ async function retireReviewed(job, current) {
   }
 }
 
-export async function finish(directory, published, jobs = jobsDirectory()) {
+export async function finish(directory, published, jobs = jobsDirectory(), mode = 'identical') {
+  if (!['identical', 'applied', 'discard'].includes(mode)) throw new Error('Invalid workspace cleanup mode.');
+  if (mode === 'discard' && published !== undefined) throw new Error('--discard does not take a published directory.');
   jobs = realpathSync(jobs);
   const job = readJob(directory);
   if (dirname(job.jobDirectory) !== jobs || !jobName.test(basename(job.jobDirectory))) throw new Error('Expected a local worker job.');
@@ -364,13 +366,19 @@ export async function finish(directory, published, jobs = jobsDirectory()) {
       }
     }
     const current = jobStatus(job);
-    if (current.status !== 'review-ready') throw new Error('The worker result is not ready to finish.');
-    if (!current.finishedAt) await retireReviewed(job, current);
+    if (current.status === 'review-ready' && !current.finishedAt && mode !== 'discard') {
+      await retireReviewed(job, current);
+    }
     const result = jobStatus(job);
-    if (result.status !== 'review-ready' || result.tuiOpen !== false || !result.finishedAt || lstatSync(lockPath(job.cwd), { throwIfNoEntry: false })) {
+    const accepted = mode === 'identical' ? result.status === 'review-ready' : finishedStatuses.has(result.status);
+    if (!accepted) throw new Error(`Cannot finish a worker in state ${result.status}. Confirm that it has stopped and recovered its temporary hooks.`);
+    const screenClosed = result.tuiOpen === false || (result.tuiOpen === undefined && !result.workerPid);
+    if (!screenClosed || !Number.isSafeInteger(result.finishedAt) || result.finishedAt < job.createdAt
+        || lstatSync(lockPath(job.cwd), { throwIfNoEntry: false })
+        || (job.terminalDirectory && readJson(job.terminalDirectory, requestFile)?.jobDirectory === job.jobDirectory)) {
       throw new Error('The worker screen and workspace lock have not been safely released.');
     }
-    removeWorkspace(workspace, published);
+    removeWorkspace(workspace, published, mode);
   } finally {
     unlock();
   }
@@ -512,7 +520,15 @@ if (process.argv[1] && resolve(process.argv[1]) === runner) {
     else if (action === 'follow-up' && (args.length === 2 || (args.length === 3 && args[2] === '--new-terminal'))) {
       console.log(JSON.stringify(await followUp(args[0], args[1], { newTerminal: args[2] === '--new-terminal' })));
     }
-    else if (action === 'finish' && args.length >= 1 && args.length <= 2) console.log(JSON.stringify(await finish(args[0], args[1])));
+    else if (action === 'finish' && args.length >= 1 && args.length <= 3) {
+      const [directory, ...options] = args;
+      const flag = options[0]?.startsWith('--') ? options.shift() : undefined;
+      const mode = flag === undefined ? 'identical' : flag.slice(2);
+      if ((flag !== undefined && !['applied', 'discard'].includes(mode)) || options.length > 1) {
+        throw new Error('Usage: worker.mjs finish <job-directory> [--applied [published-directory] | --discard | published-directory]');
+      }
+      console.log(JSON.stringify(await finish(directory, options[0], jobsDirectory(), mode)));
+    }
     else if (action === 'status' && args.length === 1) console.log(JSON.stringify(status(args[0])));
     else if (action === 'cancel' && args.length === 1) console.log(JSON.stringify(cancel(args[0])));
     else if (action === 'serve' && args.length === 1) serve(args[0]);
@@ -520,7 +536,7 @@ if (process.argv[1] && resolve(process.argv[1]) === runner) {
       recordHook(args[0], args[1], JSON.parse(readFileSync(0, 'utf8')));
       process.stdout.write('{}');
     }
-    else throw new Error('Usage: worker.mjs prepare [original-worktree] | start <worktree> <prompt> | follow-up <job> <prompt> [--new-terminal] | finish <job> [published-directory] | status <job> | cancel <job>');
+    else throw new Error('Usage: worker.mjs prepare [original-worktree] | start <worktree> <prompt> | follow-up <job> <prompt> [--new-terminal] | finish <job> [--applied [published-directory] | --discard | published-directory] | status <job> | cancel <job>');
   } catch (error) {
     console.error(display(error.message));
     process.exitCode = 1;

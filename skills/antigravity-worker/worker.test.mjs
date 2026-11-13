@@ -227,6 +227,48 @@ test('finish removes a clean Git worktree only after its commit reaches the orig
   assert.equal(git(originalWorktree, 'show', 'HEAD:result.md'), 'worker output');
 });
 
+test('finish accepts a reviewed result applied with further edits', async (t) => {
+  const env = fixture(t, { workspace: 'temporary', existingConfig: false });
+  const published = join(env.directory, 'published');
+  mkdirSync(published);
+  writeFileSync(join(env.cwd, 'result.txt'), 'worker result');
+  const applied = join(published, 'result.txt');
+  writeFileSync(applied, 'worker result with integration edits');
+  const job = await reviewed(env.start('normal'));
+
+  await finish(job.jobDirectory, published, env.jobRoot, 'applied');
+  assert.equal(existsSync(dirname(env.cwd)), false);
+  assert.equal(readFileSync(applied, 'utf8'), 'worker result with integration edits');
+});
+
+test('finish removes an interrupted workspace only after cancellation releases its lock', async (t) => {
+  const env = fixture(t, { workspace: 'temporary', existingConfig: false });
+  const draft = join(env.cwd, 'draft.txt');
+  writeFileSync(draft, 'unfinished');
+  const job = await until(env.start('running hang'), (current) => current.status === 'agy-running');
+
+  await assert.rejects(finish(job.jobDirectory, undefined, env.jobRoot, 'discard'), /Cannot finish/);
+  assert.equal(readFileSync(draft, 'utf8'), 'unfinished');
+  cancel(job.jobDirectory);
+  assert.equal((await finished(job)).status, 'interrupted');
+  assert.equal(existsSync(env.lock), false);
+  await finish(job.jobDirectory, undefined, env.jobRoot, 'discard');
+  assert.equal(existsSync(dirname(env.cwd)), false);
+  assert.equal(existsSync(job.jobDirectory), true);
+});
+
+test('finish removes a Git worktree after applying uncommitted changes to the original', async (t) => {
+  const env = fixture(t, { workspace: 'git', existingConfig: false });
+  writeFileSync(join(env.cwd, 'result.md'), 'worker result');
+  const applied = join(env.originalWorktree, 'result.md');
+  writeFileSync(applied, 'worker result with integration edits');
+  const job = await reviewed(env.start('normal'));
+
+  await finish(job.jobDirectory, undefined, env.jobRoot, 'applied');
+  assert.equal(existsSync(dirname(env.cwd)), false);
+  assert.equal(readFileSync(applied, 'utf8'), 'worker result with integration edits');
+});
+
 test('Stop hook confirms completion while the native screen stays open, including delayed and repeated events', async (t) => {
   const env = fixture(t);
   let job;

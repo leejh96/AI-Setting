@@ -105,18 +105,21 @@ function digest(path, expected) {
   }
 }
 
-function verifyFiles(directory, published, files, directories) {
+function collectFiles(directory, published, files, directories, mode) {
   localDirectory(directory);
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
     const other = published && join(published, name);
     const info = lstatSync(path);
-    if (info.isDirectory()) verifyFiles(path, other, files, directories);
+    if (info.isDirectory()) collectFiles(path, other, files, directories, mode);
     else {
-      if (!info.isFile() || !other || realpathSync(other) !== other) throw new Error('Missing or unsupported published result: ' + path);
-      const copy = lstatSync(other);
-      if (!copy.isFile() || copy.size !== info.size || (copy.mode & 0o111) !== (info.mode & 0o111) || digest(path, info) !== digest(other, copy)) {
-        throw new Error('Published result differs: ' + path);
+      if (!info.isFile()) throw new Error('Missing or unsupported published result: ' + path);
+      if (mode === 'identical') {
+        if (!other || realpathSync(other) !== other) throw new Error('Missing or unsupported published result: ' + path);
+        const copy = lstatSync(other);
+        if (!copy.isFile() || copy.size !== info.size || (copy.mode & 0o111) !== (info.mode & 0o111) || digest(path, info) !== digest(other, copy)) {
+          throw new Error('Published result differs: ' + path);
+        }
       }
       files.push({ path, other, info });
     }
@@ -124,8 +127,10 @@ function verifyFiles(directory, published, files, directories) {
   directories.push(directory);
 }
 
-export function removeWorkspace(workspace, published) {
+export function removeWorkspace(workspace, published, mode = 'identical') {
   const { cwd, original } = workspace;
+  if (!['identical', 'applied', 'discard'].includes(mode)) throw new Error('Invalid workspace cleanup mode.');
+  if (mode === 'discard' && published !== undefined) throw new Error('--discard does not take a published directory.');
   if (!sameEntry(lstatSync(localDirectory(cwd)), workspace)) throw new Error('Worker workspace identity changed.');
   if (readdirSync(workspace.directory).some((name) => !['work', manifest, 'operation.lock'].includes(name))) {
     throw new Error('Unexpected files exist outside the worker workspace.');
@@ -139,17 +144,23 @@ export function removeWorkspace(workspace, published) {
     }
     const commonDir = (path) => git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout.trim();
     if (!sameDirectory(commonDir(cwd), commonDir(original))) throw new Error('Original Git repository changed.');
-    const head = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']).stdout.trim();
-    if (git(original, ['merge-base', '--is-ancestor', head, 'HEAD'], [0, 1]).status !== 0) {
-      throw new Error('The worker commit is not in the original worktree history.');
+    if (mode === 'identical') {
+      const head = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']).stdout.trim();
+      if (git(original, ['merge-base', '--is-ancestor', head, 'HEAD'], [0, 1]).status !== 0) {
+        throw new Error('The worker commit is not in the original worktree history.');
+      }
+      const tracked = git(cwd, ['ls-files', '-v', '-z']).stdout.split('\0');
+      if (tracked.some((entry) => /^[a-zS] /.test(entry))
+          || git(cwd, ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching']).stdout) {
+        throw new Error('The worker worktree contains local changes or ignored files.');
+      }
     }
-    const tracked = git(cwd, ['ls-files', '-v', '-z']).stdout.split('\0');
-    if (tracked.some((entry) => /^[a-zS] /.test(entry))
-        || git(cwd, ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching']).stdout) {
-      throw new Error('The worker worktree contains local changes or ignored files.');
-    }
-    git(original, ['worktree', 'remove', '--', cwd]);
+    // A single --force permits reviewed working changes and still respects Git worktree locks.
+    git(original, ['worktree', 'remove', ...(mode === 'identical' ? [] : ['--force']), '--', cwd]);
   } else {
+    if (mode === 'applied' && published === undefined) {
+      throw new Error('--applied requires the directory where the temporary workspace results were applied.');
+    }
     if (published !== undefined) {
       if (!isAbsolute(published)) throw new Error('Pass an absolute published result directory.');
       published = localDirectory(realpathSync(published));
@@ -160,14 +171,22 @@ export function removeWorkspace(workspace, published) {
     }
     const files = [];
     const directories = [];
-    verifyFiles(cwd, published, files, directories);
+    collectFiles(cwd, published, files, directories, mode);
     for (const { path, other, info } of files) {
       const current = lstatSync(path);
-      const copy = lstatSync(other);
-      if (realpathSync(path) !== path || realpathSync(other) !== other || !copy.isFile() || !sameEntry(current, info)
-          || (current.mode & 0o111) !== (copy.mode & 0o111) || digest(path, info) !== digest(other, copy)) {
+      if (!current.isFile() || realpathSync(path) !== path || !sameEntry(current, info)
+          || current.size !== info.size || current.mtimeMs !== info.mtimeMs || current.mode !== info.mode) {
         throw new Error('Result files changed before cleanup: ' + path);
       }
+      if (mode === 'identical') {
+        const copy = lstatSync(other);
+        if (realpathSync(other) !== other || !copy.isFile() || (current.mode & 0o111) !== (copy.mode & 0o111)
+            || digest(path, info) !== digest(other, copy)) {
+          throw new Error('Published result changed before cleanup: ' + other);
+        }
+      }
+    }
+    for (const { path } of files) {
       unlinkSync(path);
     }
     for (const directory of directories) rmdirSync(localDirectory(directory));

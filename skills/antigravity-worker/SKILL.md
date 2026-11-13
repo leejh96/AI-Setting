@@ -5,7 +5,7 @@ description: Antigravity를 실행 워커로 요청받았을 때 Windows 또는 
 
 # Antigravity 워커
 
-Codex가 작업 범위와 완료 조건을 정합니다. Antigravity가 작업을 수행하고, Codex가 실제 결과를 검토합니다.
+Codex가 작업 범위와 완료 조건을 정합니다. Antigravity는 작업 결과를 작업 폴더에 남깁니다. Codex가 결과 검토, 원본 반영, 임시 작업 폴더 정리를 맡습니다.
 
 ## 작업 전달
 
@@ -24,6 +24,8 @@ node <runner> prepare [original-worktree]
 node <runner> start <worktree> <prompt-file>
 node <runner> follow-up <job-directory> <prompt-file> [--new-terminal]
 node <runner> finish <job-directory> [published-directory]
+node <runner> finish <job-directory> --applied [published-directory]
+node <runner> finish <job-directory> --discard
 node <runner> status <job-directory>
 node <runner> cancel <job-directory>
 ```
@@ -31,10 +33,10 @@ node <runner> cancel <job-directory>
 1. `prepare`를 사용했다면 반환된 `cwd`를 `start`에 전달합니다. Windows PowerShell과 macOS Terminal.app에서 Antigravity 대화형 화면이 열립니다. 반환된 `jobDirectory`로 `status`를 주기적으로 확인하며 정상 완료까지 기다립니다. `starting`은 터미널 시작, `agy-starting`은 첫 훅 대기, `agy-running`은 작업 실행, `agy-settling`은 종료 이벤트 확인 단계입니다.
 2. `review-ready`가 되면 화면 또는 `transcriptPath`에서 응답을 읽고 아래 검토 체크리스트를 적용합니다. 수정이 필요하면 `follow-up`으로 전달합니다. 이전 대화형 프로세스가 종료된 뒤 같은 터미널에서 다음 대화가 열립니다. 종료 요청과 새 훅 이벤트가 겹쳐 검토 상태가 해제되면, 상태를 다시 확인하고 새 `review-ready`에서 후속 요청을 재시도합니다. 별도 창을 원하면 `--new-terminal`을 사용합니다. 이전 터미널을 사용할 수 없고 작업 잠금이 정리된 상태라면 새 터미널을 엽니다. 각 자동 요청은 새로운 `agy` 대화이므로 후속 프롬프트에 필요한 문맥을 넣습니다.
 3. 화면에 직접 새 프롬프트를 보내면 `changed-after-handoff`로 표시됩니다. 그 작업의 변경분을 다시 확인하고, 화면을 종료한 다음 자동 후속 요청을 보냅니다. `Ctrl+D`는 Antigravity 화면을 종료하고, `cancel`은 워커에 중단을 요청합니다. 빈 워커 터미널은 `Ctrl+C`로 닫습니다.
-4. `prepare`로 만든 경로는 후속 작업까지 끝나고 결과가 원본이나 전달 위치에 반영됐음을 Codex가 확인한 뒤, 마지막 작업의 `jobDirectory`로 `finish`를 실행합니다. `finish`는 검토가 끝난 화면을 닫고 잠금이 해제됐는지 확인한 뒤 아래 조건이 맞으면 작업 경로를 제거합니다. 기존에 지정된 작업 경로와 종료가 확인되지 않은 작업 경로는 보관합니다.
-   - Git 워크트리는 작업 커밋이 원본의 현재 커밋 이력에 포함되고 미커밋·미추적·무시 파일이 없을 때 일반 `git worktree remove`로 제거합니다. 파일 복사, 스쿼시, 체리픽만 적용한 경우에는 작업 커밋 이력이 이어지지 않아 보관합니다. 커밋은 승인 범위를 따릅니다.
-   - 임시 폴더는 워커의 관리 저장소 밖에 있는 `published-directory`의 같은 상대 경로에 내용과 실행 권한이 일치하는 파일이 모두 있을 때 제거합니다. 결과 파일이 없는 작업은 경로 인자 없이 정리할 수 있습니다. 링크나 비교할 수 없는 파일이 있으면 보관합니다.
-   - 정리 조건이 맞지 않으면 남은 경로와 이유를 보고합니다. 필요한 반영과 확인을 마친 뒤 같은 작업의 `finish`를 다시 실행할 수 있습니다.
+4. 후속 작업까지 마치면 Codex가 마지막 작업의 `jobDirectory`로 `finish`를 실행합니다. 실행기는 `prepare`가 만든 경로와 작업 종료 및 잠금 해제를 확인한 뒤 정리합니다.
+   - **결과 반영 확인** — Codex가 변경분을 검토하고 필요한 결과가 원본이나 전달 위치에 반영됐음을 확인하면 `--applied`로 정리합니다. 원본에서 후속 편집을 했거나 파일 복사·스쿼시·체리픽으로 반영한 경우에도 사용할 수 있습니다. 임시 폴더는 워커 저장소 밖의 `published-directory`를 전달하고, Git 워크트리는 기록된 원본을 사용합니다. 기본 `finish`는 파일과 실행 권한이 일치하는 임시 폴더 및 원본 이력에 반영된 깨끗한 Git 워크트리를 검증해 제거합니다.
+   - **중단·실패 후 정리** — `cancel` 뒤 종료 결과가 기록되고 화면과 잠금이 해제될 때까지 확인합니다. 필요한 변경이 있으면 먼저 반영하고 `--applied`로 정리합니다. 남길 변경이 없거나 폐기가 승인된 사본은 `--discard`로 제거합니다. `--discard`는 전달 위치를 받지 않습니다.
+   - 종료가 확인되지 않거나 정리가 막히면 남은 경로와 이유를 보고합니다. 작업 폴더가 `cleanup-needed`이면 아래 복구 절차를 따릅니다.
 
 ### 검토 체크리스트
 

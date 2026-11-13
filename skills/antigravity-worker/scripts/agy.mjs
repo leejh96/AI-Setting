@@ -198,7 +198,7 @@ export function runAgy(job, prompt, report, signal, {
   const restoreTerminal = saveTerminal();
   const eventPath = join(job.jobDirectory, 'events.jsonl');
   writeFileSync(eventPath, '', { flag: 'wx', mode: 0o600 });
-  const content = prompt + '\n\nPreserve .agents/hooks.json and the worker lock. Wait for any work you start to finish before responding.\n' + marker(job.jobDirectory);
+  const content = prompt + '\n\nLeave the workspace and its deliverables for Codex to review and clean up. Preserve .agents/hooks.json and the worker lock. Wait for any work you start to finish before responding.\n' + marker(job.jobDirectory);
   let watcher;
   try {
     watcher = watchEvents(eventPath, { persistent: false });
