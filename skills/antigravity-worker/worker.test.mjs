@@ -603,7 +603,7 @@ test('a busy terminal keeps its queued request and discards the rejected job dir
 
 test('a new worker removes only old closed terminal groups with confirmed results and no lock', t => {
   const env = fixture(t, { workspace: 'temporary' });
-  mkdirSync(env.jobRoot);
+  mkdirSync(env.jobRoot, { mode: 0o700 });
   const old = Date.now() - 25 * 60 * 60 * 1000;
   function savedJob({ terminal, cwd = env.directory, status = 'review-ready', closedAt = old, hasResult = true } = {}) {
     const directory = mkdtempSync(join(env.jobRoot, 'codex-agy-worker-'));

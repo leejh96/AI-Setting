@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,7 +148,7 @@ test('Windows 실행 파일 경로와 PowerShell 재귀 삭제를 판별한다',
 });
 
 test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허용한다', (t) => {
-  const fixture = mkdtempSync(path.join(tmpdir(), 'command-guard-'));
+  const fixture = mkdtempSync(path.join(realpathSync(tmpdir()), 'command-guard-'));
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
   const repo = path.join(fixture, 'repo');
   const linked = path.join(fixture, 'linked worktree');
