@@ -8,6 +8,7 @@ import { configureSession, connect, defaultEffort, defaultModel, openSession } f
 import { finalizeResult, prepareResult, removeGitWorkspace, reviewResult } from './results.mjs';
 
 const jobPrefix = 'codex-agy-acp-';
+const stoppedStates = ['prepared', 'cancelled', 'failed', 'permission-denied'];
 const jobsRoot = () => join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'worktrees');
 const emit = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
 
@@ -281,7 +282,7 @@ function discardJob(job, state, confirmedStopped) {
   if (uncertain && (!confirmedStopped || (state.status !== 'cleanup-needed' && !state.runnerPid))) {
     throw new Error('Worker termination is unconfirmed. Inspect the job processes before cleanup.');
   }
-  if (!uncertain && !['prepared', 'cancelled', 'failed', 'permission-denied'].includes(state.status)) {
+  if (!uncertain && !stoppedStates.includes(state.status)) {
     throw new Error(`Cannot discard in state ${state.status}.`);
   }
   for (const pid of [state.runnerPid, state.workerPid]) {
@@ -337,8 +338,8 @@ async function main([action, ...args]) {
     return promptWorker(job, state, action, args[1], values);
   }
   if (action === 'finish') {
-    if (args.length !== 3 || !['--apply', '--keep'].includes(args[2])) {
-      throw new Error('Usage: finish job review-id (--apply | --keep). Ask the user after reviewing.');
+    if (args.length !== 3 || !['--apply', '--keep', '--clean'].includes(args[2])) {
+      throw new Error('Usage: finish job review-id (--apply | --keep | --clean)');
     }
   } else if (action === 'discard') {
     if (args.length > 2 || (args.length === 2 && args[1] !== '--confirmed-stopped')) {
@@ -358,7 +359,12 @@ async function main([action, ...args]) {
     const current = readJob(job).state;
     if (current.turn !== state.turn || current.status !== state.status) throw new Error('Job status changed. Inspect status and retry.');
     if (action === 'discard') return discardJob(job, current, args[1] === '--confirmed-stopped');
-    if (current.status !== 'review-ready' || current.workerPid) throw new Error('Finish the worker turn before reviewing or applying.');
+    const decision = args[2];
+    const ready = current.status === 'review-ready';
+    if ((!ready && !stoppedStates.includes(current.status)) || current.workerPid || current.runnerPid) {
+      throw new Error('Confirm the worker has stopped before reviewing or finishing.');
+    }
+    if (!ready && decision === '--apply') throw new Error('Only a completed worker turn can be applied.');
     const finalized = existsSync(join(job, 'finalized.json'));
     const missing = !existsSync(state.cwd);
     const workspace = action === 'finish' && finalized && missing
@@ -369,11 +375,16 @@ async function main([action, ...args]) {
       if (finalized) throw new Error('Retry finish to complete the approved cleanup.');
       return emit('review', reviewResult(job, workspace, current));
     }
-    const outcome = finalizeResult(job, workspace, current, args[1], args[2]);
+    const outcome = finalizeResult(job, workspace, current, args[1], decision);
     if (outcome.kept) return emit('kept', { job, cwd: outcome.kept, original: outcome.original });
     rmSync(job, { recursive: true, force: true });
     unlockWorkspace = null;
-    emit('applied', { original: outcome.original });
+    emit(decision === '--clean' ? 'cleaned' : 'applied', { original: outcome.original });
+  } catch (error) {
+    if (action === 'finish' && existsSync(join(job, 'finalized.json'))) {
+      emit('cleanup-pending', { job, cwd: state.cwd });
+    }
+    throw error;
   } finally {
     if (unlockWorkspace && existsSync(join(state.cwd, '..', 'operation.lock'))) unlockWorkspace();
     if (existsSync(join(job, 'operation.lock'))) unlock();

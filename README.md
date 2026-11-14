@@ -71,9 +71,9 @@ ai-setting/
 | Codex | `~/.codex/skills/<스킬 이름>` | `$<스킬 이름>` |
 | Antigravity | `~/.gemini/config/skills/<스킬 이름>` | `/<스킬 이름>` |
 
-**`antigravity-worker`는 Codex 전용입니다.** `skills/antigravity-worker/` 전체를 Codex에 복사합니다. Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다. 새 작업을 시작하기 전에 `agy update`로 CLI를 확인하고 필요하면 업데이트합니다. `start`와 `follow-up`에 모델과 추론 수준을 지정할 수 있고, `capabilities`와 `quota`로 슬래시 명령과 남은 할당량을 각각 조회합니다. [워커 사용법](skills/antigravity-worker/SKILL.md)
+**`antigravity-worker`는 Codex 전용입니다.** `skills/antigravity-worker/`의 `SKILL.md`와 `scripts/`를 Codex에 복사합니다. Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다. 새 작업을 시작하기 전에 `agy update`로 CLI를 확인하고 필요하면 업데이트합니다. `start`와 `follow-up`에 모델과 추론 수준을 지정할 수 있고, `capabilities`와 `quota`로 슬래시 명령과 남은 할당량을 각각 조회합니다. [워커 사용법](skills/antigravity-worker/SKILL.md)
 
-새 작업은 Codex 홈의 `antigravity-worker/worktrees/` 아래에 생성하며, 이 경로에 쓰는 명령은 별도 권한 검토를 거칩니다. 검토 후 원본 적용 여부를 묻고, 적용을 검증하면 작업 폴더와 로그를 정리합니다. 중단·실패한 작업은 종료를 확인한 뒤 `discard`로 정리할 수 있습니다. [결과 적용·보관](skills/antigravity-worker/SKILL.md#원본-적용-또는-별도-보관) · [중단·실패 후 정리](skills/antigravity-worker/SKILL.md#중단실패-후-정리)
+새 작업은 Codex 홈의 `antigravity-worker/worktrees/` 아래에 생성하며, 이 경로에 쓰는 명령은 별도 권한 검토를 거칩니다. 검토한 변경의 적용 여부를 한 번 묻고, 반영과 정리 조건을 확인하면 Git 워크트리 또는 일반 복사 폴더와 작업 기록을 정리합니다. 보관을 선택하면 같은 세션을 이어갈 수 있습니다. 남길 변경이나 기록이 없는 종료 작업은 `finish --clean`으로 정리할 수 있습니다. [결과 적용·보관](skills/antigravity-worker/SKILL.md#원본-적용-또는-별도-보관) · [중단·실패 후 정리](skills/antigravity-worker/SKILL.md#중단실패-후-정리)
 
 기존 터미널 버전은 [보관 디렉터리](archive/antigravity-worker/SKILL.md)에 두고 동기화 대상에서 제외합니다. 이전 설치를 갱신할 때는 터미널 버전과 `antigravity-worker-acp` 설치본을 스킬 검색 경로 밖에 보관한 뒤 현재 `antigravity-worker`를 설치합니다.
 

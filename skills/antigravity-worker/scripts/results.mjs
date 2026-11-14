@@ -166,11 +166,15 @@ export function reviewResult(job, workspace, state) {
   };
 }
 
-function verifyOriginal(baseline) {
+function verifyOriginal(baseline, { allowNewCommit = false } = {}) {
   const root = baseline.original;
   if (!equal(identity(root), baseline.originalIdentity)) throw new Error('The original folder was replaced.');
-  if (baseline.originalGit && !equal(gitState(root), baseline.originalGit)) {
-    throw new Error('The original Git branch or commit changed. Results were preserved.');
+  if (baseline.originalGit) {
+    const { branch, head } = gitState(root);
+    if (branch !== baseline.originalGit.branch
+      || (head !== baseline.originalGit.head && (!allowNewCommit || branch === 'HEAD'))) {
+      throw new Error('The original Git branch or commit changed. Results were preserved.');
+    }
   }
   return root;
 }
@@ -237,7 +241,9 @@ function replaceEntry(root, name, expected, next, source) {
 }
 
 function applyChanges(job, workspace, review, baseline) {
-  const root = verifyOriginal(baseline);
+  const root = verifyOriginal(baseline, { allowNewCommit: true });
+  if (review.changes.every(({ name, after }) => equal(at(root, name), after))) return;
+  verifyOriginal(baseline);
   const pending = review.changes.filter(({ name, before, after }) => {
     const current = at(root, name);
     if (equal(current, after)) return false;
@@ -321,7 +327,9 @@ function hasGitWorkspace(job, workspace) {
   const records = git(workspace.original, ['worktree', 'list', '--porcelain', '-z']).split('\0\0');
   const entries = records.map(record => record.split('\0')[0]).filter(line => line.startsWith('worktree '))
     .map(line => line.slice('worktree '.length)).filter(path => isWithin(job, path));
-  if (entries.some(path => path !== workspace.cwd)) throw new Error('Additional Git worktrees exist under the job.');
+  if (entries.some(path => relative(workspace.cwd, path) !== '')) {
+    throw new Error('Additional Git worktrees exist under the job.');
+  }
   return entries.length !== 0;
 }
 
@@ -338,26 +346,66 @@ export function removeGitWorkspace(job, workspace) {
 export function finalizeResult(job, workspace, state, id, decision) {
   const review = readRecord(job, 'review.json');
   if (review.id !== id || review.turn !== state.turn) throw new Error('Review is stale. Review the current results before asking again.');
+  if (decision === '--clean' && review.changes.length !== 0) {
+    throw new Error('Worker changes remain. Keep them or review them for apply.');
+  }
   const recordPath = join(job, 'finalized.json');
   if (lstatSync(recordPath, { throwIfNoEntry: false })) {
     const outcome = readRecord(job, 'finalized.json');
-    if (outcome.decision !== '--apply') throw new Error('Unsupported finalization record. Job was preserved.');
     if (outcome.id !== id || outcome.decision !== decision) throw new Error('Retry finish with the original review and decision.');
   } else {
     verifyReviewedWorkspace(job, workspace, state, review);
     if (decision === '--keep') return { original: review.original, kept: workspace.cwd };
-    if (!review.original) throw new Error('This job has no recorded original baseline. Keep the result in its workspace.');
-    verifyLinkTargets(job, workspace.cwd, review.original, review.changes.map(({ name, after }) => [name, after]));
-    applyResult(job, workspace, review);
+    verifyCleanup(job, workspace, state);
+    if (decision === '--apply') {
+      if (!review.original) throw new Error('This job has no recorded original baseline. Keep the result in its workspace.');
+      verifyLinkTargets(job, workspace.cwd, review.original, review.changes.map(({ name, after }) => [name, after]));
+      applyResult(job, workspace, review);
+    }
     writeRecord(job, 'finalized.json', { id, decision, original: review.original });
   }
-  verifyApplied(verifyOriginal(readRecord(job, 'baseline.json')), review.changes);
-  if (lstatSync(workspace.cwd, { throwIfNoEntry: false })
-    && keyFor(snapshot(workspace.cwd, state.kind === 'git')) !== review.result) {
-    throw new Error('Worker files changed before cleanup. Results were preserved.');
+  if (decision === '--apply') {
+    verifyApplied(verifyOriginal(readRecord(job, 'baseline.json'), { allowNewCommit: true }), review.changes);
+  }
+  verifyCleanup(job, workspace, state);
+  if (lstatSync(workspace.cwd, { throwIfNoEntry: false })) {
+    verifyReviewedWorkspace(job, workspace, state, review);
   }
   if (state.kind === 'git') removeGitWorkspace(job, workspace);
   return { original: review.original };
+}
+
+function verifyCleanup(job, workspace, state) {
+  const entries = readdirSync(job, { withFileTypes: true });
+  if (entries.some(({ name }) => name.startsWith('apply-backup-'))) {
+    throw new Error('An apply recovery backup remains. Inspect it before cleanup.');
+  }
+  for (const info of entries) {
+    const { name } = info;
+    if (info.isFile() && (['baseline.json', 'finalized.json', 'operation.lock', 'review.json', 'status.json'].includes(name)
+      || /^prompt(?:[-_][a-z0-9_-]+)?\.(?:txt|md)$/i.test(name))) continue;
+    if (info.isDirectory() && ['gemini', 'workspaces'].includes(name)) continue;
+    if (info.isDirectory() && /^turn-[a-z0-9]{6}$/i.test(name)
+      && readdirSync(join(job, name), { withFileTypes: true }).every(file => file.isFile()
+        && ['agy.log', 'stderr.log', 'response.txt', 'events.jsonl', 'cancel'].includes(file.name))) continue;
+    throw new Error('Unreviewed job entry remains: ' + name);
+  }
+
+  const storage = join(job, 'workspaces');
+  const directory = dirname(workspace.cwd);
+  const children = path => lstatSync(path, { throwIfNoEntry: false }) ? readdirSync(path) : [];
+  if (children(storage).some(name => name !== basename(directory))
+    || children(directory).some(name => !['work', 'workspace.json', 'operation.lock'].includes(name))) {
+    throw new Error('Additional workspace entries exist under the job.');
+  }
+  if (state.kind === 'git' && lstatSync(workspace.cwd, { throwIfNoEntry: false })) {
+    const baseline = readRecord(job, 'baseline.json');
+    const current = gitState(workspace.cwd);
+    if (current.head !== baseline.originalGit?.head || current.branch !== 'HEAD'
+      || git(workspace.cwd, ['diff', '--cached', '--name-only', '-z'])) {
+      throw new Error('Worker Git HEAD or staged changes require inspection before cleanup.');
+    }
+  }
 }
 
 function verifyReviewedWorkspace(job, workspace, state, review) {
