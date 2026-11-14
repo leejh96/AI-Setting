@@ -147,7 +147,7 @@ test('Windows 실행 파일 경로와 PowerShell 재귀 삭제를 판별한다',
   assert.equal(inspect('Remove-Item -LiteralPath .\\tmp\\result.txt'), 'allow');
 });
 
-test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허용한다', (t) => {
+test('로컬 브랜치나 태그에 커밋이 보존된 깨끗한 연결 워크트리만 제거를 허용한다', (t) => {
   const fixture = mkdtempSync(path.join(realpathSync(tmpdir()), 'command-guard-'));
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
   const repo = path.join(fixture, 'repo');
@@ -163,7 +163,7 @@ test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허
   };
   const inspect = command => inspectCommand(command, repo).decision;
   const remove = target => 'git worktree remove -- "' + target.replaceAll(path.sep, '/') + '"';
-  git(fixture, 'init', '-b', 'develop', repo);
+  git(fixture, 'init', '-b', 'main', repo);
   writeFileSync(path.join(repo, '.gitignore'), 'ignored.txt\n');
   git(repo, 'add', '.gitignore');
   git(repo, 'commit', '-m', 'base');
@@ -171,8 +171,6 @@ test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허
   writeFileSync(path.join(linked, 'tracked.txt'), 'feature\n');
   git(linked, 'add', 'tracked.txt');
   git(linked, 'commit', '-m', 'feature');
-  assert.equal(inspect(remove(linked)), 'deny');
-  git(repo, 'merge', '--ff-only', 'feature/linked');
   assert.equal(inspect(remove(linked)), 'allow');
   assert.equal(inspect(remove('../linked worktree')), 'allow');
 
@@ -209,13 +207,32 @@ test('로컬 develop에 포함된 깨끗한 연결 워크트리만 제거를 허
     else rmSync(name);
   }
 
+  for (const flag of ['assume-unchanged', 'skip-worktree']) {
+    git(linked, 'update-index', '--' + flag, 'tracked.txt');
+    writeFileSync(path.join(linked, 'tracked.txt'), 'hidden change\n');
+    assert.equal(inspect(remove(linked)), 'deny', flag);
+    git(linked, 'update-index', '--no-' + flag, 'tracked.txt');
+    git(linked, 'restore', 'tracked.txt');
+  }
+
+  git(linked, 'bisect', 'start');
+  assert.equal(inspect(remove(linked)), 'deny');
+  git(linked, 'bisect', 'reset');
+
   git(repo, 'worktree', 'add', '--detach', detached, 'HEAD');
   assert.equal(inspect(remove(detached)), 'allow');
-  git(repo, 'branch', '-m', 'develop', 'main');
-  git(repo, 'tag', 'refs/heads/develop', 'HEAD');
+  git(detached, 'commit', '--allow-empty', '-m', 'detached only');
+  const unique = git(detached, 'rev-parse', 'HEAD');
   assert.equal(inspect(remove(detached)), 'deny');
-  git(repo, 'tag', '-d', 'refs/heads/develop');
-  git(repo, 'branch', '-m', 'main', 'develop');
+  git(repo, 'update-ref', 'refs/remotes/origin/temporary', unique);
+  assert.equal(inspect(remove(detached)), 'deny');
+  git(detached, 'switch', '--detach', 'main');
+  assert.equal(inspect(remove(detached)), 'deny');
+  git(repo, 'tag', '-a', 'archive/detached', '-m', 'Preserve detached work', unique);
+  assert.equal(inspect(remove(detached)), 'allow');
+  git(detached, 'update-ref', 'refs/worktree/temporary', unique);
+  assert.equal(inspect(remove(detached)), 'deny');
+  git(detached, 'update-ref', '-d', 'refs/worktree/temporary');
   assert.equal(inspect(remove(linked)), 'allow');
   git(repo, 'worktree', 'remove', '--', linked);
   assert.equal(existsSync(linked), false);

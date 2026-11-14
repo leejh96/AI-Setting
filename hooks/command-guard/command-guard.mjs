@@ -79,12 +79,12 @@ function worktreeRemove(command, cwd, windows) {
     || Object.keys(process.env).some(key => gitRepositoryOverride.test(key))) return deny(unverifiable);
 
   const deadline = Date.now() + 3500;
-  function git(directory, ...args) {
+  function git(directory, args, input) {
     return spawnSync('git', [
       '--no-optional-locks', '--no-replace-objects', '--no-lazy-fetch',
       '-c', 'core.fsmonitor=false', '-C', directory, ...args,
     ], {
-      encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), windowsHide: true,
+      encoding: 'utf8', input, timeout: Math.max(1, deadline - Date.now()), windowsHide: true,
     });
   }
 
@@ -106,7 +106,7 @@ function worktreeRemove(command, cwd, windows) {
     return deny(unverifiable);
   }
 
-  const listing = git(cwd, 'worktree', 'list', '--porcelain', '-z');
+  const listing = git(cwd, ['worktree', 'list', '--porcelain', '-z']);
   if (listing.status !== 0) return deny(unverifiable);
   const worktrees = listing.stdout.split('\0\0').map(entry => entry.split('\0'));
   // Git lists the main worktree or bare repository first.
@@ -116,22 +116,41 @@ function worktreeRemove(command, cwd, windows) {
   const head = fields.find(field => /^HEAD (?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(field))?.slice('HEAD '.length);
   if (!head) return deny(unverifiable);
 
-  const common = git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const checkout = git(targetPath, 'rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel', 'HEAD');
+  const common = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const checkout = git(targetPath, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel', '--absolute-git-dir', 'HEAD']);
   if (common.status !== 0 || checkout.status !== 0) return deny(unverifiable);
-  const [targetCommon, topLevel, targetHead] = checkout.stdout.trimEnd().split(/\r?\n/);
-  if (!targetCommon || !topLevel || targetHead !== head || !samePath(common.stdout.trimEnd(), targetCommon)
+  const [targetCommon, topLevel, gitDir, targetHead] = checkout.stdout.trimEnd().split(/\r?\n/);
+  if (!targetCommon || !topLevel || !path.isAbsolute(gitDir ?? '') || targetHead !== head || !samePath(common.stdout.trimEnd(), targetCommon)
     || !samePath(targetPath, topLevel)) return deny(unverifiable);
 
-  const develop = git(cwd, 'show-ref', '--verify', '--hash', '--', 'refs/heads/develop');
-  if (develop.status !== 0
-    || git(cwd, 'merge-base', '--is-ancestor', head, develop.stdout.trimEnd()).status !== 0) {
-    return deny('워크트리의 커밋이 로컬 develop에 포함됐는지 확인하지 못했습니다.');
+  try {
+    for (const state of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-apply', 'rebase-merge', 'sequencer', 'BISECT_START']) {
+      if (lstatSync(path.join(gitDir, state), { throwIfNoEntry: false })) {
+        return deny('워크트리에 진행 중인 Git 작업이 있습니다.');
+      }
+    }
+    if (lstatSync(path.join(targetCommon, 'info', 'grafts'), { throwIfNoEntry: false })) return deny(unverifiable);
+  } catch {
+    return deny(unverifiable);
   }
-  const status = git(targetPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all',
-    '--ignored=matching', '--ignore-submodules=none');
+  const index = git(targetPath, ['ls-files', '-v', '-z']);
+  if (index.status !== 0) return deny(unverifiable);
+  if (/(?:^|\0)[Sa-z] /.test(index.stdout)) return deny('워크트리에 변경 검사가 생략된 Git 인덱스 항목이 있습니다.');
+  const status = git(targetPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all',
+    '--ignored=matching', '--ignore-submodules=none']);
   if (status.status !== 0) return deny(unverifiable);
   if (status.stdout) return deny('워크트리에 커밋하지 않은 변경, 미추적 파일 또는 Git이 무시하는 파일이 있습니다.');
+
+  const reflog = git(targetPath, ['reflog', 'show', '--format=%H', 'HEAD']);
+  if (reflog.status !== 0) return deny(unverifiable);
+  const localRefs = git(targetPath, ['for-each-ref', '--format=%(refname)', 'refs/bisect', 'refs/worktree', 'refs/rewritten']);
+  if (localRefs.status !== 0) return deny(unverifiable);
+  if (localRefs.stdout) return deny('워크트리에 제거 시 사라지는 Git 참조가 있습니다.');
+  // Only local branches and tags survive removal independently of the worktree.
+  const unpreserved = git(cwd, ['rev-list', '--max-count=1', '--not', '--branches', '--tags', '--stdin'],
+    head + '\n' + reflog.stdout);
+  if (unpreserved.status !== 0) return deny(unverifiable);
+  if (unpreserved.stdout) return deny('워크트리에 로컬 브랜치나 태그에 보존되지 않은 커밋이 있습니다.');
 }
 
 function gitCommand(args, context) {
