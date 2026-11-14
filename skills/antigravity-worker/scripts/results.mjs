@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { canonicalPath, git, isWithin, managedWorkspace, prepareWorkspace, registeredWorktrees, removeFileWorkspace } from './workspace.mjs';
 
+export const jobControlFiles = ['baseline.json', 'review.json', 'status.json', 'finalized.json', 'operation.lock'];
+
 function identity(path) {
   const info = lstatSync(path, { bigint: true });
   if (!info.isDirectory() || realpathSync(path) !== path) throw new Error('Directory changed: ' + path);
@@ -111,6 +113,10 @@ const matches = (actual, expected) => expected?.type === 'directory' && expected
 const keyFor = entries => createHash('sha256').update(JSON.stringify([...entries])).digest('hex');
 const readRecord = (job, name) => JSON.parse(readFileSync(join(job, name), 'utf8'));
 
+function readOptionalRecord(job, name) {
+  if (lstatSync(join(job, name), { throwIfNoEntry: false })) return readRecord(job, name);
+}
+
 function writeRecord(job, name, record) {
   const temporary = join(job, name + '.' + randomUUID());
   writeFileSync(temporary, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });
@@ -192,9 +198,7 @@ function windowsLinkType(path) {
 }
 
 export function reviewResult(job, workspace, state) {
-  const baselinePath = join(job, 'baseline.json');
-  const baseline = lstatSync(baselinePath, { throwIfNoEntry: false })
-    ? readRecord(job, 'baseline.json') : null;
+  const baseline = readOptionalRecord(job, 'baseline.json');
   const result = snapshot(workspace.cwd, state.kind === 'git', baseline?.directoryModes === true);
   const before = new Map(baseline?.entries ?? []);
   const changes = [...new Set([...before.keys(), ...result.keys()])].flatMap(name => {
@@ -202,8 +206,7 @@ export function reviewResult(job, workspace, state) {
     const current = result.get(name) ?? null;
     return equal(old, current) ? [] : [{ name, before: old, after: current }];
   });
-  const previous = lstatSync(join(job, 'review.json'), { throwIfNoEntry: false })
-    ? readRecord(job, 'review.json') : null;
+  const previous = readOptionalRecord(job, 'review.json');
   const review = {
     turn: state.turn, result: keyFor(result),
     original: baseline?.original ?? null, changes,
@@ -518,15 +521,13 @@ export function finalizeResult(job, workspace, state, id, decision) {
   if (decision === '--clean' && review.changes.length !== 0) {
     throw new Error('Worker changes remain. Keep them or review them for apply.');
   }
-  const recordPath = join(job, 'finalized.json');
-  let outcome;
-  if (lstatSync(recordPath, { throwIfNoEntry: false })) {
-    outcome = readRecord(job, 'finalized.json');
+  let outcome = readOptionalRecord(job, 'finalized.json');
+  if (outcome !== undefined) {
     if (outcome.id !== id || outcome.decision !== decision) throw new Error('Retry finish with the original review and decision.');
   } else {
     verifyReviewedWorkspace(job, workspace, state, review);
     if (decision === '--keep') return { original: review.original, kept: workspace.cwd };
-    outcome = { id, decision, original: review.original };
+    outcome = { id, decision };
     if (decision === '--apply') {
       verifyNoRecovery(job);
       if (!review.original) throw new Error('This job has no recorded original baseline. Keep the result in its workspace.');
@@ -569,8 +570,7 @@ export function finalizeResult(job, workspace, state, id, decision) {
 }
 
 function verifyRemainingCopy(job, cleanupWork, review) {
-  const baseline = lstatSync(join(job, 'baseline.json'), { throwIfNoEntry: false })
-    ? readRecord(job, 'baseline.json') : null;
+  const baseline = readOptionalRecord(job, 'baseline.json');
   const approved = new Map(baseline?.entries ?? []);
   for (const { name, after } of review.changes) approved.set(name, after);
   for (const [name, current] of snapshot(cleanupWork, false, review.directoryModes === true)) {
@@ -594,7 +594,7 @@ function verifyCleanup(job, workspace, state, { workspaceRemoved = false } = {})
   const entries = readdirSync(job, { withFileTypes: true });
   for (const info of entries) {
     const { name } = info;
-    if (info.isFile() && (['baseline.json', 'finalized.json', 'operation.lock', 'review.json', 'status.json'].includes(name)
+    if (info.isFile() && (jobControlFiles.includes(name)
       || /^prompt(?:[-_][a-z0-9_-]+)?\.(?:txt|md)$/i.test(name))) continue;
     if (info.isDirectory() && ['gemini', 'workspaces'].includes(name)) continue;
     if (info.isDirectory() && /^turn-[a-z0-9]{6}$/i.test(name)

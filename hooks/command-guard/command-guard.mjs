@@ -209,7 +209,8 @@ function gitCommand(args, context) {
     '-s', '--source', '-b', '-B', '--pathspec-from-file', '-e', '--exclude',
   ]);
   const forced = flags.has('-f') || flags.has('--force');
-  if (operation === 'worktree' && operands[0] === 'remove' && !forced) {
+  const removingWorktree = operation === 'worktree' && operands[0] === 'remove';
+  if (removingWorktree && !forced) {
     return worktreeRemove(context.command, context.cwd, context.windows);
   }
   if (operation === 'clean' && !dryRun(flags)) {
@@ -225,7 +226,7 @@ function gitCommand(args, context) {
     return deny('작업 공간의 미커밋 변경이 사라질 수 있습니다.');
   }
   if ((operation === 'branch' && (flags.has('-D') || forced && (flags.has('-d') || flags.has('--delete'))))
-    || (operation === 'worktree' && operands[0] === 'remove' && forced)
+    || removingWorktree
     || (operation === 'stash' && ['clear', 'drop'].includes(operands[0]))) {
     return deny('브랜치, 작업 공간 또는 stash의 작업이 사라질 수 있습니다.');
   }
@@ -256,15 +257,17 @@ function findDeletes(args) {
 
 function fileCommand(program, args, context) {
   const { flags, operands } = options(args);
+  let recursiveTargets;
   if (program === 'rm' && (flags.has('-r') || flags.has('-R') || flags.has('--recursive'))) {
-    if (operands.some(target => broadRemoval(target, context))) return deny('홈, 작업 공간 또는 저장소 전체를 삭제할 수 있습니다.');
-    return deny('지정 경로 아래의 파일과 디렉터리를 재귀적으로 삭제합니다.');
-  }
-  if (context.windows && ['remove-item', 'ri', 'rm', 'rmdir', 'rd', 'del', 'erase'].includes(program)
+    recursiveTargets = operands;
+  } else if (context.windows && ['remove-item', 'ri', 'rm', 'rmdir', 'rd', 'del', 'erase'].includes(program)
     && args.some(arg => /^(?:-recurse|\/s)$/i.test(arg))) {
-    const targets = args.filter(arg => !arg.startsWith('-') && !/^\/[sq]$/i.test(arg));
-    if (targets.some(target => broadRemoval(target, context))) return deny('홈, 작업 공간 또는 저장소 전체를 삭제할 수 있습니다.');
-    return deny('지정 경로 아래의 파일과 디렉터리를 재귀적으로 삭제합니다.');
+    recursiveTargets = args.filter(arg => !arg.startsWith('-') && !/^\/[sq]$/i.test(arg));
+  }
+  if (recursiveTargets) {
+    return deny(recursiveTargets.some(target => broadRemoval(target, context))
+      ? '홈, 작업 공간 또는 저장소 전체를 삭제할 수 있습니다.'
+      : '지정 경로 아래의 파일과 디렉터리를 재귀적으로 삭제합니다.');
   }
   if (program === 'find' && findDeletes(args)) return deny('검색 결과에 해당하는 파일을 삭제할 수 있습니다.');
   if (program === 'rsync' && !dryRun(flags)

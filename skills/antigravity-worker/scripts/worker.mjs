@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { lockWorkspace, managedWorkspace, removeFileWorkspace } from './workspace.mjs';
 import { AcpResponseError, configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
-import { finalizeResult, prepareResult, removeGitWorkspace, reviewResult, verifyNoRecovery } from './results.mjs';
+import { finalizeResult, jobControlFiles, prepareResult, removeGitWorkspace, reviewResult, verifyNoRecovery } from './results.mjs';
 
 const jobPrefix = 'codex-agy-acp-';
 const stoppedStates = ['prepared', 'cancelled', 'failed', 'permission-denied'];
@@ -158,7 +158,7 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     if (action === 'follow-up' ? !current.sessionId : Boolean(current.sessionId)) {
       throw new Error('Use start for a new session and follow-up for an existing session.');
     }
-    if (['cleanup-needed', 'starting', 'running', 'workspace-removed'].includes(current.status)) {
+    if (['cleanup-needed', 'starting', 'running'].includes(current.status)) {
       throw new Error(`Job requires inspection: ${current.status}.`);
     }
     if (existsSync(join(job, 'finalized.json'))) throw new Error('Retry finish to complete the approved cleanup.');
@@ -396,11 +396,10 @@ async function main([action, ...args]) {
     const outcome = finalizeResult(job, workspace, current, args[1], decision);
     if (outcome.kept) return emit('kept', { job, cwd: outcome.kept, original: outcome.original });
     // Keep the review and job state available if removing the work or logs fails.
-    const controlFiles = ['baseline.json', 'review.json', 'status.json', 'finalized.json', 'operation.lock'];
     for (const info of outcome.cleanupEntries) {
-      if (!controlFiles.includes(info.name)) rmSync(join(job, info.name), { recursive: info.isDirectory(), force: true });
+      if (!jobControlFiles.includes(info.name)) rmSync(join(job, info.name), { recursive: info.isDirectory(), force: true });
     }
-    for (const name of controlFiles) rmSync(join(job, name), { force: true });
+    for (const name of jobControlFiles) rmSync(join(job, name), { force: true });
     rmdirSync(job);
     unlockWorkspace = null;
     emit(decision === '--clean' ? 'cleaned' : 'applied', { original: outcome.original });
