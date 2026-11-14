@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { isUtf8 } from 'node:buffer';
+import { chmodSync, closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 const prefix = 'codex-agy-workspace-';
 const namePattern = /^codex-agy-workspace-[a-z0-9]{6}$/i;
 const manifest = 'workspace.json';
 const gitPathOverrides = new Set(['GIT_DIR', 'GIT_COMMON_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_NAMESPACE']);
+export const canonicalPath = process.platform === 'win32' ? realpathSync.native : realpathSync;
 const workspaceRoot = (job) => join(realpathSync(job), 'workspaces');
 
 export function git(cwd, args, allowed = [0], options = {}) {
@@ -39,25 +41,53 @@ export function prepareWorkspace(job, { original, head, copy }) {
   const storage = localDirectory(root);
   const directory = mkdtempSync(join(storage, prefix));
   const cwd = join(directory, 'work');
+  const linked = original && !copy;
   try {
-    if (original && !copy) git(original, ['worktree', 'add', '--detach', '--', cwd, head]);
+    if (linked) git(original, ['worktree', 'add', '--detach', '--', cwd, head]);
     else {
       mkdirSync(cwd);
       if (baseline) writeBaseline(original, cwd, baseline);
     }
+    const { dev, ino } = lstatSync(cwd);
+    writeFileSync(join(directory, manifest), JSON.stringify({ original, dev, ino }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    if (!readdirSync(directory).length) rmdirSync(directory);
-    else throw new Error(`Could not prepare ${cwd}: ${error.message}`);
+    try {
+      const registered = linked && registeredWorktrees(original).find(path => [cwd, join(canonicalPath(directory), 'work')]
+        .some(expected => relative(path, expected) === ''));
+      if (registered) git(original, ['worktree', 'remove', '--force', '--', registered]);
+      rmSync(directory, { recursive: true, force: true });
+      if (!readdirSync(storage).length) rmdirSync(storage);
+    } catch (cleanupError) {
+      throw new Error(`${error.message} Prepare cleanup failed at ${cwd}: ${cleanupError.message}`);
+    }
     throw error;
   }
-  const { dev, ino } = lstatSync(cwd);
-  writeFileSync(join(directory, manifest), JSON.stringify({ original, dev, ino }), { flag: 'wx', mode: 0o600 });
-  return { cwd, kind: original && !copy ? 'git' : 'temporary' };
+  return { cwd, kind: linked ? 'git' : 'temporary' };
 }
 
-export function managedWorkspace(cwd, job) {
+export function registeredWorktrees(original) {
+  return git(original, ['worktree', 'list', '--porcelain', '-z']).split('\0\0')
+    .map(record => record.split('\0')[0]).filter(line => line.startsWith('worktree '))
+    .map(line => line.slice('worktree '.length));
+}
+
+export function removeFileWorkspace(path) {
+  function allowRemoval(directory) {
+    const info = lstatSync(directory, { throwIfNoEntry: false });
+    if (!info?.isDirectory()) return;
+    if ((info.mode & 0o700) !== 0o700) chmodSync(directory, (info.mode & 0o7777) | 0o700);
+    for (const child of readdirSync(directory, { withFileTypes: true })) {
+      if (child.isDirectory()) allowRemoval(join(directory, child.name));
+    }
+  }
+  if (process.platform !== 'win32') allowRemoval(path);
+  rmSync(path, { recursive: true, force: true });
+}
+
+export function managedWorkspace(cwd, job, { cleaning = false } = {}) {
   const directory = dirname(cwd);
-  if (basename(cwd) !== 'work' || !namePattern.test(basename(directory)) || dirname(directory) !== workspaceRoot(job)) return null;
+  if (basename(cwd) !== (cleaning ? 'cleanup-work' : 'work')
+    || !namePattern.test(basename(directory)) || dirname(directory) !== workspaceRoot(job)) return null;
   localDirectory(directory);
   const path = join(directory, manifest);
   if (!lstatSync(path).isFile()) throw new Error('Invalid worker workspace record.');
@@ -71,7 +101,12 @@ export function managedWorkspace(cwd, job) {
 
 export function lockWorkspace(workspace) {
   const path = join(workspace.directory, 'operation.lock');
-  writeFileSync(path, '', { flag: 'wx', mode: 0o600 });
+  try {
+    writeFileSync(path, JSON.stringify({ pid: process.pid }) + '\n', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code === 'EEXIST') throw new Error('Worker operation is active or interrupted. Inspect lock: ' + path);
+    throw error;
+  }
   return () => unlinkSync(path);
 }
 
@@ -119,7 +154,39 @@ function writeBaseline(original, cwd, baseline) {
     } finally {
       closeSync(fd);
     }
+    preserveCheckoutLineEndings(original, parts, destination);
   }
+}
+
+function preserveCheckoutLineEndings(original, parts, destination) {
+  const unavailable = error => ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code);
+  let source = original;
+  let size;
+  try {
+    for (const [index, part] of parts.entries()) {
+      source = join(source, part);
+      const info = lstatSync(source);
+      if (index === parts.length - 1 ? !info.isFile() : !info.isDirectory()) return;
+      size = info.size;
+    }
+  } catch (error) {
+    if (unavailable(error)) return;
+    throw error;
+  }
+  const bytes = lstatSync(destination).size;
+  // Limit the in-memory conversion to text files and avoid reading equal-size binaries twice.
+  if (bytes >= size || size > bytes * 2 || size > 8 * 1024 * 1024) return;
+  const committed = readFileSync(destination);
+  if (committed.includes(0) || committed.includes(13) || !committed.includes(10) || !isUtf8(committed)) return;
+  const checkout = Buffer.from(committed.toString('utf8').replaceAll('\n', '\r\n'));
+  let current;
+  try {
+    current = readFileSync(source);
+  } catch (error) {
+    if (unavailable(error)) return;
+    throw error;
+  }
+  if (current.equals(checkout)) writeFileSync(destination, checkout);
 }
 
 export function isWithin(directory, path) {

@@ -3,9 +3,9 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFile
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
-import { lockWorkspace, managedWorkspace } from './workspace.mjs';
-import { configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
-import { finalizeResult, prepareResult, removeGitWorkspace, reviewResult } from './results.mjs';
+import { lockWorkspace, managedWorkspace, removeFileWorkspace } from './workspace.mjs';
+import { AcpResponseError, configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
+import { finalizeResult, prepareResult, removeGitWorkspace, reviewResult, verifyNoRecovery } from './results.mjs';
 
 const jobPrefix = 'codex-agy-acp-';
 const stoppedStates = ['prepared', 'cancelled', 'failed', 'permission-denied'];
@@ -60,17 +60,23 @@ async function capabilities(path = process.cwd()) {
   const temporary = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-acp-capabilities-'));
   const profile = join(temporary, 'gemini');
   let client;
+  let result;
   try {
     mkdirSync(profile, { mode: 0o700 });
     client = connectWorker(cwd, profile, temporary);
     const session = await openSession(client, cwd);
     const commands = await client.listCommands(session.sessionId);
     if (session.canClose) await client.request('session/close', { sessionId: session.sessionId }, 5_000);
-    emit('capabilities', { cwd, agent: session.agent, options: session.options, models: session.availableModels, commands });
+    result = { cwd, agent: session.agent, options: session.options, models: session.availableModels, commands };
   } finally {
-    await client?.shutdown();
+    const exit = await client?.shutdown();
+    if (exit && exit.code === null && exit.signal === null) {
+      throw new Error('ACP process shutdown could not be confirmed. Inspect ' + temporary);
+    }
     rmSync(temporary, { recursive: true, force: true });
+    if (result && exit?.code !== 0) throw new Error(`ACP process exited (${exit.signal ?? exit.code}).`);
   }
+  emit('capabilities', result);
 }
 
 function save(job, status) {
@@ -120,7 +126,7 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
   const prompt = readFileSync(promptPath, 'utf8').trim();
   if (!prompt) throw new Error('The prompt file is empty.');
   const unlock = lockWorkspace(workspaceFor(job, previous));
-  const state = { ...previous, status: 'starting', stopReason: null, error: null, runnerPid: process.pid, workerPid: null };
+  const state = { ...previous, status: 'starting', stopReason: null, error: null, denied: 0, runnerPid: process.pid, workerPid: null };
   let client;
   let session;
   let responseReceived = false;
@@ -128,6 +134,7 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
   let cancelTimer;
   let cancelPoll;
   let cancelSent = false;
+  let denied = 0;
   const { promise: cancelDeadline, reject: cancelExpired } = Promise.withResolvers();
 
   function cancel() {
@@ -172,7 +179,6 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     save(job, state);
     emit('starting', { job, cwd: state.cwd, turn });
 
-    let denied = 0;
     client = connectWorker(state.cwd, profile, turn, (id, update) => {
       if (!session || id !== session.sessionId) return;
       const kind = update.sessionUpdate;
@@ -210,7 +216,7 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     state.status = 'running';
     state.settings = { model: selectedModel, ...(activeEffort === undefined ? {} : { thought_level: activeEffort }), mode };
     state.agent = session.agent;
-    state.commands = client.commandsFor(session.sessionId) ?? previous.commands ?? null;
+    state.commands = client.commandsFor(session.sessionId);
     save(job, state);
     emit('running', { sessionId: state.sessionId, settings: state.settings, agent: state.agent });
     if (state.commands) emit('available-commands', { commands: state.commands });
@@ -227,14 +233,15 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     ]);
     responseReceived = true;
     state.stopReason = result?.stopReason ?? null;
-    state.denied = denied;
     if (state.stopReason === 'cancelled') state.status = 'cancelled';
     else if (state.stopReason === 'end_turn') state.status = denied ? 'permission-denied' : 'review-ready';
     else throw new Error(`ACP ended the turn with ${state.stopReason ?? 'no stop reason'}.`);
   } catch (error) {
+    if (sent && error instanceof AcpResponseError) responseReceived = true;
     state.status = sent && !responseReceived ? 'cleanup-needed' : 'failed';
     state.error = error.message;
   } finally {
+    state.denied = denied;
     clearInterval(cancelPoll);
     clearTimeout(cancelTimer);
     if (client) {
@@ -247,9 +254,11 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
         }
       }
       const exit = await client.shutdown();
-      if (exit.code !== 0 && sent) {
+      if (exit.code === null || (exit.code !== 0 && sent)) {
         state.status = 'cleanup-needed';
-        state.error ??= `ACP process exited (${exit.signal ?? exit.code}).`;
+        state.error ??= exit.code === null && exit.signal === null
+          ? 'ACP process shutdown could not be confirmed.'
+          : `ACP process exited (${exit.signal ?? exit.code}).`;
       }
     }
     process.off('SIGINT', cancel);
@@ -278,11 +287,12 @@ function processExists(pid) {
 
 function discardJob(job, state, confirmedStopped) {
   if (existsSync(join(job, 'finalized.json'))) throw new Error('Retry finish to complete the approved cleanup.');
+  verifyNoRecovery(job);
   const uncertain = ['cleanup-needed', 'starting', 'running'].includes(state.status);
   if (uncertain && (!confirmedStopped || (state.status !== 'cleanup-needed' && !state.runnerPid))) {
     throw new Error('Worker termination is unconfirmed. Inspect the job processes before cleanup.');
   }
-  if (!uncertain && !stoppedStates.includes(state.status)) {
+  if (!uncertain && state.status !== 'review-ready' && !stoppedStates.includes(state.status)) {
     throw new Error(`Cannot discard in state ${state.status}.`);
   }
   for (const pid of [state.runnerPid, state.workerPid]) {
@@ -301,6 +311,7 @@ function discardJob(job, state, confirmedStopped) {
     const current = readJob(job).state;
     if (current.turn !== state.turn || current.status !== state.status) throw new Error('Job status changed. Inspect status and retry.');
     if (state.kind === 'git') removeGitWorkspace(job, state);
+    else if (lstatSync(state.cwd, { throwIfNoEntry: false })) removeFileWorkspace(state.cwd);
     rmSync(job, { recursive: true, force: true });
     return emit('discarded', { job, original: state.original });
   } finally {
@@ -370,14 +381,27 @@ async function main([action, ...args]) {
     const workspace = action === 'finish' && finalized && missing
       ? { cwd: state.cwd, original: state.original }
       : workspaceFor(job, state);
-    if (!missing) unlockWorkspace = lockWorkspace(workspace);
+    if (!missing) {
+      unlockWorkspace = lockWorkspace(workspace);
+      const lockedState = readJob(job).state;
+      if (lockedState.turn !== current.turn || lockedState.status !== current.status
+        || lockedState.workerPid !== current.workerPid || lockedState.runnerPid !== current.runnerPid) {
+        throw new Error('Job status changed. Inspect status and retry.');
+      }
+    }
     if (action === 'review') {
       if (finalized) throw new Error('Retry finish to complete the approved cleanup.');
       return emit('review', reviewResult(job, workspace, current));
     }
     const outcome = finalizeResult(job, workspace, current, args[1], decision);
     if (outcome.kept) return emit('kept', { job, cwd: outcome.kept, original: outcome.original });
-    rmSync(job, { recursive: true, force: true });
+    // Keep the review and job state available if removing the work or logs fails.
+    const controlFiles = ['baseline.json', 'review.json', 'status.json', 'finalized.json', 'operation.lock'];
+    for (const info of outcome.cleanupEntries) {
+      if (!controlFiles.includes(info.name)) rmSync(join(job, info.name), { recursive: info.isDirectory(), force: true });
+    }
+    for (const name of controlFiles) rmSync(join(job, name), { force: true });
+    rmdirSync(job);
     unlockWorkspace = null;
     emit(decision === '--clean' ? 'cleaned' : 'applied', { original: outcome.original });
   } catch (error) {

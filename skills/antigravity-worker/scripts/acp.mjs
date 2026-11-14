@@ -8,6 +8,8 @@ const version = 1;
 export const defaultModel = 'gemini-4-hydrogen';
 export const defaultEffort = 'high';
 
+export class AcpResponseError extends Error {}
+
 export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
   const stderr = openSync(stderrLog, 'wx', 0o600);
   let child;
@@ -29,11 +31,13 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
     failure ??= error;
     for (const { reject } of pending.values()) reject(failure);
     pending.clear();
+    commandUpdates.emit('error', failure);
   }
+
+  commandUpdates.on('error', () => {});
 
   child.once('error', fail);
   child.stdin.on('error', fail);
-  child.stdout.on('error', fail);
   child.once('close', (code, signal) => fail(new Error(`ACP process exited (${signal ?? code}).`)));
 
   function send(message) {
@@ -41,7 +45,10 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n');
   }
 
-  createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', line => {
+  const output = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  output.on('error', fail);
+  output.on('close', () => fail(new Error('ACP output closed.')));
+  output.on('line', line => {
     try {
       const message = JSON.parse(line);
       if (message.method && 'id' in message) {
@@ -62,7 +69,7 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
         const request = pending.get(message.id);
         if (!request) return;
         pending.delete(message.id);
-        if (message.error) request.reject(new Error(`${request.method}: ${message.error.message}`));
+        if (message.error) request.reject(new AcpResponseError(`${request.method}: ${message.error.message}`));
         else request.resolve(message.result);
       }
     } catch (error) {
@@ -94,7 +101,12 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
     const terminated = await Promise.race([exited, delay(5_000, null, { ref: false })]);
     if (terminated) return terminated;
     child.kill('SIGKILL');
-    return await exited;
+    const killed = await Promise.race([exited, delay(5_000, null, { ref: false })]);
+    if (killed) return killed;
+    child.stdin.destroy();
+    child.stdout.destroy();
+    child.unref();
+    return { code: null, signal: null };
   }
 
   return {
@@ -103,6 +115,7 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
     cancel: sessionId => send({ method: 'session/cancel', params: { sessionId } }),
     commandsFor: sessionId => commands.get(sessionId) ?? null,
     async listCommands(sessionId) {
+      if (failure) throw failure;
       if (!commands.has(sessionId)) {
         const signal = AbortSignal.timeout(5_000);
         try {
@@ -111,6 +124,7 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
           if (!signal.aborted) throw error;
         }
       }
+      if (failure) throw failure;
       return commands.get(sessionId) ?? null;
     },
     shutdown,

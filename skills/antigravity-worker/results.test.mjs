@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { git } from './scripts/workspace.mjs';
 
-function fixture(t, kind) {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'agy-results-'));
+function fixture(t, kind, { contents = 'original', configureGit = () => {}, configureFolder = () => {},
+  temporaryDirectory = realpathSync(tmpdir()), preloadFor = {},
+} = {}) {
+  const root = mkdtempSync(join(temporaryDirectory, 'agy-results-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const original = join(root, 'original');
   mkdirSync(original);
   const source = join(original, 'probe.txt');
-  writeFileSync(source, 'original');
+  writeFileSync(source, contents);
+  configureFolder(original);
   if (kind !== 'folder') {
     const hooks = join(root, 'empty-hooks');
     mkdirSync(hooks);
@@ -22,13 +25,16 @@ function fixture(t, kind) {
     git(original, ['config', 'user.name', 'Test']);
     git(original, ['config', 'user.email', 'test@example.invalid']);
     git(original, ['config', 'commit.gpgsign', 'false']);
-    git(original, ['add', 'probe.txt']);
+    configureGit(original);
+    git(original, ['add', '--all']);
     git(original, ['commit', '-m', 'Initial']);
   }
   const runner = fileURLToPath(new URL('./scripts/worker.mjs', import.meta.url));
   const invoke = (...args) => {
-    const run = spawnSync(process.execPath, [runner, ...args], {
-      cwd: root, env: { ...process.env, CODEX_HOME: root }, encoding: 'utf8', windowsHide: true,
+    const preload = preloadFor[args[0]];
+    const nodeOptions = preload ? ['--import', `data:text/javascript,${encodeURIComponent(preload)}`] : [];
+    const run = spawnSync(process.execPath, [...nodeOptions, runner, ...args], {
+      cwd: root, env: { ...process.env, CODEX_HOME: root }, encoding: 'utf8', windowsHide: true, timeout: 20_000,
     });
     assert.ifError(run.error);
     assert.equal(run.signal, null);
@@ -73,6 +79,99 @@ test('finish preserves additional worktrees and removes only the reviewed Git wo
   assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
   assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
   assert.equal(git(f.original, ['worktree', 'list', '--porcelain']).match(/^worktree /gm)?.length, 1);
+});
+
+test('finish preserves a new turn that completed before it locked the workspace', t => {
+  const f = fixture(t, 'folder', { preloadFor: { finish: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { dirname, join } from 'node:path';
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (path, ...args) => {
+      if (typeof path === 'string' && path.endsWith('operation.lock') && dirname(path) !== process.argv[3]) {
+        const status = join(process.argv[3], 'status.json');
+        const state = JSON.parse(fs.readFileSync(status, 'utf8'));
+        write(status, JSON.stringify({ ...state, turn: 'new-turn' }));
+      }
+      return write(path, ...args);
+    };
+    syncBuiltinESMExports();
+  ` } });
+  f.setStatus('review-ready', { turn: 'reviewed-turn' });
+  const id = f.review();
+  const finish = f.invoke('finish', f.job, id, '--clean');
+  assert.equal(finish.code, 1);
+  assert.match(finish.result.message, /Job status changed/);
+  assert.equal(f.invoke('status', f.job).result.turn, 'new-turn');
+  assert.equal(existsSync(f.file), true);
+});
+
+test('an ACP prompt error permits review after a clean shutdown', t => {
+  const f = fixture(t, 'folder', { preloadFor: { start: `
+    import cp from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const spawn = cp.spawn;
+    cp.spawn = (_agy, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(`
+      import { createInterface } from 'node:readline';
+      const input = createInterface({ input: process.stdin });
+      input.on('line', line => {
+        const { id, method } = JSON.parse(line);
+        let reply;
+        if (method === 'initialize') reply = { result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: true } } } };
+        if (method === 'session/new') reply = { result: { sessionId: 'test', configOptions: [
+          { id: 'model', currentValue: 'gemini-4-hydrogen' }, { id: 'thought_level', currentValue: 'high' },
+          { id: 'mode', currentValue: 'default' },
+        ] } };
+        if (method === 'session/prompt') reply = { error: { code: -32603, message: 'Model unavailable' } };
+        if (method === 'session/close') reply = { result: {} };
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, ...reply }) + '\\n');
+      });
+    `)}], options);
+    syncBuiltinESMExports();
+  ` } });
+  const prompt = join(f.job, 'prompt.txt');
+  writeFileSync(prompt, 'Test a recoverable ACP error');
+  const result = f.invoke('start', f.job, prompt);
+  assert.equal(result.code, 1);
+  assert.equal(result.result.event, 'failed');
+  assert.match(result.result.error, /session\/prompt: Model unavailable/);
+  assert.equal(result.result.workerPid, null);
+  assert.equal(result.result.denied, 0);
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--clean'), 'cleaned');
+});
+
+test('Windows Git worktrees can prepare and clean under a short path alias',
+  { skip: process.platform !== 'win32' }, t => {
+    const parent = mkdtempSync(join(realpathSync(tmpdir()), 'agy-long-temp-directory-'));
+    t.after(() => rmSync(parent, { recursive: true, force: true }));
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AGY_TEST_LONG_PATH).ShortPath'],
+    { encoding: 'utf8', windowsHide: true, env: { ...process.env, AGY_TEST_LONG_PATH: parent } });
+    assert.equal(result.status, 0, result.stderr);
+    const alias = result.stdout.trim();
+    if (!alias || alias.toLowerCase() === parent.toLowerCase()) return t.skip('No Windows short path alias available');
+    assert.equal(realpathSync.native(alias), realpathSync.native(parent));
+    const f = fixture(t, 'git', { temporaryDirectory: alias });
+    f.setStatus('review-ready');
+    writeFileSync(f.file, 'reviewed');
+    assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+    assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+    assert.equal(git(f.original, ['worktree', 'list', '--porcelain']).match(/^worktree /gm)?.length, 1);
+  });
+
+test('apply succeeds before preserving a separate unreviewed artifact', t => {
+  const f = fixture(t, 'folder');
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed');
+  const id = f.review();
+  const artifact = join(f.job, 'result.zip');
+  writeFileSync(artifact, 'preserve');
+  const pending = f.invoke('finish', f.job, id, '--apply');
+  assert.equal(pending.events[0].event, 'cleanup-pending');
+  assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+  assert.equal(readFileSync(artifact, 'utf8'), 'preserve');
+  rmSync(artifact);
+  assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
 });
 
 for (const kind of ['git', 'folder', 'copy']) {
@@ -199,3 +298,388 @@ test('clean removes the prompts and logs from a completed turn', t => {
   rmSync(extra);
   assertFinished(f, f.invoke('finish', f.job, id, '--clean'), 'cleaned');
 });
+
+test('copy can apply edits to a CRLF checkout of a committed text file', t => {
+  const f = fixture(t, 'copy', {
+    contents: 'original\r\n', configureGit: original => git(original, ['config', 'core.autocrlf', 'true']),
+  });
+  assert.equal(git(f.original, ['show', 'HEAD:probe.txt']), 'original\n');
+  assert.equal(readFileSync(f.file, 'utf8'), 'original\r\n');
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed\r\n');
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.equal(readFileSync(f.source, 'utf8'), 'reviewed\r\n');
+});
+
+test('file-only prepare uses the commit when the original checkout cannot be searched',
+  { skip: process.platform === 'win32' || process.getuid?.() === 0 }, t => {
+    const f = fixture(t, 'copy', { configureFolder(root) {
+      mkdirSync(join(root, 'data'));
+      writeFileSync(join(root, 'data', 'tracked.txt'), 'committed\n');
+    } });
+    const data = join(f.original, 'data');
+    chmodSync(data, 0o600);
+    try {
+      const prepared = f.invoke('prepare', '--copy', f.original);
+      assert.equal(prepared.code, 0, JSON.stringify(prepared.result));
+      assert.equal(readFileSync(join(prepared.result.cwd, 'data', 'tracked.txt'), 'utf8'), 'committed\n');
+    } finally {
+      chmodSync(data, 0o700);
+    }
+  });
+
+test('apply preserves a reviewed result when the original directory cannot be listed',
+  { skip: process.platform === 'win32' || process.getuid?.() === 0 }, t => {
+    const f = fixture(t, 'git', { configureFolder(root) {
+      mkdirSync(join(root, 'data'));
+      writeFileSync(join(root, 'data', 'tracked.txt'), 'original');
+    } });
+    writeFileSync(join(f.cwd, 'data', 'tracked.txt'), 'reviewed');
+    f.setStatus('review-ready');
+    const id = f.review();
+    const data = join(f.original, 'data');
+    chmodSync(data, 0o300);
+    try {
+      assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /EACCES/);
+      assert.equal(readFileSync(join(data, 'tracked.txt'), 'utf8'), 'original');
+      assert.equal(readFileSync(join(f.cwd, 'data', 'tracked.txt'), 'utf8'), 'reviewed');
+    } finally {
+      chmodSync(data, 0o700);
+    }
+    assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+    assert.equal(readFileSync(join(data, 'tracked.txt'), 'utf8'), 'reviewed');
+  });
+
+test('apply preserves a rename that changes only the case of a path', t => {
+  const f = fixture(t, 'folder');
+  f.setStatus('review-ready');
+  renameSync(f.file, join(f.cwd, 'rename.tmp'));
+  renameSync(join(f.cwd, 'rename.tmp'), join(f.cwd, 'Probe.txt'));
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.deepEqual(readdirSync(f.original), ['Probe.txt']);
+  assert.equal(readFileSync(join(f.original, 'Probe.txt'), 'utf8'), 'original');
+});
+
+test('identical reviews retain approval while changed results require a new review', t => {
+  const f = fixture(t, 'folder');
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed');
+  const id = f.review();
+  assert.equal(f.review(), id);
+  writeFileSync(f.file, 'changed');
+  const newId = f.review();
+  assert.notEqual(newId, id);
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /Review is stale/);
+  assertFinished(f, f.invoke('finish', f.job, newId, '--apply'), 'applied');
+});
+
+test('discard can remove a completed result while preserving the original and recovery backups', t => {
+  const f = fixture(t, 'folder');
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'unapplied');
+  const recovery = join(f.job, 'apply-backup-test');
+  mkdirSync(recovery);
+  assert.match(f.invoke('discard', f.job).result.message, /recovery backup remains/);
+  assert.equal(readFileSync(f.file, 'utf8'), 'unapplied');
+  rmSync(recovery, { recursive: true });
+  assertFinished(f, f.invoke('discard', f.job), 'discarded');
+  assert.equal(readFileSync(f.source, 'utf8'), 'original');
+});
+
+test('a cleanup retry preserves a replacement directory with the same cleanup name', t => {
+  const f = fixture(t, 'folder');
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed');
+  const id = f.review();
+  const extra = join(f.job, 'result.zip');
+  writeFileSync(extra, 'preserve');
+  assert.equal(f.invoke('finish', f.job, id, '--apply').events[0].event, 'cleanup-pending');
+  rmSync(extra);
+  renameSync(f.cwd, join(f.original, 'saved-worker'));
+  const replacement = join(dirname(f.cwd), 'cleanup-work');
+  mkdirSync(replacement);
+  writeFileSync(join(replacement, 'other.txt'), 'untouched');
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /identity changed/);
+  assert.equal(readFileSync(join(replacement, 'other.txt'), 'utf8'), 'untouched');
+});
+
+for (const recreateWorkspace of [false, true]) {
+  test(`finish preserves an artifact created during workspace removal (replacement workspace: ${recreateWorkspace})`, t => {
+    const f = fixture(t, 'folder', { preloadFor: { finish: `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { basename, dirname, join } from 'node:path';
+      const remove = fs.rmSync;
+      fs.rmSync = (path, ...args) => {
+        const result = remove(path, ...args);
+        if (basename(path) === 'cleanup-work') {
+          const directory = ${recreateWorkspace} ? join(dirname(path), 'work') : process.argv[3];
+          if (${recreateWorkspace}) fs.mkdirSync(directory);
+          fs.writeFileSync(join(directory, 'late.txt'), 'preserve');
+        }
+        return result;
+      };
+      syncBuiltinESMExports();
+    ` } });
+    writeFileSync(f.file, 'reviewed');
+    f.setStatus('review-ready');
+    const id = f.review();
+    const result = f.invoke('finish', f.job, id, '--apply');
+    const message = recreateWorkspace ? /Additional workspace entries/ : /Unreviewed job entry remains: late.txt/;
+    assert.match(result.result.message ?? '', message);
+    assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+    const late = join(recreateWorkspace ? f.cwd : f.job, 'late.txt');
+    assert.equal(readFileSync(late, 'utf8'), 'preserve');
+    unlinkSync(late);
+    if (recreateWorkspace) rmdirSync(f.cwd);
+    assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+  });
+}
+
+test('a cleanup retry preserves unreviewed files after partial removal of a copy', t => {
+  const f = fixture(t, 'folder', { preloadFor: { finish: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { basename, join } from 'node:path';
+    const remove = fs.rmSync;
+    fs.rmSync = (path, ...args) => {
+      if (basename(path) === 'cleanup-work' && fs.existsSync(join(path, 'probe.txt'))) {
+        fs.unlinkSync(join(path, 'probe.txt'));
+        throw new Error('Simulated partial workspace removal');
+      }
+      return remove(path, ...args);
+    };
+    syncBuiltinESMExports();
+  ` }, configureFolder(root) {
+    const data = join(root, 'data');
+    mkdirSync(data);
+    writeFileSync(join(data, 'original.txt'), 'retain until cleanup');
+    if (process.platform !== 'win32') chmodSync(data, 0o555);
+  } });
+  if (process.platform !== 'win32') chmodSync(join(f.original, 'data'), 0o755);
+  writeFileSync(f.file, 'reviewed');
+  f.setStatus('review-ready');
+  const id = f.review();
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /Simulated partial workspace removal/);
+  const cleanup = join(dirname(f.cwd), 'cleanup-work');
+  const unknown = join(cleanup, 'new.txt');
+  writeFileSync(unknown, 'unreviewed');
+  const result = f.invoke('finish', f.job, id, '--apply');
+  assert.match(result.result.message ?? '', /Unreviewed file remains in cleanup workspace/);
+  assert.equal(readFileSync(unknown, 'utf8'), 'unreviewed');
+  assert.equal(existsSync(join(cleanup, 'probe.txt')), false);
+  assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+  unlinkSync(unknown);
+  assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+});
+
+test('copy and apply retain POSIX directory permissions', { skip: process.platform === 'win32' }, t => {
+  const f = fixture(t, 'folder', { configureFolder(root) {
+    mkdirSync(join(root, 'data'));
+    chmodSync(join(root, 'data'), 0o1555);
+  } });
+  const data = join(f.cwd, 'data');
+  assert.equal(lstatSync(data).mode & 0o7777, 0o1555);
+  chmodSync(data, 0o1750);
+  writeFileSync(join(data, 'result.txt'), 'preserved');
+  f.setStatus('review-ready');
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.equal(lstatSync(join(f.original, 'data')).mode & 0o7777, 0o1750);
+  assert.equal(readFileSync(join(f.original, 'data', 'result.txt'), 'utf8'), 'preserved');
+});
+
+test('apply can remove a reviewed read-only POSIX subtree', { skip: process.platform === 'win32' }, t => {
+  const f = fixture(t, 'folder', { configureFolder(root) {
+    const data = join(root, 'data');
+    mkdirSync(data);
+    writeFileSync(join(data, 'old.txt'), 'old');
+    chmodSync(data, 0o555);
+  } });
+  const workerData = join(f.cwd, 'data');
+  chmodSync(workerData, 0o755);
+  rmSync(workerData, { recursive: true });
+  f.setStatus('review-ready');
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.equal(existsSync(join(f.original, 'data')), false);
+});
+
+for (const kind of ['git', 'copy']) {
+  test(`${kind}: apply ignores the original checkout's untracked POSIX directory mode`,
+    { skip: process.platform === 'win32' }, t => {
+      const f = fixture(t, kind, { configureFolder(root) {
+        const data = join(root, 'data');
+        mkdirSync(data);
+        writeFileSync(join(data, 'old.txt'), 'old');
+        chmodSync(data, 0o750);
+      } });
+      const workerData = join(f.cwd, 'data');
+      chmodSync(workerData, 0o755);
+      renameSync(workerData, join(f.cwd, 'moved'));
+      f.setStatus('review-ready');
+      assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+      assert.equal(existsSync(join(f.original, 'data')), false);
+      assert.equal(readFileSync(join(f.original, 'moved', 'old.txt'), 'utf8'), 'old');
+    });
+}
+
+function linkFixture(t, { chained = false, preloadFor } = {}) {
+  let canLink = false;
+  const f = fixture(t, 'folder', { preloadFor, configureFolder(root) {
+    for (const folder of ['first', 'second']) {
+      mkdirSync(join(root, folder));
+      writeFileSync(join(root, folder, 'note.txt'), folder);
+    }
+    try {
+      symlinkSync('first', join(root, 'bridge'), 'dir');
+      if (chained) symlinkSync('bridge', join(root, 'outer'), 'dir');
+      canLink = true;
+    } catch (error) {
+      if (process.platform !== 'win32' || error.code !== 'EPERM' || process.env.GITHUB_ACTIONS === 'true') throw error;
+    }
+  } });
+  if (!canLink) {
+    t.skip('Windows symlink permission is unavailable');
+    return null;
+  }
+  return f;
+}
+
+test('apply keeps an edited relative directory link usable after cleanup', t => {
+  const f = linkFixture(t);
+  if (!f) return;
+  unlinkSync(join(f.cwd, 'bridge'));
+  symlinkSync('second', join(f.cwd, 'bridge'), 'dir');
+  f.setStatus('review-ready');
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.ok(lstatSync(join(f.original, 'bridge')).isSymbolicLink());
+  assert.equal(readFileSync(join(f.original, 'bridge', 'note.txt'), 'utf8'), 'second');
+});
+
+test('apply preserves a new link if the corresponding original link now resolves elsewhere', t => {
+  const f = linkFixture(t);
+  if (!f) return;
+  unlinkSync(join(f.original, 'bridge'));
+  symlinkSync('second', join(f.original, 'bridge'), 'dir');
+  symlinkSync('bridge/note.txt', join(f.cwd, 'alias.txt'), 'file');
+  f.setStatus('review-ready');
+  assert.match(f.invoke('finish', f.job, f.review(), '--apply').result.message, /different target/);
+  assert.equal(existsSync(join(f.original, 'alias.txt')), false);
+  assert.equal(readFileSync(join(f.cwd, 'alias.txt'), 'utf8'), 'first');
+});
+
+test('apply checks parent traversal after following an intermediate POSIX symlink',
+  { skip: process.platform === 'win32' }, t => {
+    const f = fixture(t, 'folder', { configureFolder(root) {
+      for (const name of ['first', 'second']) {
+        mkdirSync(join(root, name, 'sub'), { recursive: true });
+        writeFileSync(join(root, name, 'probe.txt'), name);
+      }
+      symlinkSync('first/sub', join(root, 'jump'), 'dir');
+    } });
+    unlinkSync(join(f.original, 'jump'));
+    symlinkSync('second/sub', join(f.original, 'jump'), 'dir');
+    symlinkSync('jump/../probe.txt', join(f.cwd, 'alias.txt'), 'file');
+    f.setStatus('review-ready');
+    assert.equal(readFileSync(join(f.cwd, 'alias.txt'), 'utf8'), 'first');
+    assert.match(f.invoke('finish', f.job, f.review(), '--apply').result.message ?? '', /different target/);
+    assert.equal(existsSync(join(f.original, 'alias.txt')), false);
+    assert.equal(readFileSync(join(f.cwd, 'alias.txt'), 'utf8'), 'first');
+  });
+
+test('prepare detects links that resolve outside the original after following a POSIX symlink',
+  { skip: process.platform === 'win32' }, t => {
+    const f = fixture(t, 'folder');
+    writeFileSync(join(dirname(f.original), 'probe.txt'), 'outside');
+    symlinkSync('.', join(f.original, 'jump'), 'dir');
+    symlinkSync('jump/../probe.txt', join(f.original, 'alias.txt'), 'file');
+    assert.equal(readFileSync(join(f.original, 'alias.txt'), 'utf8'), 'outside');
+    assert.match(f.invoke('prepare', f.original).result.message, /resolves outside the movable workspace/);
+  });
+
+test('apply preserves a link that indirectly resolves to a temporary job file', t => {
+  const f = linkFixture(t);
+  if (!f) return;
+  const prompt = join(f.job, 'prompt.txt');
+  const outsideLink = join(dirname(f.original), 'outside.txt');
+  writeFileSync(prompt, 'temporary');
+  const caseAlias = join(dirname(f.job), basename(f.job).toUpperCase(), 'prompt.txt');
+  symlinkSync(existsSync(caseAlias) ? caseAlias : prompt, outsideLink, 'file');
+  symlinkSync(outsideLink, join(f.cwd, 'alias.txt'), 'file');
+  f.setStatus('review-ready');
+
+  const result = f.invoke('finish', f.job, f.review(), '--apply');
+  assert.match(result.result.message, /resolves into the temporary job/);
+  assert.equal(existsSync(join(f.original, 'alias.txt')), false);
+  assert.equal(readFileSync(join(f.cwd, 'alias.txt'), 'utf8'), 'temporary');
+});
+
+test('a cleanup retry rechecks applied link targets after the worker folder was moved', t => {
+  const preloadFor = { finish: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { basename, dirname, join } from 'node:path';
+    const remove = fs.rmSync;
+    fs.rmSync = (path, ...args) => {
+      if (basename(path) === 'cleanup-work' && fs.existsSync(join(dirname(process.argv[3]), 'block-cleanup'))) {
+        throw new Error('Simulated interruption after moving the workspace');
+      }
+      return remove(path, ...args);
+    };
+    syncBuiltinESMExports();
+  ` };
+  const f = linkFixture(t, { preloadFor });
+  if (!f) return;
+  const block = join(dirname(f.job), 'block-cleanup');
+  const bridge = join(f.original, 'bridge');
+  const cleanup = join(dirname(f.cwd), 'cleanup-work');
+  symlinkSync('bridge/note.txt', join(f.cwd, 'alias.txt'), 'file');
+  f.setStatus('review-ready');
+  const id = f.review();
+  writeFileSync(block, '');
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /Simulated interruption/);
+  unlinkSync(block);
+  assert.equal(existsSync(f.cwd), false);
+  assert.equal(existsSync(cleanup), true);
+  unlinkSync(bridge);
+  symlinkSync('second', bridge, 'dir');
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /different target/);
+  assert.equal(existsSync(cleanup), true);
+  unlinkSync(bridge);
+  symlinkSync('first', bridge, 'dir');
+  assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+  assert.equal(readFileSync(join(f.original, 'alias.txt'), 'utf8'), 'first');
+});
+
+for (const recreate of [false, true]) {
+  test(`apply preserves the original when a Windows link target changes type (recreated: ${recreate})`,
+    { skip: process.platform !== 'win32' }, t => {
+      const f = linkFixture(t);
+      if (!f) return;
+      const data = join(f.cwd, 'first');
+      rmSync(data, { recursive: true });
+      writeFileSync(data, 'worker file');
+      if (recreate) {
+        unlinkSync(join(f.cwd, 'bridge'));
+        symlinkSync('first', join(f.cwd, 'bridge'), 'file');
+      }
+      f.setStatus('review-ready');
+      const outcome = f.invoke('finish', f.job, f.review(), '--apply');
+      assert.equal(outcome.code, 1);
+      assert.match(outcome.result.message, /Windows link target type changed/);
+      assert.equal(readFileSync(join(f.original, 'bridge', 'note.txt'), 'utf8'), 'first');
+      assert.equal(readFileSync(data, 'utf8'), 'worker file');
+    });
+}
+
+test('apply preserves a Windows directory link when its intermediate link is retargeted to a file',
+  { skip: process.platform !== 'win32' }, t => {
+    const f = linkFixture(t, { chained: true });
+    if (!f) return;
+    unlinkSync(join(f.cwd, 'bridge'));
+    symlinkSync('probe.txt', join(f.cwd, 'bridge'), 'file');
+    f.setStatus('review-ready');
+    const outcome = f.invoke('finish', f.job, f.review(), '--apply');
+    assert.equal(outcome.code, 1);
+    assert.match(outcome.result.message, /Windows link target type changed/);
+    assert.equal(readFileSync(join(f.original, 'outer', 'note.txt'), 'utf8'), 'first');
+  });
