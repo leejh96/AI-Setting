@@ -373,7 +373,7 @@ async function main([action, ...args]) {
     if (outcome.kept) return emit('kept', { job, cwd: outcome.kept, original: outcome.original });
     rmSync(job, { recursive: true, force: true });
     unlockWorkspace = null;
-    emit(outcome.archive ? 'archived' : 'applied', { original: outcome.original, archive: outcome.archive });
+    emit('applied', { original: outcome.original });
   } finally {
     if (unlockWorkspace && existsSync(join(state.cwd, '..', 'operation.lock'))) unlockWorkspace();
     if (existsSync(join(job, 'operation.lock'))) unlock();

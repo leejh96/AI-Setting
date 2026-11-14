@@ -5,13 +5,8 @@ import {
   rmdirSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { git, prepareWorkspace } from './workspace.mjs';
-
-function inside(root, path) {
-  const rel = relative(root, path);
-  return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep);
-}
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { git, isWithin, prepareWorkspace } from './workspace.mjs';
 
 function identity(path) {
   const info = lstatSync(path, { bigint: true });
@@ -137,12 +132,12 @@ export function prepareResult(job, target, copy) {
   if (target !== undefined && !isAbsolute(target)) throw new Error('Pass an absolute original folder.');
   const original = target === undefined ? null : realpathSync(target);
   const originalIdentity = original ? identity(original) : null;
-  if (original && inside(original, job)) throw new Error('The temporary job must be outside the original folder.');
+  if (original && isWithin(original, job)) throw new Error('The temporary job must be outside the original folder.');
   const isGit = original && gitRoot(original);
   if (copy && !isGit) throw new Error('--copy requires a Git worktree. Pass a regular folder without --copy.');
   const originalGit = isGit ? gitState(original) : null;
   const originalFiles = original && !isGit ? snapshot(original) : null;
-  const workspace = prepareWorkspace(job, isGit ? original : undefined, { copy });
+  const workspace = prepareWorkspace(job, { original: isGit ? original : undefined, head: originalGit?.head, copy });
   if (originalFiles) copyTree(original, workspace.cwd, originalFiles);
   const baseline = snapshot(workspace.cwd, workspace.kind === 'git');
   writeRecord(job, 'baseline.json', { original, originalIdentity, originalGit, entries: [...baseline] });
@@ -199,10 +194,10 @@ function verifyLinkTargets(job, cwd, destination, entries) {
     if (info?.type !== 'link') continue;
     const oldTarget = resolve(dirname(join(cwd, name)), info.target);
     const newTarget = resolve(dirname(join(destination, name)), info.target);
-    if (inside(job, newTarget) || (inside(job, oldTarget) && !inside(cwd, oldTarget))) {
+    if (isWithin(job, newTarget) || (isWithin(job, oldTarget) && !isWithin(cwd, oldTarget))) {
       throw new Error('Result link points into the temporary job and would break after cleanup: ' + name);
     }
-    const movesWithResult = inside(cwd, oldTarget) && inside(destination, newTarget)
+    const movesWithResult = isWithin(cwd, oldTarget) && isWithin(destination, newTarget)
       && relative(cwd, oldTarget) === relative(destination, newTarget);
     if (oldTarget !== newTarget && !movesWithResult) {
       throw new Error('Result link would point to a different target after relocation: ' + name);
@@ -325,7 +320,7 @@ function applyResult(job, workspace, review) {
 function hasGitWorkspace(job, workspace) {
   const records = git(workspace.original, ['worktree', 'list', '--porcelain', '-z']).split('\0\0');
   const entries = records.map(record => record.split('\0')[0]).filter(line => line.startsWith('worktree '))
-    .map(line => line.slice('worktree '.length)).filter(path => inside(job, path));
+    .map(line => line.slice('worktree '.length)).filter(path => isWithin(job, path));
   if (entries.some(path => path !== workspace.cwd)) throw new Error('Additional Git worktrees exist under the job.');
   return entries.length !== 0;
 }
@@ -344,27 +339,17 @@ export function finalizeResult(job, workspace, state, id, decision) {
   const review = readRecord(job, 'review.json');
   if (review.id !== id || review.turn !== state.turn) throw new Error('Review is stale. Review the current results before asking again.');
   const recordPath = join(job, 'finalized.json');
-  let outcome;
   if (lstatSync(recordPath, { throwIfNoEntry: false })) {
-    outcome = readRecord(job, 'finalized.json');
+    const outcome = readRecord(job, 'finalized.json');
+    if (outcome.decision !== '--apply') throw new Error('Unsupported finalization record. Job was preserved.');
     if (outcome.id !== id || outcome.decision !== decision) throw new Error('Retry finish with the original review and decision.');
-    if (decision === '--keep') {
-      if (!lstatSync(workspace.cwd, { throwIfNoEntry: false })) {
-        if (!outcome.archive) throw new Error('The saved workspace could not be found.');
-        if (keyFor(snapshot(join(outcome.archive, 'files'))) !== review.result) throw new Error('Previously archived result changed.');
-        return { original: review.original, archive: outcome.archive };
-      }
-      verifyReviewedWorkspace(job, workspace, state, review);
-      return { original: review.original, kept: workspace.cwd };
-    }
   } else {
     verifyReviewedWorkspace(job, workspace, state, review);
     if (decision === '--keep') return { original: review.original, kept: workspace.cwd };
-    outcome = { id, decision, original: review.original };
     if (!review.original) throw new Error('This job has no recorded original baseline. Keep the result in its workspace.');
     verifyLinkTargets(job, workspace.cwd, review.original, review.changes.map(({ name, after }) => [name, after]));
     applyResult(job, workspace, review);
-    writeRecord(job, 'finalized.json', outcome);
+    writeRecord(job, 'finalized.json', { id, decision, original: review.original });
   }
   verifyApplied(verifyOriginal(readRecord(job, 'baseline.json')), review.changes);
   if (lstatSync(workspace.cwd, { throwIfNoEntry: false })
@@ -372,7 +357,7 @@ export function finalizeResult(job, workspace, state, id, decision) {
     throw new Error('Worker files changed before cleanup. Results were preserved.');
   }
   if (state.kind === 'git') removeGitWorkspace(job, workspace);
-  return outcome;
+  return { original: review.original };
 }
 
 function verifyReviewedWorkspace(job, workspace, state, review) {

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 const prefix = 'codex-agy-workspace-';
@@ -22,12 +22,6 @@ function sameEntry(a, b) {
   return a.dev === b.dev && a.ino === b.ino;
 }
 
-function sameDirectory(path, otherPath) {
-  const entry = statSync(path, { bigint: true });
-  const other = statSync(otherPath, { bigint: true });
-  return entry.isDirectory() && other.isDirectory() && sameEntry(entry, other);
-}
-
 function localDirectory(path) {
   if (!isAbsolute(path) || !lstatSync(path).isDirectory() || realpathSync(path) !== path) {
     throw new Error('Expected a canonical local directory: ' + path);
@@ -35,18 +29,8 @@ function localDirectory(path) {
   return path;
 }
 
-export function prepareWorkspace(job, target, { copy = false } = {}) {
-  let original;
-  let commit;
-  if (target !== undefined) {
-    if (!isAbsolute(target)) throw new Error('Pass an absolute original Git worktree path.');
-    original = realpathSync(target);
-    const top = git(original, ['rev-parse', '--show-toplevel']).trim();
-    if (!sameDirectory(top, original)) throw new Error('Pass the root of the original Git worktree.');
-    commit = copy ? copyCommit(original) : git(original, ['rev-parse', '--verify', 'HEAD^{commit}']).trim();
-  }
-  if (copy && !original) throw new Error('A Git repository is required for a file-only workspace.');
-  const baseline = copy ? readTree(original, commit) : undefined;
+export function prepareWorkspace(job, { original, head, copy }) {
+  const baseline = copy ? readTree(original, copyCommit(original)) : undefined;
   if (baseline && [...baseline.values()].some(entry => !['100644', '100755'].includes(entry.mode))) {
     throw new Error('File-only workspaces require a tree of regular files.');
   }
@@ -56,7 +40,7 @@ export function prepareWorkspace(job, target, { copy = false } = {}) {
   const directory = mkdtempSync(join(storage, prefix));
   const cwd = join(directory, 'work');
   try {
-    if (original && !copy) git(original, ['worktree', 'add', '--detach', '--', cwd, commit]);
+    if (original && !copy) git(original, ['worktree', 'add', '--detach', '--', cwd, head]);
     else {
       mkdirSync(cwd);
       if (baseline) writeBaseline(original, cwd, baseline);
@@ -68,7 +52,7 @@ export function prepareWorkspace(job, target, { copy = false } = {}) {
   }
   const { dev, ino } = lstatSync(cwd);
   writeFileSync(join(directory, manifest), JSON.stringify({ original, dev, ino }), { flag: 'wx', mode: 0o600 });
-  return { cwd, kind: original && !copy ? 'git' : 'temporary', ...(original ? { original } : {}) };
+  return { cwd, kind: original && !copy ? 'git' : 'temporary' };
 }
 
 export function managedWorkspace(cwd, job) {
@@ -138,7 +122,7 @@ function writeBaseline(original, cwd, baseline) {
   }
 }
 
-function isWithin(directory, path) {
+export function isWithin(directory, path) {
   const fromDirectory = relative(directory, path);
   return !isAbsolute(fromDirectory) && fromDirectory !== '..' && !fromDirectory.startsWith('..' + sep);
 }
