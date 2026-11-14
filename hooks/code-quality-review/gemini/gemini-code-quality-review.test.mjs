@@ -5,10 +5,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stopSession, finishWatch } from '../review-changes.mjs';
+import { formatAntigravityRule, parseAntigravityRuleFrontmatter, stripRuleFrontmatter } from '../review-request.mjs';
 import { createWatchTestRoot } from '../test-temp.mjs';
 
 const HOOK_PATH = fileURLToPath(new URL('./gemini-code-quality-review.mjs', import.meta.url));
 const REVIEW = readFileSync(new URL('../REVIEW.md', import.meta.url), 'utf8').trim();
+const REVIEW_RULE = formatAntigravityRule(REVIEW);
 const REQUEST = '[code-quality-review:request]\nA recorded review request';
 const user = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: '구현 요청' };
 const model = (content) => ({ type: 'PLANNER_RESPONSE', source: 'MODEL', content });
@@ -31,17 +33,21 @@ function run(script, input, args = [], env = {}) {
   });
 }
 
-async function fixture(fn, { review = REVIEW, changed = true } = {}) {
+async function fixture(fn, { review = REVIEW_RULE, changed = true } = {}) {
   const root = mkdtempSync(join(TEST_ROOT, 'fixture-'));
-  const directory = join(root, 'gemini');
-  mkdirSync(directory);
+  const hookRoot = join(root, 'hooks', 'code-quality-review');
+  const directory = join(hookRoot, 'gemini');
+  const rulesDirectory = join(root, 'rules');
+  const rulePath = join(rulesDirectory, 'code-quality-review.md');
+  mkdirSync(directory, { recursive: true });
+  mkdirSync(rulesDirectory, { recursive: true });
   const script = join(directory, 'gemini-code-quality-review.mjs');
   copyFileSync(HOOK_PATH, script);
-  copyFileSync(new URL('../review-request.mjs', import.meta.url), join(root, 'review-request.mjs'));
-  copyFileSync(new URL('../review-status.mjs', import.meta.url), join(root, 'review-status.mjs'));
-  copyFileSync(new URL('../review-changes.mjs', import.meta.url), join(root, 'review-changes.mjs'));
-  copyFileSync(new URL('../watch-worker.mjs', import.meta.url), join(root, 'watch-worker.mjs'));
-  if (review !== null) writeFileSync(join(root, 'REVIEW.md'), review);
+  copyFileSync(new URL('../review-request.mjs', import.meta.url), join(hookRoot, 'review-request.mjs'));
+  copyFileSync(new URL('../review-status.mjs', import.meta.url), join(hookRoot, 'review-status.mjs'));
+  copyFileSync(new URL('../review-changes.mjs', import.meta.url), join(hookRoot, 'review-changes.mjs'));
+  copyFileSync(new URL('../watch-worker.mjs', import.meta.url), join(hookRoot, 'watch-worker.mjs'));
+  if (review !== null) writeFileSync(rulePath, review);
   const transcriptPath = join(root, 'transcript.jsonl');
   const workspace = join(root, 'workspace');
   mkdirSync(workspace);
@@ -52,7 +58,7 @@ async function fixture(fn, { review = REVIEW, changed = true } = {}) {
   parse(run(script, event, ['--prepare']));
   writeFileSync(transcriptPath, [user, model('구현 완료')].map(JSON.stringify).join('\n'));
   if (changed) writeFileSync(join(workspace, 'code.mjs'), 'after');
-  try { await fn({ root, directory, script, transcriptPath, event }); }
+  try { await fn({ root, directory, script, rulePath, transcriptPath, event }); }
   finally {
     const before = { TMP: process.env.TMP, TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR };
     Object.assign(process.env, { TMP: TEST_ROOT, TEMP: TEST_ROOT, TMPDIR: TEST_ROOT });
@@ -396,18 +402,47 @@ test('잘못된 입력·대화 기록 누락·파싱 오류는 원문 없이 경
   });
 });
 
-test('REVIEW 누락·빈 파일 테스트는 자체 임시 루트 안에서만 파일을 만든다', async () => {
-  for (const review of [null, '  \n\t']) {
+test('규칙 파일 누락·빈 파일·frontmatter만 있는 경우 경고하고 검토 완료로 위장하지 않는다', async () => {
+  for (const review of [null, '  \n\t', '---\ntrigger: model_decision\ndescription: "empty"\n---\n  \n']) {
     await fixture(({ script, event }) => warns(run(script, event)), { review });
   }
 });
 
-test('잘못된 실행 인자는 경고, 잘못된 설정 생성 인자는 설치 가능한 JSON 없이 실패한다', async () => {
+test('잘못된 실행 인자는 경고, 잘못된 설정·규칙 생성 인자는 실패한다', async () => {
   warns(run(HOOK_PATH, '', ['--unexpected']));
   const result = run(HOOK_PATH, '', ['--print-config', '--unexpected']);
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /설정을 생성하지 못했습니다/);
+
+  const badRuleArgs = run(HOOK_PATH, '', ['--write-rule']);
+  assert.equal(badRuleArgs.status, 1);
+  assert.equal(badRuleArgs.stdout, '');
+  assert.match(badRuleArgs.stderr, /규칙 파일을 생성하지 못했습니다/);
+
+  await fixture(({ script }) => {
+    const missingSource = run(script, '', ['--print-rule']);
+    assert.equal(missingSource.status, 1);
+    assert.equal(missingSource.stdout, '');
+    assert.match(missingSource.stderr, /규칙 파일을 생성하지 못했습니다/);
+  }, { changed: false });
+});
+
+test('--print-rule과 --write-rule은 model_decision frontmatter와 REVIEW.md 본문으로 규칙 파일을 생성한다', async () => {
+  const printed = run(HOOK_PATH, '', ['--print-rule']);
+  assert.equal(printed.status, 0, printed.stderr);
+  const frontmatter = parseAntigravityRuleFrontmatter(printed.stdout);
+  assert.equal(frontmatter?.trigger, 'model_decision');
+  assert.ok(frontmatter?.description);
+  assert.equal(stripRuleFrontmatter(printed.stdout).replaceAll('\r\n', '\n').trim(), REVIEW.replaceAll('\r\n', '\n').trim());
+
+  await fixture(({ root }) => {
+    const writtenPath = join(root, 'generated', 'rules', 'code-quality-review.md');
+    const written = run(HOOK_PATH, '', ['--write-rule', writtenPath]);
+    assert.equal(written.status, 0, written.stderr);
+    assert.equal(written.stdout, '');
+    assert.equal(readFileSync(writtenPath, 'utf8'), printed.stdout);
+  }, { changed: false });
 });
 
 function generated(script, node = process.execPath, event = 'Stop') {
@@ -424,6 +459,7 @@ function generated(script, node = process.execPath, event = 'Stop') {
 
 function assertCommand(script, event, node = process.execPath) {
   const command = generated(script, node);
+  const expectedRulePath = join(dirname(script), '..', '..', '..', 'rules', 'code-quality-review.md');
   let result;
   if (process.platform === 'win32') {
     // Antigravity can split the command without treating quotes as shell syntax.
@@ -438,13 +474,13 @@ function assertCommand(script, event, node = process.execPath) {
       assert.deepEqual(args, [script.replaceAll('\\', '/')]);
       continues(parse(spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
         input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV,
-      })), join(dirname(script), '..', 'REVIEW.md'));
+      })), expectedRulePath);
     }
     result = spawnSync(exe, args, { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV });
   } else {
     result = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', timeout: 15_000, env: TEST_ENV });
   }
-  continues(parse(result), join(dirname(script), '..', 'REVIEW.md'));
+  continues(parse(result), expectedRulePath);
 }
 
 test('현재 Node와 훅 경로로 생성한 설정 명령이 셸 해석에 의존하지 않고 실행된다', async () => {
@@ -514,6 +550,6 @@ test('macOS 형식 명령을 Windows Git sh에서 검사한다(실제 macOS 실�
     const command = output['ai-setting-code-quality-review'].Stop[0].command;
     const shell = process.env.CODE_QUALITY_REVIEW_TEST_POSIX_SHELL;
     assert.ok(existsSync(shell));
-    continues(parse(spawnSync(shell, ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV })), join(dirname(target), '..', 'REVIEW.md'));
+    continues(parse(spawnSync(shell, ['-c', command], { input: JSON.stringify(event), encoding: 'utf8', windowsHide: true, timeout: 15_000, env: TEST_ENV })), join(dirname(target), '..', '..', '..', 'rules', 'code-quality-review.md'));
   });
 });

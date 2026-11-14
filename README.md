@@ -119,7 +119,7 @@ Codex와 Antigravity의 `PreToolUse`에서 강제 푸시, Git 훅 우회, 재귀
 
 훅 실행 코드는 저장소를 직접 참조하지 않고 각 도구의 사용자 디렉터리에 복사합니다. Codex는 `~/.codex/hooks/<훅 이름>/`, Antigravity는 `~/.gemini/config/hooks/<훅 이름>/`를 사용합니다. `CODEX_HOME`을 별도로 지정한 Codex는 설치 경로와 등록 파일 `hooks.json` 모두 해당 홈을 기준으로 합니다.
 
-각 훅의 운영체제별 안내에 따라 필요한 공통 파일과 해당 도구 어댑터를 같은 상대 경로 구조로 복사한 뒤, 설치본의 `--print-config`를 실행합니다. 기존 등록을 해당 명령으로 갱신하고 다른 훅·활성화 상태를 보존합니다. 심볼릭 링크는 사용하지 않으며 테스트·개발 문서는 런타임 설치에서 제외합니다.
+각 훅의 운영체제별 안내에 따라 필요한 공통 파일과 해당 도구 어댑터를 같은 상대 경로 구조로 복사한 뒤, 설치본의 `--print-config`를 실행합니다. 기존 등록을 해당 명령으로 갱신하고 다른 훅·활성화 상태를 보존합니다. 심볼릭 링크는 사용하지 않으며 테스트·개발 문서는 런타임 설치에서 제외합니다. `code-quality-review`의 `REVIEW.md`는 Codex 훅 폴더에 복사하고, Antigravity에서는 훅 폴더 접근 제한을 피하기 위해 `~/.gemini/config/rules/code-quality-review.md`에 `trigger: model_decision` 규칙 파일로 생성합니다.
 
 Codex 데스크톱 설정 목록의 번호형 제목은 앱이 정합니다. 실행 중이나 CLI의 `/hooks`에서는 `statusMessage`로 훅의 역할을 확인할 수 있습니다. Antigravity 설정에서는 역할별 그룹 키로 구분합니다.
 
@@ -149,7 +149,7 @@ cd ai-setting
 
 ## 설치 상태 점검
 
-저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅 복사본을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
+저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅 복사본과 Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
 
 누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 점검은 설치 파일과 설정을 읽으며, 훅 신뢰 등록과 새 세션에서 실제 실행되는지는 앱에서 확인합니다.
 

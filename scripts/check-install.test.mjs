@@ -38,6 +38,14 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
       ['code-quality-review', 'code-quality-review'], ['command-guard', 'command-guard']]) {
       const destination = join(base, 'hooks', folder);
       cpSync(join(repo, 'hooks', folder), destination, { recursive: true });
+      if (adapter === 'gemini' && folder === 'code-quality-review') {
+        rmSync(join(destination, 'REVIEW.md'));
+        const ruleResult = run(process.execPath, [
+          join(repo, 'hooks', folder, adapter, `${adapter}-${entry}.mjs`),
+          '--write-rule', join(base, 'rules', 'code-quality-review.md'),
+        ]);
+        assert.equal(ruleResult.status, 0, ruleResult.stderr);
+      }
       const result = run(process.execPath, [join(destination, adapter, `${adapter}-${entry}.mjs`), '--print-config']);
       assert.equal(result.status, 0, result.stderr);
       const generated = JSON.parse(result.stdout);
@@ -51,7 +59,21 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
   const healthy = scan();
   assert.equal(healthy.status, 0, healthy.stdout + healthy.stderr);
   assert.match(healthy.stdout, /Antigravity 훅 신뢰/);
+  assert.match(healthy.stdout, /Antigravity rules\/code-quality-review\.md/);
   assert.match(healthy.stdout, /Git 전역 pre-commit/);
+
+  const geminiRulePath = join(gemini, 'rules', 'code-quality-review.md');
+  writeFileSync(geminiRulePath, '---\ntrigger: always_on\ndescription: "wrong"\n---\n\nchanged body\n');
+  const ruleDrift = scan('antigravity');
+  assert.equal(ruleDrift.status, 1, ruleDrift.stdout);
+  assert.match(ruleDrift.stdout, /frontmatter\(trigger: model_decision, description\) 누락 또는 불일치/);
+  assert.match(ruleDrift.stdout, /code-quality-review\.md 본문 내용 불일치/);
+  assert.doesNotMatch(ruleDrift.stdout, /Codex|Git 전역/);
+
+  rmSync(geminiRulePath);
+  const missingRule = scan('antigravity');
+  assert.equal(missingRule.status, 1, missingRule.stdout);
+  assert.match(missingRule.stdout, /code-quality-review\.md 누락/);
 
   const codexConfig = join(codex, 'hooks.json');
   const config = JSON.parse(readFileSync(codexConfig, 'utf8'));

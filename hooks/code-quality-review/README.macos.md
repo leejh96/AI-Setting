@@ -13,21 +13,24 @@ command -v node
 
 ## 실행 파일 복사
 
-등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일이 있으면 용도를 확인해 별도로 정리합니다.
+등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일(예: 이전 Antigravity 설치본의 `$gemini_hook_target/REVIEW.md`)이 있으면 용도를 확인해 별도로 정리합니다.
 
 ```sh
 codex_hook_target="${CODEX_HOME:-$HOME/.codex}/hooks/code-quality-review"
 gemini_hook_target="$HOME/.gemini/config/hooks/code-quality-review"
-mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini"
-for hook_runtime_file in REVIEW.md review-request.mjs review-status.mjs review-changes.mjs watch-worker.mjs; do
+gemini_rules_target="$HOME/.gemini/config/rules"
+mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" "$gemini_rules_target"
+for hook_runtime_file in review-request.mjs review-status.mjs review-changes.mjs watch-worker.mjs; do
   cp "hooks/code-quality-review/$hook_runtime_file" "$codex_hook_target/"
   cp "hooks/code-quality-review/$hook_runtime_file" "$gemini_hook_target/"
 done
+cp "hooks/code-quality-review/REVIEW.md" "$codex_hook_target/"
 cp "hooks/code-quality-review/codex/codex-code-quality-review.mjs" "$codex_hook_target/codex/"
 cp "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" "$gemini_hook_target/gemini/"
+node "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" --write-rule "$gemini_rules_target/code-quality-review.md"
 ```
 
-설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.
+Antigravity는 전역 훅 폴더 접근 제한을 피하기 위해 `REVIEW.md`를 훅 폴더에 두지 않고, 저장소 어댑터의 `--write-rule`로 `rules/code-quality-review.md`에 `trigger: model_decision` frontmatter를 붙여 생성합니다(`--print-rule`로 출력 내용을 미리 확인할 수 있습니다). 설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사·규칙 생성합니다.
 
 ## Codex
 
@@ -45,7 +48,7 @@ Codex를 재시작하고 CLI `/hooks`에서 출처와 명령을 검토해 신뢰
 node "$gemini_hook_target/gemini/gemini-code-quality-review.mjs" --print-config
 ```
 
-기존 `~/.gemini/config/hooks.json` 전체를 백업하고 출력의 `ai-setting-code-quality-review` 안의 `PreInvocation`과 `Stop`을 함께 병합합니다. 기존 `enabled` 상태와 시크릿 검사 등 다른 훅을 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`을 사용합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
+기존 `~/.gemini/config/hooks.json` 전체를 백업하고 출력의 `ai-setting-code-quality-review` 안의 `PreInvocation`과 `Stop`을 함께 병합합니다. 기존 `enabled` 상태와 시크릿 검사 등 다른 훅을 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
 Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 활성 상태를 확인합니다. 생성한 따옴표를 임의로 제거하지 말고 앱 안에서 명령이 실제로 실행되는지 확인합니다.
 

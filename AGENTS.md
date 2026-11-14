@@ -19,7 +19,8 @@
 - 전역 훅 코드는 각 도구의 사용자 디렉터리에 실제 파일로 복사합니다. 저장소의 스크립트를 직접 실행하도록 등록하거나 심볼릭 링크로 연결하지 않습니다.
 - Codex 설치 기준은 `~/.codex/hooks/<훅 이름>/`, 등록 파일은 `~/.codex/hooks.json`입니다. `CODEX_HOME`을 별도로 사용하면 해당 홈을 기준으로 합니다.
 - Antigravity 설치 기준은 `~/.gemini/config/hooks/<훅 이름>/`, 등록 파일은 `~/.gemini/config/hooks.json`입니다. Gemini CLI 설정과 혼동하지 않습니다.
-- 설치·동기화가 요청된 범위에서 원본을 수정·검증한 뒤 공통 모듈·워커·규칙 파일·`REVIEW.md`와 해당 도구의 어댑터를 상대 경로 구조 그대로 복사합니다. 테스트·개발 문서·반대 도구 어댑터는 런타임 설치 대상에서 제외합니다.
+- 설치·동기화가 요청된 범위에서 원본을 수정·검증한 뒤 공통 모듈·워커·규칙 파일과 해당 도구의 어댑터를 상대 경로 구조 그대로 복사합니다. 테스트·개발 문서·반대 도구 어댑터는 런타임 설치 대상에서 제외합니다.
+- `code-quality-review`의 `REVIEW.md`는 Codex의 경우 `~/.codex/hooks/code-quality-review/REVIEW.md`에 그대로 복사하고, Antigravity의 경우 전역 훅 폴더 접근 제한을 피하기 위해 훅 폴더에는 복사하지 않고 저장소 어댑터의 `--write-rule`로 `~/.gemini/config/rules/code-quality-review.md`(프로젝트 설치 시 `.agents/rules/code-quality-review.md`)에 `trigger: model_decision` frontmatter를 붙여 생성합니다. 기존 규칙 파일이 있으면 백업·대조 후 갱신합니다.
 - 설정은 복사한 어댑터의 `--print-config`로 생성하고 기존 항목에 병합합니다. 다른 훅·이벤트·옵션·활성화 상태를 보존하고 중복 등록하지 않습니다.
 - 훅을 추가하거나 갱신할 때 역할이 드러나는 이름을 사용합니다. Codex는 핸들러의 실행 상태 문구(`statusMessage`)를 지정하고, Antigravity는 역할별로 고유한 그룹 키를 사용합니다. 기존 그룹의 키는 활성화 설정을 유지하도록 보존합니다.
 - 변경 전 설정 전체와 기존 설치본을 복구할 수 있게 준비하고, 설치본에 별도 수정이 있으면 대조합니다. 복구용 사본은 저장소 밖에 접근 권한을 보호해 보관합니다.

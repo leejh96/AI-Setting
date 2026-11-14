@@ -1,11 +1,25 @@
-import { openSync, fstatSync, readSync, closeSync, readFileSync } from 'node:fs';
+import { openSync, fstatSync, readSync, closeSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
-import { createReviewRequest, watchFailureWarning, terminalWarning } from '../review-request.mjs';
+import {
+  antigravityRuleFile,
+  createReviewRequest,
+  formatAntigravityRule,
+  watchFailureWarning,
+  terminalWarning,
+} from '../review-request.mjs';
 import { hasTerminalReviewStatus } from '../review-status.mjs';
 import { checkChanges, prepareChanges, stopChanges, ChangeWatchError } from '../review-changes.mjs';
 
+const REVIEW_RULE_PATH = fileURLToPath(new URL(`../../../rules/${antigravityRuleFile}`, import.meta.url));
+
 function warn(message) { if (message) process.stderr.write(`${message}\n`); return {}; }
+
+function buildRule() {
+  const sourcePath = fileURLToPath(new URL('../REVIEW.md', import.meta.url));
+  return formatAntigravityRule(readFileSync(sourcePath, 'utf8'));
+}
 
 function printConfig() {
   const quote = process.platform === 'win32'
@@ -122,7 +136,7 @@ async function runHook() {
   }
   if (changes.terminal) return warn(terminalWarning(changes.terminal, changes.failed));
   if (!changes.changed) return {};
-  const reason = `[code-quality-review:request]\n${createReviewRequest()}`;
+  const reason = `[code-quality-review:request]\n${createReviewRequest(REVIEW_RULE_PATH)}`;
 
   if (!stopHookActive || !changes.reviewing) {
     const grant = await changes.record('review-requested');
@@ -143,6 +157,12 @@ async function runHook() {
 try {
   if (process.argv.length === 3 && process.argv[2] === '--print-config') {
     printConfig();
+  } else if (process.argv.length === 3 && process.argv[2] === '--print-rule') {
+    process.stdout.write(buildRule());
+  } else if (process.argv.length === 4 && process.argv[2] === '--write-rule' && process.argv[3]) {
+    const content = buildRule();
+    mkdirSync(dirname(process.argv[3]), { recursive: true });
+    writeFileSync(process.argv[3], content, 'utf8');
   } else if (process.argv.length === 3 && process.argv[2] === '--prepare') {
     process.stdout.write(`${JSON.stringify(await prepareHook())}\n`);
   } else if (process.argv.length === 2) {
@@ -154,10 +174,13 @@ try {
   if (process.argv.includes('--print-config')) {
     process.stderr.write('코드 품질 검토 훅 설정을 생성하지 못했습니다. 실행 인자와 Node·스크립트 경로를 확인하세요.\n');
     process.exitCode = 1;
+  } else if (process.argv.includes('--print-rule') || process.argv.includes('--write-rule')) {
+    process.stderr.write('코드 품질 검토 규칙 파일을 생성하지 못했습니다. 저장소 원본 REVIEW.md와 대상 경로를 확인하세요.\n');
+    process.exitCode = 1;
   } else if (process.argv[2] === '--prepare' && error instanceof ChangeWatchError) {
     process.stdout.write(`${JSON.stringify(warn(watchFailureWarning))}\n`);
   } else {
-    process.stderr.write('코드 품질 검토 훅의 변경 추적 또는 검토를 실행하지 못했습니다. 자동 검토 완료로 간주하지 말고 준비 훅·작업 폴더·대화 기록·REVIEW.md를 확인하세요.\n');
+    process.stderr.write('코드 품질 검토 훅의 변경 추적 또는 검토를 실행하지 못했습니다. 자동 검토 완료로 간주하지 말고 준비 훅·작업 폴더·대화 기록·rules/code-quality-review.md를 확인하세요.\n');
     process.stdout.write('{}\n');
   }
 }

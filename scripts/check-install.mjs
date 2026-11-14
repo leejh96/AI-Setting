@@ -4,6 +4,11 @@ import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellCommands } from '../hooks/command-guard/shell-commands.mjs';
+import {
+  antigravityRuleFile,
+  parseAntigravityRuleFrontmatter,
+  stripRuleFrontmatter,
+} from '../hooks/code-quality-review/review-request.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const windows = process.platform === 'win32';
@@ -123,6 +128,48 @@ function checkRegistration(registrations, label, path, event, tool, prepare, sec
   report(`${label} · ${event}`, problems);
 }
 
+function normalizeBody(markdown) {
+  return stripRuleFrontmatter(markdown).replace(/^\uFEFF/, '').replaceAll('\r\n', '\n').trim();
+}
+
+function checkAntigravityReviewRule(home) {
+  const sourcePath = join(repo, 'hooks', 'code-quality-review', 'REVIEW.md');
+  const targetPath = join(home, 'rules', antigravityRuleFile);
+  const label = `Antigravity rules/${antigravityRuleFile}`;
+  let sourceBody;
+  try {
+    sourceBody = normalizeBody(readFileSync(sourcePath, 'utf8'));
+  } catch {
+    report(label, ['원본 REVIEW.md를 읽을 수 없음']);
+    return;
+  }
+  const installed = lstatSync(targetPath, { throwIfNoEntry: false });
+  if (!installed) {
+    report(label, [`${antigravityRuleFile} 누락`]);
+    return;
+  }
+  if (!installed.isFile()) {
+    report(label, [`${antigravityRuleFile} 파일 형식 확인 (실제 복사본 필요)`]);
+    return;
+  }
+  let targetText;
+  try {
+    targetText = readFileSync(targetPath, 'utf8');
+  } catch {
+    report(label, [`${antigravityRuleFile}를 읽을 수 없음`]);
+    return;
+  }
+  const problems = [];
+  const frontmatter = parseAntigravityRuleFrontmatter(targetText);
+  if (!frontmatter || frontmatter.trigger !== 'model_decision' || !frontmatter.description) {
+    problems.push('frontmatter(trigger: model_decision, description) 누락 또는 불일치');
+  }
+  if (normalizeBody(targetText) !== sourceBody) {
+    problems.push(`${antigravityRuleFile} 본문 내용 불일치`);
+  }
+  report(label, problems);
+}
+
 function checkClient(codex) {
   const name = codex ? 'Codex' : 'Antigravity';
   const adapter = codex ? 'codex' : 'gemini';
@@ -145,13 +192,14 @@ function checkClient(codex) {
     const installed = join(home, source);
     const label = `${name} ${hook}`;
     checkCopy(label, source, installed, file => file.isDirectory() ? file.name === adapter
-      : !testFile(file.name) && (!file.name.endsWith('.md') || file.name === 'REVIEW.md'));
+      : !testFile(file.name) && (!file.name.endsWith('.md') || (codex && file.name === 'REVIEW.md')));
     if (!registrations) continue;
     const script = join(installed, adapter, `${adapter}-${entry}.mjs`);
     const tool = hook === 'command-guard' ? (codex ? 'Bash' : 'run_command') : undefined;
     checkRegistration(registrations, label, script, codex ? codexEvent : geminiEvent, tool, Boolean(stop), hook === 'prompt-secret-checker');
     if (stop) checkRegistration(registrations, label, script, stop);
   }
+  if (!codex) checkAntigravityReviewRule(home);
   console.log(`${name} 훅 신뢰·새 세션에서의 실행 여부는 앱에서 확인`);
 }
 

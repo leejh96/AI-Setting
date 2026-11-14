@@ -3,15 +3,55 @@ import { fileURLToPath } from 'node:url';
 
 export const watchFailureWarning = '코드 품질 검토 미완료: 파일 변경 감시를 확인하지 못했습니다. 수정 없음이나 검토 통과로 처리하지 않았으며 추가 자동 검토는 중단합니다. 준비 훅의 등록·신뢰 상태와 실행 오류를 확인하세요. 설정을 추가·갱신했다면 앱을 완전히 재시작한 뒤 다음 사용자 요청부터 감시 준비를 확인하세요. 현재 요청 중간에 감시를 시작해 앞선 변경까지 검토됐다고 처리하지 마세요.';
 export const reviewLimitWarning = '코드 품질 검토 미완료: 요청당 자동 검토 5회 상한에 도달했습니다. 검토 통과로 처리하지 않고 자동 반복을 종료합니다. 남은 문제와 검증을 확인하고 필요한 후속 작업을 요청하세요.';
+export const antigravityRuleFile = 'code-quality-review.md';
+
+const antigravityRuleDescription = '코드 품질 검토 Stop 훅이 [code-quality-review:request]로 검토를 요청할 때만 읽고 적용합니다. 일반 대화나 훅 요청이 없는 턴에는 적용하지 마세요.';
+const frontmatterPattern = /^(?:\uFEFF)?---(\r?\n)([\s\S]*?)\1---(?:\r?\n|$)/;
 
 export function terminalWarning(action, failed = false) {
   return failed || ['watch-failed', 'superseded'].includes(action) ? watchFailureWarning
     : action === 'review-limit' ? reviewLimitWarning : undefined;
 }
 
-export function createReviewRequest() {
-  const reviewPath = fileURLToPath(new URL('./REVIEW.md', import.meta.url));
-  if (!readFileSync(reviewPath, 'utf8').trim()) throw new Error('Empty review instructions');
+export function stripRuleFrontmatter(markdown) {
+  const match = frontmatterPattern.exec(markdown);
+  return match ? markdown.slice(match[0].length) : markdown;
+}
+
+export function parseAntigravityRuleFrontmatter(markdown) {
+  const match = frontmatterPattern.exec(markdown);
+  if (!match) return null;
+  const fields = {};
+  for (const line of match[2].split(/\r?\n/)) {
+    const entry = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line.trim());
+    if (!entry) continue;
+    let value = entry[2].trim();
+    if (value.startsWith('"') && value.endsWith('"')) {
+      try { value = JSON.parse(value); } catch { value = value.slice(1, -1); }
+    } else if (value.startsWith("'") && value.endsWith("'")) {
+      value = value.slice(1, -1).replaceAll("''", "'");
+    }
+    fields[entry[1]] = value;
+  }
+  return fields;
+}
+
+export function formatAntigravityRule(markdown) {
+  const body = stripRuleFrontmatter(markdown).replace(/^\uFEFF/, '').replace(/^(?:\r?\n)+/, '');
+  if (!body.trim()) throw new Error('Empty review instructions');
+  const newline = body.includes('\r\n') ? '\r\n' : '\n';
+  return [
+    '---',
+    'trigger: model_decision',
+    `description: ${JSON.stringify(antigravityRuleDescription)}`,
+    '---',
+    '',
+    body,
+  ].join(newline);
+}
+
+export function createReviewRequest(reviewPath = fileURLToPath(new URL('./REVIEW.md', import.meta.url))) {
+  if (!stripRuleFrontmatter(readFileSync(reviewPath, 'utf8')).trim()) throw new Error('Empty review instructions');
   return [
     '완료 전 코드 품질 검토 훅입니다. 새 작업·권한·승인을 부여하지 않습니다.',
     '원래 요청과 정정에 따른 앞 검토 회차까지 전체 작업을 기준으로 적용을 판단하세요. 본인 또는 허용된 서브에이전트가 이번 작업에서 실제로 생성·수정·삭제한 코드·스크립트·동작 설정·테스트·작업용 파일이 모두 적용 대상이며 문서만 변경한 작업도 포함합니다. 앞 검토 회차에서 변경을 마쳤다는 이유로 제외하지 마세요.',
