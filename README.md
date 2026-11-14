@@ -25,7 +25,9 @@ ai-setting/
 │   ├── korean-writing/  # 한국어 업무 문서 작성·퇴고
 │   ├── task-lessons/   # 재사용할 작업 교훈의 조회·기록·정리
 │   ├── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
-│   └── antigravity-worker/ # Antigravity에 작업을 위임하고 Codex에서 검토
+│   └── antigravity-worker/ # ACP 세션으로 위임
+├── archive/
+│   └── antigravity-worker/ # 기존 터미널 버전 보관
 └── .gitignore    # 로컬 환경파일과 생성 파일 제외
 ```
 
@@ -56,7 +58,7 @@ ai-setting/
 | [task-lessons](skills/task-lessons/SKILL.md) | 반복 실패나 뜻밖의 제약 등으로 이전 교훈이 다음 행동을 바꿀 때 | 프로젝트별 교훈 조회·기록·갱신·폐기 |
 | [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
 | [tech-research](skills/tech-research/SKILL.md) | 공식 근거·기술 선택·호환성·상충하는 기술 주장 조사 | 관련 코드와 공식 원문·버전 대조, 사실·추론·실행 확인 구분 |
-| [antigravity-worker](skills/antigravity-worker/SKILL.md) | Codex에서 Antigravity를 실행 워커로 위임 | Antigravity 대화형 화면, 터미널 재사용, Stop 훅 완료 감지 |
+| [antigravity-worker](skills/antigravity-worker/SKILL.md) | Codex에서 Antigravity 워커를 ACP로 실행 | 같은 ACP 세션 재개, 작업별 모델·추론 수준 선택, 슬래시 명령 조회 |
 
 여러 스킬의 적용 조건이 겹치면 각 전문 절차를 필요한 범위에서 함께 사용합니다. 예를 들어 복잡한 버그 수정은 진행 상태를 추적하면서 원인을 좁힐 수 있고, 업무 분기가 바뀌면 결정 테이블로 확인할 수 있습니다. 같은 계획·조사·검증 결과는 공유하고 중복 작성·실행하지 않습니다.
 
@@ -69,11 +71,11 @@ ai-setting/
 | Codex | `~/.codex/skills/<스킬 이름>` | `$<스킬 이름>` |
 | Antigravity | `~/.gemini/config/skills/<스킬 이름>` | `/<스킬 이름>` |
 
-**`antigravity-worker`는 Codex 전용입니다.** Windows와 macOS의 Codex에 설치합니다. 두 에이전트를 함께 동기화할 때도 Antigravity의 스킬 설치 대상에서는 제외합니다. 각 기기에서 Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다.
+**`antigravity-worker`는 Codex 전용입니다.** `skills/antigravity-worker/` 전체를 Codex에 복사합니다. Node.js 22 이상과 로그인된 Antigravity CLI가 필요합니다. 새 작업을 시작하기 전에 `agy update`로 CLI를 확인하고 필요하면 업데이트합니다. `start`와 `follow-up`에 모델과 추론 수준을 지정할 수 있고, `capabilities`와 `quota`로 슬래시 명령과 남은 할당량을 각각 조회합니다. [워커 사용법](skills/antigravity-worker/SKILL.md)
 
-워커 실행에는 `skills/antigravity-worker/scripts/worker.mjs`와 같은 폴더의 `agy.mjs`, `workspace.mjs`가 함께 필요합니다. 같은 작업의 후속 요청은 `follow-up`으로 터미널을 재사용하고, 분리할 때는 `--new-terminal`을 붙입니다. `prepare`로 만든 전용 워크트리와 임시 폴더는 결과 반영을 확인한 뒤 `finish`로 정리합니다. 회귀 테스트는 저장소 루트에서 `node --test skills/antigravity-worker/worker.test.mjs`로 실행합니다. [실행 및 복구 안내](skills/antigravity-worker/SKILL.md)
+새 작업은 Codex 홈의 `antigravity-worker/worktrees/` 아래에 생성하며, 이 경로에 쓰는 명령은 별도 권한 검토를 거칩니다. 검토 후 원본 적용 여부를 묻고, 적용을 검증하면 작업 폴더와 로그를 정리합니다. 중단·실패한 작업은 종료를 확인한 뒤 `discard`로 정리할 수 있습니다. [결과 적용·보관](skills/antigravity-worker/SKILL.md#원본-적용-또는-별도-보관) · [중단·실패 후 정리](skills/antigravity-worker/SKILL.md#중단실패-후-정리)
 
-새 터미널의 워커 기록은 Codex 홈 아래 `antigravity-worker/jobs/`에 저장합니다. 다음 워커 실행 때 터미널 종료 후 24시간이 지났고 작업 정리가 확인된 기록을 삭제합니다. [작업 기록 보관 기준](skills/antigravity-worker/SKILL.md#작업-기록-보관)
+기존 터미널 버전은 [보관 디렉터리](archive/antigravity-worker/SKILL.md)에 두고 동기화 대상에서 제외합니다. 이전 설치를 갱신할 때는 터미널 버전과 `antigravity-worker-acp` 설치본을 스킬 검색 경로 밖에 보관한 뒤 현재 `antigravity-worker`를 설치합니다.
 
 **`task-lessons`는 Codex 전용입니다.** 경로 계산에 Node.js 22 이상을 사용합니다. 교훈은 `~/.codex/task-lessons`에 프로젝트별로 저장하며 `CODEX_HOME` 또는 `CODEX_LESSONS_DIR` 설정을 따릅니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 

@@ -1,546 +1,388 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
-import { display, effort, installHooks, model, recordHook, runAgy, startupGraceMs } from './agy.mjs';
-import { lockWorkspace, managedWorkspace, prepareWorkspace, removeWorkspace } from './workspace.mjs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { parseArgs, stripVTControlCharacters } from 'node:util';
+import { lockWorkspace, managedWorkspace } from './workspace.mjs';
+import { configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
+import { finalizeResult, prepareResult, removeGitWorkspace, reviewResult } from './results.mjs';
 
-const runner = fileURLToPath(import.meta.url);
-const requestFile = 'request.json';
-const jobPrefix = 'codex-agy-worker-';
-const jobName = /^codex-agy-worker-[a-z0-9]{6}$/i;
-const retentionMs = 24 * 60 * 60 * 1000;
-const finishedStatuses = new Set(['review-ready', 'changed-after-handoff', 'interrupted', 'timed-out', 'failed', 'startup-timeout']);
-const quotePowerShell = (value) => `'${value.replace(/['\u2018-\u201b]/g, (char) => char + char)}'`;
-const quoteShell = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-const jobsDirectory = () => join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'jobs');
+const jobPrefix = 'codex-agy-acp-';
+const jobsRoot = () => join(resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), 'antigravity-worker', 'worktrees');
+const emit = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
 
-function readOptional(path) {
+function agyExecutable() {
+  const installed = join(homedir(), '.local', 'bin', 'agy');
+  return process.platform !== 'win32' && existsSync(installed) ? installed : 'agy';
+}
+
+function connectWorker(cwd, profile, logs, onUpdate = () => {}) {
+  return connect(agyExecutable(), cwd, profile, join(logs, 'agy.log'), join(logs, 'stderr.log'), onUpdate);
+}
+
+function updateCli() {
+  const executable = agyExecutable();
+  const result = spawnSync(executable, ['update'], {
+    cwd: tmpdir(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 120_000,
+  });
+  const report = stripVTControlCharacters([result.stdout, result.stderr].filter(Boolean).join('\n')).trim();
+  if (result.error) throw new Error(`Antigravity update could not run (${result.error.code}).`);
+  if (result.status !== 0) throw new Error(report || `Antigravity update failed (${result.signal ?? result.status}).`);
+  const version = spawnSync(executable, ['--version'], {
+    cwd: tmpdir(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 10_000,
+  });
+  if (version.error || version.status !== 0 || !version.stdout?.trim()) {
+    throw new Error('Could not verify the installed Antigravity version after update.');
+  }
+  emit('cli-updated', { version: version.stdout.trim(), report });
+}
+
+function quota() {
+  const cwd = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-acp-quota-'));
   try {
-    return readFileSync(path, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    return null;
-  }
-}
-
-function readJson(directory, name) {
-  const value = readOptional(join(directory, name));
-  return value === null ? null : JSON.parse(value);
-}
-
-function writeJson(directory, name, value) {
-  const temporary = join(directory, `${name}.${process.pid}.tmp`);
-  writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
-  try {
-    renameSync(temporary, join(directory, name));
-  } catch (error) {
-    unlinkSync(temporary);
-    throw error;
-  }
-}
-
-function findAgy() {
-  const executable = process.platform === 'win32' ? 'agy.exe' : 'agy';
-  const installDirectory = process.platform === 'win32'
-    ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'agy', 'bin')
-    : join(homedir(), '.local', 'bin');
-  const directories = [...(process.env.PATH ?? '').split(delimiter), installDirectory];
-  for (const entry of directories) {
-    const directory = entry.replace(/^"|"$/g, '');
-    if (!isAbsolute(directory)) continue;
-    try {
-      const candidate = join(directory, executable);
-      accessSync(candidate, constants.X_OK);
-      if (statSync(candidate).isFile()) return candidate;
-    } catch (error) {
-      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-    }
-  }
-  throw new Error('Antigravity CLI (agy) was not found on PATH.');
-}
-
-function launchTerminal(directory) {
-  let launched;
-  if (process.platform === 'win32') {
-    const args = `"${runner}" serve "${directory}"`;
-    const command = `$ErrorActionPreference = 'Stop'\nStart-Process -FilePath ${quotePowerShell(process.execPath)} -ArgumentList ${quotePowerShell(args)} -WindowStyle Normal`;
-    const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    launched = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
-      encoding: 'utf8', windowsHide: true, timeout: startupGraceMs,
+    const result = spawnSync(agyExecutable(), ['-p', '/usage', '--print-timeout', '15s'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 25_000,
     });
-  } else if (process.platform === 'darwin') {
-    const commandFile = join(directory, 'antigravity-worker.command');
-    const command = [process.execPath, runner, 'serve', directory].map(quoteShell).join(' ');
-    writeFileSync(commandFile, `#!/bin/sh\nexec ${command}\n`, { mode: 0o700, flag: 'wx' });
-    launched = spawnSync('/usr/bin/open', ['-a', 'Terminal', commandFile], { encoding: 'utf8', timeout: startupGraceMs });
-  } else {
-    throw new Error('Use Windows or macOS.');
-  }
-  if (launched.error || launched.status !== 0) {
-    throw new Error(launched.error?.message || launched.stderr?.trim() || 'Could not open a worker terminal.');
+    if (result.error) throw new Error(`Antigravity quota lookup could not run (${result.error.code}).`);
+    if (result.status !== 0) throw new Error(`Antigravity quota lookup failed (${result.signal ?? result.status}).`);
+    const report = stripVTControlCharacters(result.stdout).trim();
+    if (!report) throw new Error('Antigravity returned no quota report.');
+    emit('quota', { report });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 }
 
-function lockPath(cwd) {
-  return join(cwd, '.agents', '.codex-antigravity-worker.lock');
-}
-
-function controlPath(job, action) {
-  return join(job.terminalDirectory, `${action}-${basename(job.jobDirectory)}`);
-}
-
-function cleanupRecord(directory, name) {
-  return lstatSync(join(directory, name), { throwIfNoEntry: false })?.isFile() ? readJson(directory, name) : null;
-}
-
-function cleanupJobs(directory, protectedTerminal) {
-  let entries;
-  try { entries = readdirSync(directory, { withFileTypes: true }); }
-  catch { return; }
-  const cutoff = Date.now() - retentionMs;
-  const uid = process.getuid?.();
-  const groups = new Map();
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !jobName.test(entry.name)) continue;
-    const path = join(directory, entry.name);
-    try {
-      const identity = lstatSync(path);
-      if (!identity.isDirectory() || (uid !== undefined && identity.uid !== uid)) continue;
-      const job = cleanupRecord(path, 'job.json');
-      if (job?.jobDirectory !== path || typeof job.cwd !== 'string' || !isAbsolute(job.cwd)
-          || typeof job.terminalDirectory !== 'string' || dirname(job.terminalDirectory) !== directory
-          || !jobName.test(basename(job.terminalDirectory))) continue;
-      const group = groups.get(job.terminalDirectory) ?? [];
-      group.push({ job, identity });
-      groups.set(job.terminalDirectory, group);
-    } catch { /* Preserve records whose ownership or metadata cannot be read. */ }
-  }
-  for (const [terminal, group] of groups) {
-    const initial = group.find(({ job }) => job.jobDirectory === terminal);
-    if (!initial || terminal === protectedTerminal) continue;
-    try {
-      const closedAt = cleanupRecord(terminal, 'closed.json')?.timestamp;
-      const pid = cleanupRecord(terminal, 'terminal.json')?.pid;
-      if (!Number.isSafeInteger(closedAt) || closedAt > cutoff || !Number.isSafeInteger(pid) || pid <= 0
-          || lstatSync(join(terminal, requestFile), { throwIfNoEntry: false })
-          || lstatSync(lockPath(initial.job.cwd), { throwIfNoEntry: false })) continue;
-      if (managedWorkspace(initial.job.cwd, directory, { finishing: true })) continue;
-      if (!group.every(({ job }) => {
-        const result = cleanupRecord(job.jobDirectory, 'result.json');
-        return job.cwd === initial.job.cwd && Number.isSafeInteger(job.createdAt)
-          && finishedStatuses.has(result?.status) && (result.tuiOpen === undefined || result.tuiOpen === false)
-          && Number.isSafeInteger(result.finishedAt) && result.finishedAt >= job.createdAt && result.finishedAt <= closedAt;
-      })) continue;
-      // Keep the terminal record until its follow-up records have been removed.
-      for (const { job, identity } of [...group.filter(item => item !== initial), initial]) {
-        const current = lstatSync(job.jobDirectory, { throwIfNoEntry: false });
-        if (!current) continue;
-        if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino) break;
-        rmSync(job.jobDirectory, { recursive: true, force: true, maxRetries: 2 });
-      }
-    } catch { /* Uncertain records and inaccessible directories can be checked again on a later start. */ }
-  }
-}
-
-function reserveWorktree(job) {
-  const configDirectory = join(job.cwd, '.agents');
-  let createdDirectory = false;
+async function capabilities(path = process.cwd()) {
+  if (!isAbsolute(path) || !lstatSync(realpathSync(path)).isDirectory()) throw new Error('Pass an absolute workspace directory.');
+  const cwd = realpathSync(path);
+  const temporary = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-acp-capabilities-'));
+  const profile = join(temporary, 'gemini');
+  let client;
   try {
-    mkdirSync(configDirectory);
-    createdDirectory = true;
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
+    mkdirSync(profile, { mode: 0o700 });
+    client = connectWorker(cwd, profile, temporary);
+    const session = await openSession(client, cwd);
+    const commands = await client.listCommands(session.sessionId);
+    if (session.canClose) await client.request('session/close', { sessionId: session.sessionId }, 5_000);
+    emit('capabilities', { cwd, agent: session.agent, options: session.options, models: session.availableModels, commands });
+  } finally {
+    await client?.shutdown();
+    rmSync(temporary, { recursive: true, force: true });
   }
-  if (realpathSync(configDirectory) !== configDirectory) throw new Error('The .agents directory must be local to the worktree.');
-  const lock = lockPath(job.cwd);
-  try {
-    writeFileSync(lock, job.jobDirectory, { flag: 'wx', mode: 0o600 });
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    throw new Error(`The worktree is locked by ${readOptional(lock) || 'another worker'}. Check ${lock}.`);
-  }
-  return () => {
-    if (readOptional(lock) !== job.jobDirectory) throw new Error(`Worker lock changed during execution: ${lock}`);
-    unlinkSync(lock);
-    if (createdDirectory) {
-      try {
-        rmdirSync(configDirectory);
-      } catch (error) {
-        if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error;
-      }
-    }
-  };
 }
 
-function readJob(directory) {
-  if (!isAbsolute(directory)) throw new Error('Pass an absolute job directory.');
-  const jobDirectory = realpathSync(directory);
-  const job = readJson(jobDirectory, 'job.json');
-  if (!job) throw new Error(`No job found in ${jobDirectory}.`);
-  return { ...job, jobDirectory };
+function save(job, status) {
+  const temporary = join(job, `status.${process.pid}.tmp`);
+  writeFileSync(temporary, JSON.stringify(status) + '\n', { mode: 0o600 });
+  renameSync(temporary, join(job, 'status.json'));
 }
 
-function terminalInfo(directory) {
-  const terminal = readJson(directory, 'terminal.json');
-  if (!terminal) return { terminalOpen: false };
-  if (readJson(directory, 'closed.json')) return { terminalOpen: false, terminalPid: terminal.pid };
+function readJob(path) {
+  if (!isAbsolute(path ?? '') || !lstatSync(path).isDirectory()) throw new Error('Pass the absolute ACP job path.');
+  const job = realpathSync(path);
+  const root = jobsRoot();
+  const parent = dirname(job);
+  if (!/^codex-agy-acp-[a-z0-9]{6}$/i.test(basename(job)) || (parent !== realpathSync(tmpdir())
+      && (!existsSync(root) || parent !== realpathSync(root)))) throw new Error('Expected an ACP job from prepare.');
+  return { job, state: JSON.parse(readFileSync(join(job, 'status.json'), 'utf8')) };
+}
+
+function prepare(target, copy) {
+  const root = jobsRoot();
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const job = mkdtempSync(join(realpathSync(root), jobPrefix));
+  let workspace;
   try {
-    process.kill(terminal.pid, 0);
-    return { terminalOpen: true, terminalPid: terminal.pid };
+    workspace = prepareResult(job, target, copy);
   } catch (error) {
-    if (error.code === 'ESRCH') return { terminalOpen: false, terminalPid: terminal.pid };
-    if (error.code === 'EPERM') return { terminalOpen: null, terminalPid: terminal.pid };
+    if (!existsSync(join(job, 'workspaces'))) rmSync(job, { recursive: true, force: true });
+    else throw new Error(`${error.message} Check the temporary job at ${job}.`);
     throw error;
   }
+  const state = { ...workspace, status: 'prepared' };
+  save(job, state);
+  emit('prepared', { job, ...state });
 }
 
-function legacyStatus(job, result) {
-  const { jobDirectory, createdAt } = job;
-  if (result) {
-    const transcript = result.transcriptPath && statSync(result.transcriptPath, { throwIfNoEntry: false });
-    const changed = result.status === 'review-ready' && transcript?.mtimeMs > result.transcriptTimestamp;
-    return { jobDirectory, ...result, status: changed ? 'changed-after-handoff' : result.status };
+function workspaceFor(job, state) {
+  const workspace = managedWorkspace(state.cwd, job);
+  if (!workspace) throw new Error('The job workspace is missing or its identity changed.');
+  if (existsSync(join(state.cwd, '.agents', '.codex-antigravity-worker.lock'))) {
+    throw new Error('The terminal worker holds a lock in this workspace.');
   }
-  const started = statSync(join(jobDirectory, 'started'), { throwIfNoEntry: false });
-  const status = started ? 'running' : Date.now() - createdAt > startupGraceMs ? 'startup-timeout' : 'starting';
-  return { jobDirectory, status };
+  return workspace;
 }
 
-function jobStatus(job) {
-  const { jobDirectory, terminalDirectory, terminalReason, createdAt } = job;
-  const result = readJson(jobDirectory, 'result.json');
-  if (!terminalDirectory) return legacyStatus(job, result);
-  const terminal = terminalInfo(terminalDirectory);
-  const base = { jobDirectory, terminalDirectory, terminalReason, ...terminal };
-  if (result) return { ...base, ...result };
-  const progress = readJson(jobDirectory, 'progress.json');
-  if (terminal.terminalPid && terminal.terminalOpen === false) {
-    const lock = lockPath(job.cwd);
-    const cleanup = readOptional(lock) === jobDirectory;
-    return {
-      ...base, ...progress, status: cleanup ? 'cleanup-needed' : 'terminal-lost',
-      ...(cleanup && { lockPath: lock, hookPath: join(job.cwd, '.agents', 'hooks.json') }),
-    };
-  }
-  if (progress) return { ...base, ...progress };
-  const launchError = readJson(jobDirectory, 'launch-error.json');
-  if (launchError) return { ...base, status: 'launch-failed', error: launchError.error };
-  const expired = Date.now() - createdAt >= startupGraceMs;
-  return { ...base, status: expired ? 'startup-timeout' : 'starting', phase: 'terminal-starting' };
-}
+async function promptWorker(job, previous, action, promptPath, { edit, model, effort }) {
+  if (!isAbsolute(promptPath ?? '')) throw new Error('Pass an absolute UTF-8 prompt file path.');
+  const prompt = readFileSync(promptPath, 'utf8').trim();
+  if (!prompt) throw new Error('The prompt file is empty.');
+  const unlock = lockWorkspace(workspaceFor(job, previous));
+  const state = { ...previous, status: 'starting', stopReason: null, error: null, runnerPid: process.pid, workerPid: null };
+  let client;
+  let session;
+  let responseReceived = false;
+  let sent = false;
+  let cancelTimer;
+  let cancelPoll;
+  let cancelSent = false;
+  const { promise: cancelDeadline, reject: cancelExpired } = Promise.withResolvers();
 
-export function status(directory) {
-  return jobStatus(readJob(directory));
-}
-
-function readPrompt(promptFile) {
-  if (!isAbsolute(promptFile) || !statSync(promptFile).isFile()) throw new Error('Pass an absolute prompt file path.');
-  const prompt = readFileSync(promptFile, 'utf8').replace(/^\uFEFF/, '');
-  if (!prompt.trim()) throw new Error('The prompt is empty.');
-  if (process.platform === 'win32' && prompt.length > 12_000) throw new Error('Keep the Windows interactive prompt to 12,000 characters.');
-  return prompt;
-}
-
-export function start(worktree, promptFile, options = {}) {
-  if (!isAbsolute(worktree)) throw new Error('Pass an absolute worktree path.');
-  const cwd = realpathSync(worktree);
-  if (!statSync(cwd).isDirectory()) throw new Error('Expected a worktree directory.');
-  const workspace = managedWorkspace(cwd, options.jobRoot ?? jobsDirectory());
-  const unlock = workspace && lockWorkspace(workspace);
-  try {
-    return queueJob(cwd, promptFile, options);
-  } finally {
-    unlock?.();
-  }
-}
-
-function queueJob(cwd, promptFile, { previous, newTerminal = false, launch = launchTerminal, locateAgy = findAgy, jobRoot = jobsDirectory() }) {
-  const prompt = readPrompt(promptFile);
-  const lock = lockPath(cwd);
-  const owner = readOptional(lock);
-  if (owner !== null) throw new Error(`The worktree is locked by ${owner || 'another worker'}. Check ${lock}.`);
-
-  const storage = jobRoot;
-  mkdirSync(storage, { recursive: true, mode: 0o700 });
-  const info = lstatSync(storage);
-  const uid = process.getuid?.();
-  if (!info.isDirectory() || (uid !== undefined && (info.uid !== uid || (info.mode & 0o077)))) {
-    throw new Error('Worker storage must be a private directory owned by the current user.');
-  }
-  const root = realpathSync(storage);
-  let terminalDirectory;
-  let terminalReason = newTerminal ? 'requested' : 'initial';
-  if (previous) {
-    const earlier = previous;
-    if (earlier.cwd !== cwd) throw new Error('Follow-up must use the previous job’s worktree.');
-    const prior = jobStatus(earlier);
-    if (!readJson(earlier.jobDirectory, 'result.json') && !['terminal-lost', 'startup-timeout', 'launch-failed'].includes(prior.status)) {
-      throw new Error(`The previous job is still pending or needs cleanup: ${prior.status}.`);
-    }
-    if (!newTerminal) {
-      // The request is queued by hard link inside the selected storage root.
-      const reusable = earlier.terminalDirectory && dirname(earlier.terminalDirectory) === root
-        && prior.terminalReusable !== false && prior.status !== 'startup-timeout';
-      if (reusable && prior.terminalOpen === null) throw new Error('Unable to verify the previous terminal from this session.');
-      if (reusable && prior.terminalOpen) terminalDirectory = earlier.terminalDirectory;
-      terminalReason = terminalDirectory ? 'reused' : 'previous-terminal-unavailable';
-    }
-  }
-  const agy = locateAgy();
-  cleanupJobs(root, previous?.terminalDirectory ?? previous?.jobDirectory);
-  const jobDirectory = realpathSync(mkdtempSync(join(root, jobPrefix)));
-  terminalDirectory ??= jobDirectory;
-  const job = { cwd, agy, createdAt: Date.now(), jobDirectory, terminalDirectory, terminalReason };
-  try {
-    writeJson(jobDirectory, 'job.json', job);
-    writeFileSync(join(jobDirectory, 'prompt.txt'), prompt, { mode: 0o600, flag: 'wx' });
-    // A hard link publishes the whole request atomically and refuses to overwrite a queued job.
-    linkSync(join(jobDirectory, 'job.json'), join(terminalDirectory, requestFile));
-  } catch (error) {
-    let cleanup = '';
+  function cancel() {
+    if (!sent || responseReceived || cancelSent) return;
+    cancelSent = true;
     try {
-      rmSync(jobDirectory, { recursive: true, force: true });
-    } catch (cleanupError) {
-      cleanup = ` Could not remove staged job ${jobDirectory}: ${cleanupError.message}`;
-    }
-    throw new Error(`Could not queue the job in ${terminalDirectory}: ${error.message}${cleanup}`, { cause: error });
-  }
-  if (terminalDirectory === jobDirectory) {
-    try {
-      launch(terminalDirectory);
+      client.cancel(session.sessionId);
+      emit('cancel-requested', { sessionId: session.sessionId });
+      cancelTimer = setTimeout(() => cancelExpired(new Error('ACP did not acknowledge cancellation.')), 15_000);
     } catch (error) {
-      writeJson(jobDirectory, 'launch-error.json', { error: error.message });
+      cancelExpired(error);
     }
   }
-  return status(jobDirectory);
-}
 
-export async function followUp(previous, promptFile, options) {
-  const earlier = readJob(previous);
-  const current = jobStatus(earlier);
-  if (earlier.terminalDirectory && current.tuiOpen && current.status === 'review-ready' && !current.finishedAt) {
-    readPrompt(promptFile);
-    await retireReviewed(earlier, current);
-  }
-  return start(earlier.cwd, promptFile, { ...options, previous: earlier });
-}
-
-async function retireReviewed(job, current) {
-  if (!current.terminalOpen) throw new Error('Unable to confirm the previous terminal is open.');
-  const deadline = Date.now() + 15_000;
-  writeJson(job.terminalDirectory, basename(controlPath(job, 'retire')), {
-    eventTimestamp: current.eventTimestamp, expiresAt: deadline,
-  });
-  while (!readJson(job.jobDirectory, 'result.json')) {
-    const state = jobStatus(job);
-    const stillReviewed = state.status === 'review-ready' && state.eventTimestamp === current.eventTimestamp;
-    if (Date.now() >= deadline || (!stillReviewed && state.status !== 'stopping')) {
-      throw new Error('Could not close the previous Antigravity screen safely. Check its status before retrying.');
-    }
-    await delay(100);
-  }
-}
-
-export async function finish(directory, published, jobs = jobsDirectory(), mode = 'identical') {
-  if (!['identical', 'applied', 'discard'].includes(mode)) throw new Error('Invalid workspace cleanup mode.');
-  if (published !== undefined) throw new Error('Finish verifies a Git integration branch and does not take a published directory.');
-  jobs = realpathSync(jobs);
-  const job = readJob(directory);
-  if (dirname(job.jobDirectory) !== jobs || !jobName.test(basename(job.jobDirectory))) throw new Error('Expected a local worker job.');
-  const workspace = managedWorkspace(job.cwd, jobs, { finishing: true });
-  if (!workspace) throw new Error('Only a workspace created by prepare can be removed.');
-  const unlock = lockWorkspace(workspace);
-  let branchResult;
   try {
-    for (const entry of readdirSync(jobs, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !jobName.test(entry.name)) continue;
-      const path = join(jobs, entry.name);
-      if (path === job.jobDirectory) continue;
-      const other = cleanupRecord(path, 'job.json');
-      if (other?.cwd !== job.cwd) continue;
-      const result = cleanupRecord(path, 'result.json');
-      if (other.createdAt >= job.createdAt || !finishedStatuses.has(result?.status) || result.tuiOpen === true || !result.finishedAt) {
-        throw new Error('Another job for this workspace is active, newer or needs cleanup.');
-      }
+    // A separate invocation may have finished a turn after we first read status.
+    const current = readJob(job).state;
+    if (current.turn !== previous.turn || current.status !== previous.status) {
+      throw new Error('Job status changed. Inspect status and retry.');
     }
-    const current = jobStatus(job);
-    if (current.status === 'review-ready' && !current.finishedAt) {
-      await retireReviewed(job, current);
+    if (action === 'follow-up' ? !current.sessionId : Boolean(current.sessionId)) {
+      throw new Error('Use start for a new session and follow-up for an existing session.');
     }
-    const result = jobStatus(job);
-    const accepted = finishedStatuses.has(result.status);
-    if (!accepted) throw new Error(`Cannot finish a worker in state ${result.status}. Confirm that it has stopped and recovered its temporary hooks.`);
-    const screenClosed = result.tuiOpen === false || (result.tuiOpen === undefined && !result.workerPid);
-    if (!screenClosed || !Number.isSafeInteger(result.finishedAt) || result.finishedAt < job.createdAt
-        || lstatSync(lockPath(job.cwd), { throwIfNoEntry: false })
-        || (job.terminalDirectory && readJson(job.terminalDirectory, requestFile)?.jobDirectory === job.jobDirectory)) {
-      throw new Error('The worker screen and workspace lock have not been safely released.');
+    if (['cleanup-needed', 'starting', 'running', 'workspace-removed'].includes(current.status)) {
+      throw new Error(`Job requires inspection: ${current.status}.`);
     }
-    branchResult = removeWorkspace(workspace);
-  } finally {
+    if (existsSync(join(job, 'finalized.json'))) throw new Error('Retry finish to complete the approved cleanup.');
+  } catch (error) {
     unlock();
+    throw error;
   }
-  rmdirSync(workspace.directory);
-  return { status: 'workspace-removed', cwd: workspace.cwd, ...branchResult };
-}
 
-export function cancel(directory) {
-  const job = readJob(directory);
-  const current = status(directory);
-  if (!current.terminalOpen || current.finishedAt || !['starting', 'agy-starting', 'agy-running', 'agy-settling', 'review-ready', 'changed-after-handoff', 'stopping'].includes(current.status)) {
-    throw new Error(`The worker cannot be cancelled in state ${current.status}.`);
-  }
-  writeFileSync(controlPath(job, 'cancel'), '', { mode: 0o600 });
-  return status(directory);
-}
-
-async function execute(job, controller, retire, run) {
-  const { jobDirectory, cwd } = job;
-  let release;
-  let restore;
-  let outcome;
   try {
-    const staged = join(jobDirectory, 'prompt.txt');
-    const prompt = readFileSync(staged, 'utf8');
-    unlinkSync(staged);
-    if (Date.now() - job.createdAt >= startupGraceMs) return { status: 'startup-timeout', phase: 'terminal-starting' };
-    if (controller.signal.aborted) return { status: 'interrupted', phase: 'terminal-starting' };
-    release = reserveWorktree(job);
-    restore = installHooks(job, runner);
-    console.log(`\n[${basename(jobDirectory)}] ${display(job.terminalReason)}\n${display(cwd)}\n`);
-    outcome = await run(job, prompt, (progress) => writeJson(jobDirectory, 'progress.json', progress), controller.signal, { retireRequests: retire });
-  } catch (error) {
-    outcome = { status: 'failed', error: error.message };
-  }
-  if (release && outcome.status !== 'cleanup-needed') {
-    try {
-      restore?.();
-      release();
-    } catch (error) {
-      outcome = { ...outcome, status: 'cleanup-needed', error: error.message };
-    }
-  }
-  if (outcome.status === 'cleanup-needed') {
-    outcome.lockPath = lockPath(cwd);
-    outcome.hookPath = join(cwd, '.agents', 'hooks.json');
-  }
-  return outcome;
-}
+    const turn = mkdtempSync(join(job, 'turn-'));
+    const profile = join(job, 'gemini');
+    mkdirSync(profile, { mode: 0o700, recursive: true });
+    const transcript = join(turn, 'response.txt');
+    const events = join(turn, 'events.jsonl');
+    writeFileSync(transcript, '', { mode: 0o600 });
+    writeFileSync(events, '', { mode: 0o600 });
+    state.turn = turn;
+    save(job, state);
+    emit('starting', { job, cwd: state.cwd, turn });
 
-export function serve(directory, run = runAgy) {
-  const terminal = readJob(directory);
-  const terminalDirectory = terminal.jobDirectory;
-  if (terminal.terminalDirectory !== terminalDirectory) throw new Error('Expected the initial job directory for this terminal.');
-  // A directory is an exclusive claim even if the same launcher is invoked twice.
-  mkdirSync(join(terminalDirectory, 'serving'), { mode: 0o700 });
-  writeJson(terminalDirectory, 'terminal.json', { pid: process.pid });
-  console.log(`Antigravity worker | ${model} | effort ${effort}\nCtrl+D exits the Antigravity screen. Ctrl+C closes the idle worker terminal.`);
-  let active;
-  let closing = false;
-  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  const watcher = watch(terminalDirectory, (event, filename) => {
-    if (!filename || filename === requestFile || /^(cancel|retire)-/.test(filename)) receive();
-  });
-  watcher.on('error', (error) => {
-    console.error(display(error.message));
-    close();
-  });
-
-  function close() {
-    closing = true;
-    if (active) {
-      active.controller.abort();
-      return;
-    }
-    watcher.close();
-    for (const signal of signals) process.removeListener(signal, onSignal[signal]);
-    writeJson(terminalDirectory, 'closed.json', { timestamp: Date.now() });
-  }
-
-  const onSignal = {
-    SIGINT: () => { if (!active) close(); },
-    SIGTERM: close,
-    SIGHUP: close,
-  };
-  for (const signal of signals) process.on(signal, onSignal[signal]);
-
-  function receive() {
-    if (closing) return;
-    try {
-      if (active) {
-        if (readOptional(active.cancelFile) !== null) active.controller.abort();
-        else {
-          const request = readOptional(active.retireFile);
-          if (request !== null) {
-            unlinkSync(active.retireFile);
-            if (request) active.retire.dispatchEvent(new CustomEvent('retire', { detail: JSON.parse(request) }));
-          }
-        }
+    let denied = 0;
+    client = connectWorker(state.cwd, profile, turn, (id, update) => {
+      if (!session || id !== session.sessionId) return;
+      const kind = update.sessionUpdate;
+      if (kind === 'available_commands_update' && Array.isArray(update.availableCommands)) {
+        if (!sent) return; // The connection caches setup notifications until the turn starts.
+        state.commands = update.availableCommands;
+        save(job, state);
+        emit('available-commands', { commands: state.commands });
         return;
       }
-      const slot = join(terminalDirectory, requestFile);
-      const job = readJson(terminalDirectory, requestFile);
-      if (!job) return;
-      if (job.terminalDirectory !== terminalDirectory || job.cwd !== terminal.cwd) throw new Error('Invalid request for this terminal.');
-      const controller = new AbortController();
-      const retire = new EventTarget();
-      const cancelFile = controlPath(job, 'cancel');
-      if (readOptional(cancelFile) !== null) controller.abort();
-      active = { cancelFile, retireFile: controlPath(job, 'retire'), controller, retire };
-      execute(job, controller, retire, run).then((result) => {
-        unlinkSync(slot);
-        writeJson(job.jobDirectory, 'result.json', { ...result, finishedAt: Date.now() });
-        if (result.terminalReusable === false) closing = true;
-        console.log(`\n[${result.status}] ${display(result.error ?? result.phase)}`);
-      }).catch((error) => {
-        console.error(display(error.message));
-        closing = true;
-      }).finally(() => {
-        active = undefined;
-        if (closing) close();
-        else receive();
-      });
-    } catch (error) {
-      console.error(display(error.message));
-      close();
-    }
-  }
+      if (!sent || responseReceived) return;
+      if (kind === 'agent_message_chunk' && update.content?.type === 'text') {
+        appendFileSync(transcript, update.content.text);
+      } else if (['tool_call', 'tool_call_update', 'permission_denied'].includes(kind)) {
+        if (kind === 'permission_denied') denied++;
+        const data = { event: kind, title: update.title, status: update.status, toolCallId: update.toolCallId };
+        appendFileSync(events, JSON.stringify(data) + '\n');
+        emit(kind, data);
+      }
+    });
+    state.workerPid = client.pid ?? null;
+    save(job, state);
+    session = await openSession(client, state.cwd, previous.sessionId);
+    const previousModel = previous.settings?.model ?? defaultModel;
+    const selectedModel = model ?? previousModel;
+    const selectedEffort = effort ?? (selectedModel === previousModel
+      ? (previous.settings ? previous.settings.thought_level : defaultEffort)
+      : undefined);
+    const mode = edit ? 'accept-edits' : 'default';
+    await configureSession(client, session, {
+      model: selectedModel, ...(selectedEffort === undefined ? {} : { thought_level: selectedEffort }), mode,
+    });
+    const activeEffort = session.options.find(option => option.id === 'thought_level')?.currentValue;
+    state.sessionId = session.sessionId;
+    state.status = 'running';
+    state.settings = { model: selectedModel, ...(activeEffort === undefined ? {} : { thought_level: activeEffort }), mode };
+    state.agent = session.agent;
+    state.commands = client.commandsFor(session.sessionId) ?? previous.commands ?? null;
+    save(job, state);
+    emit('running', { sessionId: state.sessionId, settings: state.settings, agent: state.agent });
+    if (state.commands) emit('available-commands', { commands: state.commands });
 
-  receive();
-  return close;
+    process.on('SIGINT', cancel);
+    process.on('SIGTERM', cancel);
+    cancelPoll = setInterval(() => {
+      if (existsSync(join(turn, 'cancel'))) cancel();
+    }, 250);
+    sent = true;
+    const result = await Promise.race([
+      client.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: prompt }] }, 0),
+      cancelDeadline,
+    ]);
+    responseReceived = true;
+    state.stopReason = result?.stopReason ?? null;
+    state.denied = denied;
+    if (state.stopReason === 'cancelled') state.status = 'cancelled';
+    else if (state.stopReason === 'end_turn') state.status = denied ? 'permission-denied' : 'review-ready';
+    else throw new Error(`ACP ended the turn with ${state.stopReason ?? 'no stop reason'}.`);
+  } catch (error) {
+    state.status = sent && !responseReceived ? 'cleanup-needed' : 'failed';
+    state.error = error.message;
+  } finally {
+    clearInterval(cancelPoll);
+    clearTimeout(cancelTimer);
+    if (client) {
+      if (session?.canClose && (!sent || responseReceived)) {
+        try {
+          await client.request('session/close', { sessionId: session.sessionId }, 5_000);
+        } catch (error) {
+          state.status = 'cleanup-needed';
+          state.error ??= error.message;
+        }
+      }
+      const exit = await client.shutdown();
+      if (exit.code !== 0 && sent) {
+        state.status = 'cleanup-needed';
+        state.error ??= `ACP process exited (${exit.signal ?? exit.code}).`;
+      }
+    }
+    process.off('SIGINT', cancel);
+    process.off('SIGTERM', cancel);
+    if (state.status !== 'cleanup-needed') {
+      state.workerPid = null;
+      state.runnerPid = null;
+    }
+    save(job, state);
+    if (state.status !== 'cleanup-needed') unlock();
+    emit(state.status, state);
+    if (state.status !== 'review-ready') process.exitCode = 1;
+  }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === runner) {
+function processExists(pid) {
+  if (!pid) return false;
   try {
-    const [action, ...args] = process.argv.slice(2);
-    if (action === 'prepare' && args.length <= 1) console.log(JSON.stringify(prepareWorkspace(jobsDirectory(), args[0])));
-    else if (action === 'prepare' && args.length === 2 && args[0] === '--copy') {
-      console.log(JSON.stringify(prepareWorkspace(jobsDirectory(), args[1], { copy: true })));
-    }
-    else if (action === 'start' && args.length === 2) console.log(JSON.stringify(start(args[0], args[1])));
-    else if (action === 'follow-up' && (args.length === 2 || (args.length === 3 && args[2] === '--new-terminal'))) {
-      console.log(JSON.stringify(await followUp(args[0], args[1], { newTerminal: args[2] === '--new-terminal' })));
-    }
-    else if (action === 'finish' && args.length >= 1 && args.length <= 2) {
-      const [directory, flag] = args;
-      if (flag !== undefined && !['--applied', '--discard'].includes(flag)) {
-        throw new Error('Usage: worker.mjs finish <job-directory> [--applied | --discard]');
-      }
-      console.log(JSON.stringify(await finish(directory, undefined, jobsDirectory(), flag?.slice(2))));
-    }
-    else if (action === 'status' && args.length === 1) console.log(JSON.stringify(status(args[0])));
-    else if (action === 'cancel' && args.length === 1) console.log(JSON.stringify(cancel(args[0])));
-    else if (action === 'serve' && args.length === 1) serve(args[0]);
-    else if (action === 'hook' && args.length === 2 && ['active', 'stop'].includes(args[1])) {
-      recordHook(args[0], args[1], JSON.parse(readFileSync(0, 'utf8')));
-      process.stdout.write('{}');
-    }
-    else throw new Error('Usage: worker.mjs prepare [--copy] [original-worktree] | start <worktree> <prompt> | follow-up <job> <prompt> [--new-terminal] | finish <job> [--applied | --discard] | status <job> | cancel <job>');
+    process.kill(pid, 0);
+    return true;
   } catch (error) {
-    console.error(display(error.message));
-    process.exitCode = 1;
+    if (error.code === 'ESRCH') return false;
+    throw new Error(`Could not verify process ${pid}: ${error.message}`);
   }
+}
+
+function discardJob(job, state, confirmedStopped) {
+  if (existsSync(join(job, 'finalized.json'))) throw new Error('Retry finish to complete the approved cleanup.');
+  const uncertain = ['cleanup-needed', 'starting', 'running'].includes(state.status);
+  if (uncertain && (!confirmedStopped || (state.status !== 'cleanup-needed' && !state.runnerPid))) {
+    throw new Error('Worker termination is unconfirmed. Inspect the job processes before cleanup.');
+  }
+  if (!uncertain && !['prepared', 'cancelled', 'failed', 'permission-denied'].includes(state.status)) {
+    throw new Error(`Cannot discard in state ${state.status}.`);
+  }
+  for (const pid of [state.runnerPid, state.workerPid]) {
+    if (processExists(pid)) throw new Error(`Process ${pid} is still running. Job was preserved.`);
+  }
+
+  let unlockWorkspace;
+  try {
+    if (lstatSync(state.cwd, { throwIfNoEntry: false })) {
+      const workspace = workspaceFor(job, state);
+      // An interrupted turn keeps its own lock until the job is removed.
+      if (!uncertain || !existsSync(join(workspace.directory, 'operation.lock'))) {
+        unlockWorkspace = lockWorkspace(workspace);
+      }
+    }
+    const current = readJob(job).state;
+    if (current.turn !== state.turn || current.status !== state.status) throw new Error('Job status changed. Inspect status and retry.');
+    if (state.kind === 'git') removeGitWorkspace(job, state);
+    rmSync(job, { recursive: true, force: true });
+    return emit('discarded', { job, original: state.original });
+  } finally {
+    if (unlockWorkspace && existsSync(join(state.cwd, '..', 'operation.lock'))) unlockWorkspace();
+  }
+}
+
+async function main([action, ...args]) {
+  if (action === 'update') {
+    if (args.length) throw new Error('Usage: update');
+    return updateCli();
+  }
+  if (action === 'prepare') {
+    const copy = args[0] === '--copy';
+    const targets = copy ? args.slice(1) : args;
+    if (targets.length > 1 || (copy && !targets.length)) throw new Error('Usage: prepare [--copy] [original-worktree]');
+    return prepare(targets[0], copy);
+  }
+  if (action === 'capabilities') {
+    if (args.length > 1) throw new Error('Usage: capabilities [absolute-workspace]');
+    return capabilities(args[0]);
+  }
+  if (action === 'quota') {
+    if (args.length) throw new Error('Usage: quota');
+    return quota();
+  }
+  if (!['start', 'follow-up', 'status', 'cancel', 'review', 'finish', 'discard'].includes(action)) {
+    throw new Error('Usage: update | capabilities | quota | prepare | start | follow-up | status | cancel | review | finish | discard');
+  }
+  const { job, state } = readJob(args[0]);
+  if (action === 'start' || action === 'follow-up') {
+    const { values } = parseArgs({
+      args: args.slice(2), options: { edit: { type: 'boolean' }, model: { type: 'string' }, effort: { type: 'string' } },
+    });
+    return promptWorker(job, state, action, args[1], values);
+  }
+  if (action === 'finish') {
+    if (args.length !== 3 || !['--apply', '--keep'].includes(args[2])) {
+      throw new Error('Usage: finish job review-id (--apply | --keep). Ask the user after reviewing.');
+    }
+  } else if (action === 'discard') {
+    if (args.length > 2 || (args.length === 2 && args[1] !== '--confirmed-stopped')) {
+      throw new Error('Usage: discard job [--confirmed-stopped]');
+    }
+  } else if (args.length !== 1) throw new Error(`Usage: ${action} job`);
+  if (action === 'status') return emit(state.status, state);
+  if (action === 'cancel') {
+    if (state.status !== 'running') throw new Error(`Cannot cancel in state ${state.status}.`);
+    writeFileSync(join(state.turn, 'cancel'), '', { mode: 0o600 });
+    return emit('cancellation-queued', { job, turn: state.turn });
+  }
+
+  const unlock = lockWorkspace({ directory: job });
+  let unlockWorkspace;
+  try {
+    const current = readJob(job).state;
+    if (current.turn !== state.turn || current.status !== state.status) throw new Error('Job status changed. Inspect status and retry.');
+    if (action === 'discard') return discardJob(job, current, args[1] === '--confirmed-stopped');
+    if (current.status !== 'review-ready' || current.workerPid) throw new Error('Finish the worker turn before reviewing or applying.');
+    const finalized = existsSync(join(job, 'finalized.json'));
+    const missing = !existsSync(state.cwd);
+    const workspace = action === 'finish' && finalized && missing
+      ? { cwd: state.cwd, original: state.original }
+      : workspaceFor(job, state);
+    if (!missing) unlockWorkspace = lockWorkspace(workspace);
+    if (action === 'review') {
+      if (finalized) throw new Error('Retry finish to complete the approved cleanup.');
+      return emit('review', reviewResult(job, workspace, current));
+    }
+    const outcome = finalizeResult(job, workspace, current, args[1], args[2]);
+    if (outcome.kept) return emit('kept', { job, cwd: outcome.kept, original: outcome.original });
+    rmSync(job, { recursive: true, force: true });
+    unlockWorkspace = null;
+    emit(outcome.archive ? 'archived' : 'applied', { original: outcome.original, archive: outcome.archive });
+  } finally {
+    if (unlockWorkspace && existsSync(join(state.cwd, '..', 'operation.lock'))) unlockWorkspace();
+    if (existsSync(join(job, 'operation.lock'))) unlock();
+  }
+}
+
+try {
+  await main(process.argv.slice(2));
+} catch (error) {
+  emit('error', { message: error.message });
+  process.exitCode = 1;
 }
