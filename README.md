@@ -16,6 +16,7 @@ ai-setting/
 │   ├── commit-secret-checker/  # Git 커밋 검사와 OS별 README
 │   ├── code-quality-review/    # Codex·Gemini 품질 검토와 OS별 README
 │   └── command-guard/          # 위험한 터미널 명령 검사와 OS별 README
+├── lints/        # 두 Stop 훅이 함께 사용하는 전역 ESLint 실행기와 설정
 ├── skills/
 │   ├── agents-md-editor/   # AGENTS.md 최적화와 전후 비교
 │   ├── concept-explainer/    # 질문에 필요한 개념과 예시 설명
@@ -87,6 +88,10 @@ ai-setting/
 
 예를 들어 “이 프로젝트 지침의 중복을 정리해줘”, “이 테스트가 계속 실패하는 원인을 찾고 수정해줘”, “이 라이브러리 조합이 공식 지원되는지 조사해줘”처럼 요청합니다. 명시적으로 지정하려면 Codex의 `$agents-md-editor 이 프로젝트 지침을 최적화해줘`처럼 호출할 수 있습니다. 실제 수정·설치·다른 도구로의 동기화는 각각 요청 범위를 따릅니다.
 
+## 프로젝트 린트 설정
+
+두 Stop 훅은 JavaScript와 TypeScript 변경을 전역 ESLint로 검토합니다. 프로젝트별 규칙·예외·타입 검사 범위는 [린트 설정 안내](lints/README.md)를 따릅니다.
+
 ## Codex·Antigravity 사용자 입력의 시크릿 검사
 
 사용자가 보낸 문장을 Gitleaks로 검사하는 Codex `UserPromptSubmit`과 Antigravity `PreInvocation` 훅을 제공합니다.
@@ -149,7 +154,7 @@ cd ai-setting
 
 ## 설치 상태 점검
 
-저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅 복사본과 Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
+저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅, 두 도구가 함께 쓰는 전역 ESLint 설치본, Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
 
 누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 점검은 설치 파일과 설정을 읽으며, 훅 신뢰 등록과 새 세션에서 실제 실행되는지는 앱에서 확인합니다.
 

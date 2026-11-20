@@ -78,6 +78,12 @@ Antigravity 대화 기록은 작은 청크로 순차 읽고 현재 턴 판별에
 
 OS의 파일 감시는 네트워크 파일시스템·가상화 환경에서 불안정할 수 있으며 보고되지 않은 이벤트 유실까지 검출한다고 보장하지 않습니다. 이 환경은 별도 검증이 필요합니다. 입력·지침·대화 기록을 읽거나 해석하지 못한 경우에도 자동 검토 완료로 간주하지 않습니다. Codex는 `systemMessage` 경고 JSON, Antigravity는 stderr 경고와 빈 JSON을 반환합니다. 클라이언트에 따라 경고가 출력에 나타나지 않을 수 있습니다. Codex CLI 0.160.0의 `--no-daemon exec --json`에서는 공식 `systemMessage`의 출력 누락을 확인했습니다. 경고 JSON 반환과 실제 화면·CLI 표시는 별도이며, 표시를 확인했다고 주장하지 않습니다. 문제가 의심되면 훅 실행 로그와 비밀 필드를 제외한 실패 상태를 함께 확인합니다. Node나 훅 자체를 시작하지 못하는 오류도 별도로 확인해야 합니다.
 
+## 전역 ESLint 실행
+
+JavaScript·TypeScript 변경이 있으면 두 도구의 Stop 검토가 `~/.ai-setting/lint/lint.mjs`를 각 도구의 명령 권한으로 실행합니다. 실행기는 전역 기본 규칙에 해당 파일의 프로젝트 `eslint.config.*` 규칙과 예외를 적용합니다. 기본 규칙과 의존성은 사용자 홈의 한 곳에 설치하며, 프로젝트에 파일·의존성·스크립트를 추가할 필요가 없습니다. [전역 설치와 프로젝트 설정](../../lints/README.md)
+
+Antigravity 터미널 샌드박스를 사용한다면 Antigravity의 권한 설정에서 설치 폴더의 실제 절대 경로를 `read_file(...)`로 허용합니다. 예를 들어 Windows에서는 `read_file(C:/Users/your-name/.ai-setting/lint)`를 추가합니다. 이 규칙으로 실행기와 그 의존성을 샌드박스 안에서 읽을 수 있습니다. [Antigravity 터미널 샌드박스](https://antigravity.google/docs/sandbox/)
+
 ## 파일 구성
 
 ```text

@@ -1,8 +1,11 @@
+import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
+import console from 'node:console';
 import { accessSync, constants, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import process from 'node:process';
+import { fileURLToPath, URL } from 'node:url';
 import { shellCommands } from '../hooks/command-guard/shell-commands.mjs';
 import {
   antigravityRuleFile,
@@ -240,6 +243,11 @@ if (extra.length || (target && !['codex', 'antigravity', 'git'].includes(target)
   report(`Node.js ${process.version}`, Number(process.versions.node.split('.')[0]) >= 22 ? [] : ['Node.js 22 이상 필요']);
   if (!target || target === 'codex') checkClient(true);
   if (!target || target === 'antigravity') checkClient(false);
+  if (target !== 'git') {
+    for (const file of ['eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json']) {
+      checkCopy(`전역 린트 ${file}`, join('lints', file), join(homedir(), '.ai-setting', 'lint', file));
+    }
+  }
   if (!target || target === 'git') checkGit();
   process.exitCode = failed ? 1 : 0;
 }

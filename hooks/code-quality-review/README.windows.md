@@ -2,7 +2,7 @@
 
 [공통 동작·범위·한계](README.md) · [macOS 설정](README.macos.md) · [저장소 안내](../../README.md)
 
-저장소 루트의 PowerShell에서 실행합니다. Node.js 22 이상을 준비하고 경로를 확인합니다. Gemini용은 기존 secret checker와 같은 Antigravity용입니다.
+저장소 루트의 PowerShell에서 실행합니다. 전역 ESLint를 함께 설치하려면 Node.js 22.13 이상인 22.x 또는 24 이상을 준비하고 경로를 확인합니다. Gemini용은 기존 secret checker와 같은 Antigravity용입니다.
 
 ```powershell
 node --version
@@ -11,16 +11,22 @@ node --version
 
 설정 변경 전 기존 전역 파일 전체를 복구 가능한 위치에 백업합니다. 생성한 JSON으로 파일 전체를 덮어쓰지 말고, 아래 도구별 항목만 병합합니다.
 
-## 실행 파일 복사
+## 실행 파일과 공통 린트 설정 복사
 
-등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일과 해당 도구 어댑터만 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일(예: 이전 Antigravity 설치본의 `$geminiHookTarget\REVIEW.md`)이 있으면 용도를 확인해 별도로 정리합니다.
+등록 전에 기존 설정·설치본의 별도 수정과 복구 수단을 확인합니다. 저장소 루트에서 공통 파일, 린트 설정과 해당 도구 어댑터를 실제 파일로 복사합니다. 아래 명령은 기존 파일을 교체하므로 대조·백업 후 실행하며, 폐기된 설치 파일(예: 이전 Antigravity 설치본의 `$geminiHookTarget\REVIEW.md`)이 있으면 용도를 확인해 별도로 정리합니다.
 
 ```powershell
 $codexHookHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
 $codexHookTarget = Join-Path $codexHookHome 'hooks/code-quality-review'
 $geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/code-quality-review'
 $geminiRulesTarget = Join-Path $env:USERPROFILE '.gemini/config/rules'
-New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget | Out-Null
+$sharedLintTarget = Join-Path $env:USERPROFILE '.ai-setting/lint'
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget, $sharedLintTarget | Out-Null
+foreach ($lintRuntimeFile in @('eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json')) {
+    Copy-Item -LiteralPath "lints/$lintRuntimeFile" -Destination $sharedLintTarget
+}
+npm --prefix "$sharedLintTarget" ci --ignore-scripts --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { throw '전역 ESLint 의존성을 설치하지 못했습니다.' }
 $hookRuntimeFiles = @('review-request.mjs', 'review-status.mjs', 'review-changes.mjs', 'watch-worker.mjs')
 foreach ($hookRuntimeFile in $hookRuntimeFiles) {
     Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $codexHookTarget
@@ -54,7 +60,7 @@ Codex를 새로 시작하고 CLI `/hooks`에서 활성 상태·출처·명령을
 node "$geminiHookTarget/gemini/gemini-code-quality-review.mjs" --print-config
 ```
 
-전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
+전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 사용자 홈의 공통 경로를 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
 Windows에서는 Node와 훅의 경로가 공백·셸 특수문자·비ASCII 문자 없는 단순 드라이브 절대 경로이면 Node를 직접 실행합니다. 그 외 경로는 기존 `powershell.exe -NoProfile -NonInteractive -EncodedCommand ...` 형식을 사용합니다. Antigravity가 따옴표를 파일명으로 넘기거나 cmd가 `%`를 확장하는 문제를 피하도록, 인용한 호출문을 UTF-16 Base64로 전달합니다. 인코딩은 비밀값 보호 기능이 아니며 기기 경로만 담습니다. 생성한 명령을 그대로 사용합니다. 감시 프로세스는 계속 숨겨진 `Start-Process`로 분리합니다.
 

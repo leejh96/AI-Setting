@@ -1,0 +1,17 @@
+{
+  "name": "ai-setting-global-lint",
+  "private": true,
+  "engines": {
+    "node": "^22.13.0 || >=24"
+  },
+  "scripts": {
+    "test": "node --test verify-lint.mjs"
+  },
+  "dependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.15.0",
+    "jiti": "^2.2.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.73.0"
+  }
+}
