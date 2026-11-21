@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
-import { URL } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { syncTaskLessons } from './sync-task-lessons.mjs';
 
 const skill = new URL('../skills/task-lessons/', import.meta.url);
@@ -132,3 +132,45 @@ test('두 도구는 같은 프로젝트에서 각자 교훈을 사용하고 Anti
   assert.equal(antigravityLocation.shared, join(antigravityRoot, 'shared'));
   assert.equal(antigravityLocation.project, join(antigravityRoot, 'projects', basename(codexLocation.project)));
 });
+
+for (const shell of ['Node.js', 'Windows PowerShell']) {
+  test(`${shell} 교훈 경로는 상속된 Git 환경 대신 실제 작업 폴더를 사용한다`, { skip: shell === 'Windows PowerShell' && process.platform !== 'win32' }, t => {
+    const { codex: home } = fixture(t);
+    const [other, project, plain] = ['other', 'project', 'plain'].map(name => join(home, name));
+    const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+    const projectOrigin = 'https://github.com/lesson-fixture/project.git';
+    const git = (directory, ...args) => {
+      const result = spawnSync('git', ['-C', directory, ...args], { env: cleanEnv, encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    for (const directory of [other, project, plain]) mkdirSync(directory);
+    for (const [directory, url] of [[other, 'https://github.com/lesson-fixture/other.git'], [project, projectOrigin]]) {
+      git(directory, 'init', '--quiet');
+      git(directory, 'remote', 'add', 'origin', url);
+    }
+
+    const command = shell === 'Node.js' ? process.execPath : 'powershell.exe';
+    const locator = new URL(shell === 'Node.js' ? 'scripts/location.mjs' : 'scripts/location.ps1', skill);
+    const options = shell === 'Node.js' ? [] : ['-NoProfile', '-NonInteractive', '-File'];
+    const locate = (cwd, overrides = {}) => {
+      const result = spawnSync(command, [...options, fileURLToPath(locator)], {
+        cwd, env: { ...cleanEnv, CODEX_LESSONS_DIR: join(home, 'lessons'), ...overrides },
+        encoding: 'utf8', timeout: 15_000, windowsHide: true,
+      });
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+      return JSON.parse(result.stdout).project;
+    };
+    const ownKey = locate(project);
+    const plainKey = locate(plain);
+    assert.equal(new Set([ownKey, plainKey, locate(other)]).size, 3);
+
+    const otherRepository = { GIT_DIR: join(other, '.git'), GIT_WORK_TREE: other };
+    assert.equal(locate(project, otherRepository), ownKey);
+    assert.equal(locate(plain, otherRepository), plainKey);
+    assert.equal(locate(project, {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'url.https://github.com/lesson-fixture/other.git.insteadOf',
+      GIT_CONFIG_VALUE_0: projectOrigin,
+    }), ownKey);
+  });
+}

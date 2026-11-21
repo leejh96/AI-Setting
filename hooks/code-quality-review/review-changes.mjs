@@ -1,11 +1,14 @@
+import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, opendirSync, lstatSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile, spawn, spawnSync } from 'node:child_process';
+import process from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 export class ChangeWatchError extends Error {}
 export const MAX_REVIEW_REQUESTS = 5;
@@ -256,12 +259,17 @@ function cleanupStates(directory, currentFile, currentOwner, previousFile) {
   saveWatch(marker, { version: 1, completedAt: Date.now() });
 }
 
+export function gitReadEnvironment() {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  return { ...env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
+}
+
 export function readGitMetadata(cwd, args, maxBuffer, signal) {
   return new Promise((resolveOutput, reject) => {
     let outputBytes = 0, overflow = false;
     const child = execFile('git', ['-C', cwd, ...args], {
       encoding: 'buffer', windowsHide: true, timeout: 1000, killSignal: 'SIGKILL', maxBuffer, signal,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' },
+      env: gitReadEnvironment(),
     }, async (error, stdout, stderr) => {
       await closed;
       if (error || overflow) {

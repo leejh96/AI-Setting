@@ -3,6 +3,7 @@
 ## 경로 결정
 
 프로젝트 디렉터리에서 현재 도구에 설치된 이 스킬의 스크립트를 실행해 `project`와 `shared` 경로를 확인합니다. `project`는 현재 프로젝트용 경로입니다. 경로를 계산하는 단계는 디렉터리를 만들지 않습니다.
+프로젝트를 찾는 Git 조회는 작업 폴더를 기준으로 하며 상속된 `GIT_*` 환경변수를 제외합니다.
 
 - Windows PowerShell에서는 `& '<이 스킬의 절대 경로>/scripts/location.ps1'`를 실행합니다. Node.js가 자식 프로세스 출력을 캡처할 수 없는 Windows 샌드박스에서도 PowerShell이 Git 출력을 직접 읽습니다.
 - 다른 환경에서는 `node '<이 스킬의 절대 경로>/scripts/location.mjs'`를 실행합니다.

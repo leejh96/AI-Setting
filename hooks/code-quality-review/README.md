@@ -12,6 +12,7 @@ Codex와 Gemini/Antigravity의 `Stop` 훅이 같은 대화에 검토 지시를 �
 | Gemini/Antigravity | 전역 `~/.gemini/config/hooks.json`, 프로젝트 `.agents/hooks.json` | `decision: "continue"`와 `reason` | 현재 사용자 턴의 transcript 내 검토 요청과 마지막 모델 응답 |
 
 Codex는 `UserPromptSubmit`, Antigravity는 현재 사용자 요청의 첫 `PreInvocation`에서 별도의 Node 감시 프로세스를 시작합니다. 준비 완료를 확인한 뒤 작업을 진행하며, 프로젝트 파일 전체 내용이나 해시를 읽지 않습니다. Git 루트와 추적 경로 목록 등 메타데이터는 확인합니다.
+Git 루트·추적 파일·ignore 규칙은 감시 대상 폴더의 Git 설정을 기준으로 조회하며, 이 조회에는 상속된 `GIT_*` 환경변수를 전달하지 않습니다.
 
 같은 사용자 턴의 준비 요청이 겹치면 이미 준비 중이거나 준비된 감시를 재사용합니다. 뒤늦은 준비 요청이 같은 턴의 감시를 종료하거나 변경 기록과 검토 예산을 초기화하지 않습니다.
 

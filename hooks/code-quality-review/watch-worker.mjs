@@ -2,8 +2,10 @@ import { watch, lstatSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import process from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
-import { saveWatch, watchErrorCode, readGitMetadata, ownsWatch, verifyAliases, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
+import { saveWatch, watchErrorCode, readGitMetadata, gitReadEnvironment, ownsWatch, verifyAliases, MAX_REVIEW_REQUESTS } from './review-changes.mjs';
 
 const path = process.argv[2];
 const state = JSON.parse(readFileSync(path, 'utf8'));
@@ -16,7 +18,7 @@ const backupPattern = /(?:^|\/)(?:backups?(?:[-_.][^/]*)?|[^/]+\.(?:bak|backup|o
 let closing = false;
 let generation = 0;
 const roots = [];
-const startup = new AbortController();
+const startup = new globalThis.AbortController();
 const EVENT_DRAIN_INTERVAL_MS = 20;
 // libuv batches macOS FSEvents for 50 ms. Allow for delivery to the JS callback too.
 const STOP_EVENT_WAIT_MS = process.platform === 'darwin' ? 100 : EVENT_DRAIN_INTERVAL_MS;
@@ -69,7 +71,7 @@ function eligible(root, filename, eventType) {
 function ignored(root, names) {
   return new Promise((resolveIgnored, reject) => {
     const child = spawn('git', ['-C', root.path, 'check-ignore', '--stdin', '-z'], {
-      windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true, env: gitReadEnvironment(), stdio: ['pipe', 'pipe', 'pipe'],
     });
     root.ignoreChild = child;
     child.stdout.setEncoding('utf8');
@@ -208,7 +210,7 @@ server.listen(state.endpoint, async () => {
             if (!root.git) { flush(root); return; }
             if (!root.scheduled) {
               root.scheduled = true;
-              setImmediate(() => { root.scheduled = false; flush(root); });
+              globalThis.setImmediate(() => { root.scheduled = false; flush(root); });
             }
           }
         } catch (error) { fail('watch-event-failed', error); }
@@ -223,7 +225,7 @@ server.listen(state.endpoint, async () => {
         if (gitRoots.length === 1) {
           const result = spawnSync('git', ['-C', root.path, 'ls-files', '--cached', '-z'], {
             encoding: 'utf8', windowsHide: true, timeout: 1000, maxBuffer: 4 * 1024 * 1024,
-            env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+            env: gitReadEnvironment(),
           });
           if (result.status !== 0) throw result.error ?? Error('Tracked path lookup failed');
           tracked = result.stdout;

@@ -1,12 +1,15 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, symlinkSync, truncateSync, utimesSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import childProcess, { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import process from 'node:process';
+import { pathToFileURL, URL } from 'node:url';
+import { clearInterval, clearTimeout, setInterval, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareChanges, checkChanges, stopChanges, stopSession, finishWatch, requestWatch, watchErrorCode, ChangeWatchError } from './review-changes.mjs';
 import { createWatchTestRoot } from './test-temp.mjs';
@@ -658,6 +661,42 @@ test('기존 Git 사용자 변경은 기준에 포함하고 ignored 변경은 �
   mkdirSync(join(f.cwd, 'ignored')); await f.prepare();
   writeFileSync(join(f.cwd, 'ignored', 'code.mjs'), 'ignored change');
   assert.equal((await f.check()).changed, false);
+});
+
+test('상속된 Git 환경이 가리키는 저장소와 관계없이 실제 작업 트리의 변경을 감시한다', async () => {
+  const f = fixture();
+  const other = fixture();
+  git(f.cwd, 'init', '--quiet');
+  git(other.cwd, 'init', '--quiet');
+  writeFileSync(join(f.cwd, '.gitignore'), 'code.mjs\nlocal-only.tmp\n');
+  writeFileSync(join(other.cwd, '.gitignore'), 'new-note.md\n');
+  git(f.cwd, 'add', '-f', '--', 'code.mjs');
+  const env = {
+    ...process.env, GIT_DIR: join(other.cwd, '.git'), GIT_WORK_TREE: other.cwd,
+    GIT_INDEX_FILE: join(other.cwd, '.git', 'index'),
+  };
+  const script = `import { prepareChanges } from ${JSON.stringify(new URL('./review-changes.mjs', import.meta.url).href)};
+const [directory, turn] = process.argv.slice(1);
+await prepareChanges('test', directory, turn, [directory]);`;
+
+  const prepare = turn => {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, f.cwd, turn], {
+      env, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  };
+  prepare('ignored');
+  const roots = stateFor(f.cwd).state.roots;
+  assert.deepEqual(roots.map(({ path, git }) => ({ path: resolve(path), git })), [{ path: f.cwd, git: true }]);
+  writeFileSync(join(other.cwd, 'code.mjs'), 'change in a different repository');
+  writeFileSync(join(f.cwd, 'local-only.tmp'), 'ignored by the actual checkout');
+  assert.equal((await f.check('ignored')).changed, false);
+
+  for (const filename of ['code.mjs', 'new-note.md']) {
+    prepare(filename);
+    writeFileSync(join(f.cwd, filename), 'change in the actual checkout');
+    assert.equal((await f.check(filename)).changed, true, filename);
+  }
 });
 
 test('추적·미추적 혼합 배치는 Git 분류 없이 즉시 수정으로 확정한다', async () => {

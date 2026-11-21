@@ -8,7 +8,8 @@ import process from 'node:process';
 import { URL, fileURLToPath } from 'node:url';
 
 function git(directory, ...args) {
-  const result = spawnSync('git', ['-C', directory, ...args], { encoding: 'utf8', windowsHide: true });
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  const result = spawnSync('git', ['-C', directory, ...args], { env, encoding: 'utf8', windowsHide: true });
   if (result.error?.code === 'ENOENT') return undefined;
   if (result.error) throw new Error('Git을 실행할 수 없습니다.');
   return result.status === 0 ? result.stdout.replace(/\r?\n$/, '') : undefined;
