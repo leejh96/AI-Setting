@@ -3,8 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import process from 'node:process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { git } from './scripts/workspace.mjs';
 
 function fixture(t, kind, { contents = 'original', configureGit = () => {}, configureFolder = () => {},
@@ -38,7 +39,7 @@ function fixture(t, kind, { contents = 'original', configureGit = () => {}, conf
     });
     assert.ifError(run.error);
     assert.equal(run.signal, null);
-    const events = run.stdout.trim().split('\n').map(line => JSON.parse(line));
+    const events = run.stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
     return { code: run.status, events, result: events.at(-1) };
   };
   const prepared = invoke('prepare', ...(kind === 'copy' ? ['--copy'] : []), original);
@@ -219,6 +220,67 @@ test('the same approval can retry cleanup after an applied worktree is unlocked'
   assert.equal(existsSync(f.cwd), true);
   git(f.original, ['worktree', 'unlock', '--', f.cwd]);
   assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+});
+
+test('the same approval resumes job cleanup after interruption removed the status record', t => {
+  const f = fixture(t, 'folder', { preloadFor: { finish: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { join } from 'node:path';
+    const remove = fs.rmSync;
+    fs.rmSync = (path, ...args) => {
+      const interrupt = path === join(process.argv[3], 'status.json') && fs.existsSync(path);
+      remove(path, ...args);
+      if (interrupt) process.exit(73);
+    };
+    syncBuiltinESMExports();
+  ` } });
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed');
+  const id = f.review();
+  assert.equal(f.invoke('finish', f.job, id, '--apply').code, 73);
+  assert.equal(existsSync(join(f.job, 'status.json')), false);
+  assert.equal(existsSync(join(f.job, 'operation.lock')), true);
+  assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+  assert.equal(f.invoke('status', f.job).result?.event, 'cleanup-pending');
+  assert.match(f.invoke('finish', f.job, 'wrong-review', '--apply').result.message, /original review and decision/);
+  assert.match(f.invoke('finish', f.job, id, '--keep').result.message, /original review and decision/);
+
+  const artifact = join(f.job, 'late-output.zip');
+  writeFileSync(artifact, 'preserve');
+  assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /Unreviewed job entry remains/);
+  assert.equal(readFileSync(artifact, 'utf8'), 'preserve');
+  unlinkSync(artifact);
+  writeFileSync(f.source, 'edited after apply');
+  assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+  assert.equal(readFileSync(f.source, 'utf8'), 'edited after apply');
+});
+
+test('the same clean decision completes after interruption removed the job directory', t => {
+  const f = fixture(t, 'folder', { preloadFor: { finish: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const remove = fs.rmdirSync;
+    fs.rmdirSync = (path, ...args) => {
+      remove(path, ...args);
+      if (path === process.argv[3]) process.exit(73);
+    };
+    syncBuiltinESMExports();
+  ` } });
+  f.setStatus('review-ready');
+  const id = f.review();
+  const replacement = mkdtempSync(join(dirname(f.job), 'replacement-'));
+  writeFileSync(join(replacement, 'prompt.txt'), 'owned by a different job');
+  assert.equal(f.invoke('finish', f.job, id, '--clean').code, 73);
+  assert.equal(existsSync(f.job), false);
+
+  renameSync(replacement, f.job);
+  assert.match(f.invoke('finish', f.job, id, '--clean').result.message, /job folder was replaced/);
+  assert.equal(readFileSync(join(f.job, 'prompt.txt'), 'utf8'), 'owned by a different job');
+  renameSync(f.job, replacement);
+  assertFinished(f, f.invoke('finish', f.job, id, '--clean'), 'cleaned');
+  assert.equal(existsSync(f.job + '.cleanup.json'), false);
+  assert.equal(readFileSync(f.source, 'utf8'), 'original');
 });
 
 test('an empty stopped job can be cleaned without applying or verifying the original', t => {

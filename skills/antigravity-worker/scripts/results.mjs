@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync, closeSync, constants, copyFileSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
@@ -6,9 +7,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import process from 'node:process';
 import { canonicalPath, git, isWithin, managedWorkspace, prepareWorkspace, registeredWorktrees, removeFileWorkspace } from './workspace.mjs';
 
-export const jobControlFiles = ['baseline.json', 'review.json', 'status.json', 'finalized.json', 'operation.lock'];
+const jobControlFiles = ['baseline.json', 'review.json', 'status.json', 'finalized.json', 'operation.lock'];
+const cleanupReceiptPath = job => job + '.cleanup.json';
 
 function identity(path) {
   const info = lstatSync(path, { bigint: true });
@@ -170,7 +173,7 @@ export function prepareResult(job, target, copy) {
       if (workspace.kind === 'git') removeGitWorkspace(job, { ...workspace, original });
       removeFileWorkspace(join(job, 'workspaces'));
     } catch (cleanupError) {
-      throw new Error(`${error.message} Prepare cleanup failed: ${cleanupError.message}`);
+      throw new Error(`${error.message} Prepare cleanup failed: ${cleanupError.message}`, { cause: cleanupError });
     }
     throw error;
   }
@@ -470,7 +473,7 @@ function applyChanges(job, workspace, review, baseline) {
     if (failures.length) {
       keepRecovery = true;
       writeRecord(recovery, 'recovery.json', { root, steps });
-      throw new Error(`${error.message} Rollback incomplete. Backups: ${recovery}. ${failures.join(' ')}`);
+      throw new Error(`${error.message} Rollback incomplete. Backups: ${recovery}. ${failures.join(' ')}`, { cause: error });
     }
     throw error;
   } finally {
@@ -484,7 +487,7 @@ function applyResult(job, workspace, review) {
   try {
     mkdirSync(lock, { mode: 0o700 });
   } catch (error) {
-    if (error.code === 'EEXIST') throw new Error('Another ACP apply is active or interrupted. Inspect ' + lock);
+    if (error.code === 'EEXIST') throw new Error('Another ACP apply is active or interrupted. Inspect ' + lock, { cause: error });
     throw error;
   }
   try {
@@ -566,7 +569,51 @@ export function finalizeResult(job, workspace, state, id, decision) {
       removeFileWorkspace(cleanupWork);
     }
   }
-  return { original: review.original, cleanupEntries: verifyCleanup(job, workspace, state, { workspaceRemoved: true }) };
+  return { original: review.original };
+}
+
+export function readCleanupReceipt(job) {
+  const path = cleanupReceiptPath(job);
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  if (!info) return undefined;
+  if (!info.isFile()) throw new Error('Invalid cleanup receipt: ' + path);
+  const receipt = JSON.parse(readFileSync(path, 'utf8'));
+  if (receipt?.version !== 1 || typeof receipt.id !== 'string' || !['--apply', '--clean'].includes(receipt.decision)
+    || !Number.isSafeInteger(receipt.pid) || receipt.pid <= 0 || typeof receipt.cwd !== 'string'
+    || resolve(receipt.cwd) !== receipt.cwd || basename(receipt.cwd) !== 'work'
+    || dirname(dirname(receipt.cwd)) !== join(job, 'workspaces')
+    || typeof receipt.identity?.dev !== 'string' || typeof receipt.identity?.ino !== 'string'
+    || (receipt.original !== null && (typeof receipt.original !== 'string' || !isAbsolute(receipt.original)))) {
+    throw new Error('Invalid cleanup receipt: ' + path);
+  }
+  return receipt;
+}
+
+export function writeCleanupReceipt(job, workspace, original, id, decision) {
+  const receipt = { version: 1, id, decision, original, cwd: workspace.cwd, pid: process.pid, identity: identity(job) };
+  const path = cleanupReceiptPath(job);
+  if (lstatSync(path, { throwIfNoEntry: false })) throw new Error('Cleanup receipt already exists: ' + path);
+  writeRecord(dirname(path), basename(path), receipt);
+  return receipt;
+}
+
+export function removeFinishedJob(job, receipt) {
+  const path = cleanupReceiptPath(job);
+  if (lstatSync(job, { throwIfNoEntry: false })) {
+    try {
+      if (!equal(identity(job), receipt.identity)) throw new Error('The cleanup job folder was replaced. Preserved: ' + job);
+      const entries = verifyCleanup(job, { cwd: receipt.cwd }, {}, { workspaceRemoved: true });
+      for (const info of entries) {
+        if (!jobControlFiles.includes(info.name)) rmSync(join(job, info.name), { recursive: info.isDirectory(), force: true });
+      }
+      for (const name of jobControlFiles) rmSync(join(job, name), { force: true });
+      rmdirSync(job);
+    } catch (error) {
+      if (error.code !== 'ENOENT' || lstatSync(job, { throwIfNoEntry: false })) throw error;
+    }
+  }
+  // The receipt lives outside the job and is removed only once the directory is gone.
+  rmSync(path, { force: true });
 }
 
 function verifyRemainingCopy(job, cleanupWork, review) {
