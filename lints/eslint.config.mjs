@@ -5,6 +5,13 @@ import tseslint from 'typescript-eslint';
 
 const javascriptFiles = '**/*.{js,jsx,mjs,cjs}';
 const typescriptFiles = '**/*.{ts,tsx,mts,cts}';
+export const promiseRule = '@typescript-eslint/no-floating-promises';
+
+export const promiseChecks = {
+  files: [javascriptFiles, typescriptFiles],
+  plugins: { '@typescript-eslint': tseslint.plugin },
+  rules: { [promiseRule]: ['error', { ignoreVoid: false }] },
+};
 
 function diagnosticMessage(diagnostic) {
   return `TS${diagnostic.code}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`;
@@ -48,7 +55,6 @@ export const typescriptChecks = {
   },
   rules: {
     'ai-setting/typescript-diagnostics': 'error',
-    '@typescript-eslint/no-floating-promises': ['error', { ignoreVoid: false }],
   },
 };
 
@@ -59,12 +65,6 @@ const baseConfig = [
     rules: {
       eqeqeq: ['error', 'always'],
       'no-self-compare': 'error',
-    },
-  },
-  {
-    files: [javascriptFiles],
-    rules: {
-      'no-var': 'error',
     },
   },
   {

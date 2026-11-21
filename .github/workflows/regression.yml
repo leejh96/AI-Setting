@@ -56,3 +56,7 @@ jobs:
         run: |
           gitleaks version
           node --test --test-concurrency=1
+      - name: Install lint test dependencies
+        run: npm --prefix lints ci --ignore-scripts --no-audit --no-fund
+      - name: Run lint tests
+        run: npm --prefix lints test
