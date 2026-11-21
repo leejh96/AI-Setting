@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { isUtf8 } from 'node:buffer';
-import { chmodSync, closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { Buffer, isUtf8 } from 'node:buffer';
+import { chmodSync, closeSync, fchmodSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import process from 'node:process';
 
 const prefix = 'codex-agy-workspace-';
 const namePattern = /^codex-agy-workspace-[a-z0-9]{6}$/i;
@@ -58,7 +59,7 @@ export function prepareWorkspace(job, { original, head, copy }) {
       rmSync(directory, { recursive: true, force: true });
       if (!readdirSync(storage).length) rmdirSync(storage);
     } catch (cleanupError) {
-      throw new Error(`${error.message} Prepare cleanup failed at ${cwd}: ${cleanupError.message}`);
+      throw new Error(`${error.message} Prepare cleanup failed at ${cwd}: ${cleanupError.message}`, { cause: cleanupError });
     }
     throw error;
   }
@@ -104,7 +105,7 @@ export function lockWorkspace(workspace) {
   try {
     writeFileSync(path, JSON.stringify({ pid: process.pid }) + '\n', { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    if (error.code === 'EEXIST') throw new Error('Worker operation is active or interrupted. Inspect lock: ' + path);
+    if (error.code === 'EEXIST') throw new Error('Worker operation is active or interrupted. Inspect lock: ' + path, { cause: error });
     throw error;
   }
   return () => unlinkSync(path);
@@ -148,9 +149,11 @@ function writeBaseline(original, cwd, baseline) {
     mkdirSync(dirname(destination), { recursive: true });
     const parent = localDirectory(realpathSync(dirname(destination)));
     if (!isWithin(cwd, parent)) throw new Error('File-only path escapes worker workspace.');
-    const fd = openSync(destination, 'wx', mode === '100755' ? 0o755 : 0o644);
+    const permissions = mode === '100755' ? 0o755 : 0o644;
+    const fd = openSync(destination, 'wx', permissions);
     try {
       git(original, ['cat-file', 'blob', oid], [0], { stdio: ['ignore', fd, 'pipe'] });
+      if (process.platform !== 'win32') fchmodSync(fd, permissions);
     } finally {
       closeSync(fd);
     }

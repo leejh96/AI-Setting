@@ -283,6 +283,71 @@ test('the same clean decision completes after interruption removed the job direc
   assert.equal(readFileSync(f.source, 'utf8'), 'original');
 });
 
+for (const kind of ['folder', 'git']) {
+  test(`${kind}: finish resumes after workspace removal and before cleanup receipt publication`, t => {
+    const f = fixture(t, kind, { preloadFor: { finish: `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { join, dirname } from 'node:path';
+      const marker = join(dirname(process.argv[3]), 'interrupted');
+      const interrupt = path => {
+        if (path === process.argv[3] + '.cleanup.json' && !fs.existsSync(marker)) {
+          fs.writeFileSync(marker, '');
+          process.exit(73);
+        }
+      };
+      const link = fs.linkSync;
+      const rename = fs.renameSync;
+      fs.linkSync = (source, target) => { interrupt(target); link(source, target); };
+      fs.renameSync = (source, target) => { interrupt(target); rename(source, target); };
+      syncBuiltinESMExports();
+    ` } });
+    f.setStatus('review-ready');
+    writeFileSync(f.file, 'reviewed');
+    const id = f.review();
+    assert.equal(f.invoke('finish', f.job, id, '--apply').code, 73);
+    assert.equal(existsSync(f.cwd), false);
+    assert.equal(existsSync(f.job + '.cleanup.json'), false);
+    assert.equal(existsSync(join(f.job, 'operation.lock')), true);
+    assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+    assert.match(f.invoke('finish', f.job, 'wrong-review', '--apply').result.message, /original review and decision/);
+
+    if (kind === 'folder') {
+      writeFileSync(f.source, 'edited after apply');
+    } else {
+      const path = join(f.job, 'finalized.json');
+      const finalized = JSON.parse(readFileSync(path, 'utf8'));
+      delete finalized.cleanupStarted;
+      writeFileSync(path, JSON.stringify(finalized));
+      writeFileSync(f.source, 'edited after apply');
+      assert.match(f.invoke('finish', f.job, id, '--apply').result.message, /Original result differs/);
+      writeFileSync(f.source, 'reviewed');
+    }
+    assertFinished(f, f.invoke('finish', f.job, id, '--apply'), 'applied');
+    assert.equal(readFileSync(f.source, 'utf8'), kind === 'folder' ? 'edited after apply' : 'reviewed');
+    assert.ok(!readdirSync(dirname(f.job)).some(name => name.startsWith(basename(f.job))));
+  });
+}
+
+test('file-only preparation retains regular and executable modes under a restrictive umask', { skip: process.platform === 'win32' }, t => {
+  const f = fixture(t, 'copy', {
+    preloadFor: { prepare: 'process.umask(0o077);' },
+    configureFolder(original) {
+      chmodSync(join(original, 'probe.txt'), 0o644);
+      const executable = join(original, 'script');
+      writeFileSync(executable, 'original script');
+      chmodSync(executable, 0o755);
+    },
+  });
+  assert.equal(lstatSync(f.file).mode & 0o777, 0o644);
+  assert.equal(lstatSync(join(f.cwd, 'script')).mode & 0o777, 0o755);
+  f.setStatus('review-ready');
+  writeFileSync(f.file, 'reviewed');
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--apply'), 'applied');
+  assert.equal(readFileSync(f.source, 'utf8'), 'reviewed');
+  assert.equal(lstatSync(f.source).mode & 0o777, 0o644);
+});
+
 test('an empty stopped job can be cleaned without applying or verifying the original', t => {
   const f = fixture(t, 'folder');
   f.setStatus('failed');

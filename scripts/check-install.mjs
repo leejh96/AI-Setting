@@ -220,8 +220,10 @@ function checkClient(codex, runtime) {
 }
 
 function gitHooksPath(scope) {
+  const repositoryContext = /^GIT_(?:DIR|COMMON_DIR|WORK_TREE|IMPLICIT_WORK_TREE|INDEX_FILE|NAMESPACE|PREFIX|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG)$/i;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !repositoryContext.test(key)));
   const result = spawnSync('git', ['config', ...scope, '--path', '--get', 'core.hooksPath'], {
-    cwd: repo, encoding: 'utf8', timeout: 3000, windowsHide: true,
+    cwd: repo, env, encoding: 'utf8', timeout: 3000, windowsHide: true,
   });
   if (result.status === 1) return '';
   if (result.status !== 0) throw new Error('Cannot read Git configuration');

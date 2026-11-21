@@ -15,7 +15,7 @@
 | Codex | `$CODEX_HOME/skills/task-lessons/lessons` (`CODEX_HOME`이 없으면 `~/.codex/skills/task-lessons/lessons`) |
 | Antigravity | `~/.gemini/config/skills/task-lessons/lessons` |
 
-설치·갱신 명령은 각 도구의 `lessons/`를 만들고 권한을 등록합니다. Codex의 기존 `$CODEX_HOME/task-lessons` 기록은 같은 상대 경로로 이전합니다. 같은 경로에 내용이 다른 파일이 있으면 양쪽을 보존하고 충돌 경로를 알립니다.
+설치·갱신 명령은 각 도구의 `lessons/`를 만들고 권한을 등록합니다. Codex의 기존 `$CODEX_HOME/task-lessons` 기록은 새 기본 위치의 같은 상대 경로에 한 번 복사하고 원본을 보존합니다. 같은 경로에 내용이 다른 파일이 있으면 양쪽을 보존하고 충돌 경로를 알립니다. 복사가 완료되면 새 위치에 이전 완료를 기록합니다. 구버전 세션이 이후 원래 위치에 추가한 교훈은 그 위치에서 확인할 수 있습니다.
 
 Codex의 `CODEX_LESSONS_DIR`에 다른 절대 경로가 지정되어 있으면 해당 저장소를 계속 사용합니다. 이 경우 동기화는 스킬 파일을 갱신하며 사용자 지정 경로의 데이터와 권한은 별도로 관리합니다. Codex 검증에는 전용 임시 경로를 지정할 수 있습니다.
 

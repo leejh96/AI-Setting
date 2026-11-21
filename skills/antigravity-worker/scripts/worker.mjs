@@ -9,7 +9,7 @@ import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { lockWorkspace, managedWorkspace, removeFileWorkspace } from './workspace.mjs';
 import { AcpResponseError, configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
 import {
-  finalizeResult, prepareResult, readCleanupReceipt, removeFinishedJob, removeGitWorkspace,
+  finalizeResult, prepareResult, readCleanupReceipt, recoverCleanupReceipt, removeFinishedJob, removeGitWorkspace,
   reviewResult, verifyNoRecovery, writeCleanupReceipt,
 } from './results.mjs';
 
@@ -307,6 +307,15 @@ function completeCleanup(job, receipt) {
   emit(receipt.decision === '--clean' ? 'cleaned' : 'applied', { original: receipt.original });
 }
 
+function interruptedFinishLock(job) {
+  const path = join(job, 'operation.lock');
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return false;
+  let pid;
+  try { ({ pid } = JSON.parse(readFileSync(path, 'utf8'))); }
+  catch { return false; }
+  return Number.isSafeInteger(pid) && pid > 0 && !processExists(pid);
+}
+
 function discardJob(job, state, confirmedStopped) {
   if (existsSync(join(job, 'finalized.json'))) throw new Error('Retry finish to complete the approved cleanup.');
   verifyNoRecovery(job);
@@ -399,6 +408,17 @@ async function main([action, ...args]) {
     if (state.status !== 'running') throw new Error(`Cannot cancel in state ${state.status}.`);
     writeFileSync(join(state.turn, 'cancel'), '', { mode: 0o600 });
     return emit('cancellation-queued', { job, turn: state.turn });
+  }
+
+  if (action === 'finish' && !state.workerPid && !state.runnerPid && interruptedFinishLock(job)) {
+    const recovered = recoverCleanupReceipt(job, state, args[1], args[2]);
+    if (recovered) {
+      try { return completeCleanup(job, recovered); }
+      catch (error) {
+        emit('cleanup-pending', { job, cwd: state.cwd });
+        throw error;
+      }
+    }
   }
 
   const unlock = lockWorkspace({ directory: job });

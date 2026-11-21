@@ -1,12 +1,15 @@
 param([string] $Directory = (Get-Location).Path)
 
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
+$previousConsoleEncoding = [Console]::OutputEncoding
 $locator = Join-Path $PSScriptRoot 'location.mjs'
 $snapshots = @()
+$seenProbes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 
 $gitEnvironment = @(Get-ChildItem Env: | Where-Object Name -like 'GIT_*')
 try {
+    [Console]::OutputEncoding = $OutputEncoding
     foreach ($variable in $gitEnvironment) {
         Remove-Item -LiteralPath "Env:$($variable.Name)" -ErrorAction Stop
     }
@@ -24,6 +27,9 @@ try {
         }
 
         $probe = $result.probe
+        if (-not $seenProbes.Add($probe)) {
+            throw 'Git directory lookup did not advance. Check terminal encoding and run again.'
+        }
         $info = @{ directory = $probe }
         if ($git) {
             $commonDir = & $git.Source -C $probe rev-parse --path-format=absolute --git-common-dir 2>$null
@@ -39,6 +45,7 @@ try {
         $snapshots += $info
     }
 } finally {
+    [Console]::OutputEncoding = $previousConsoleEncoding
     foreach ($variable in $gitEnvironment) {
         Set-Item -LiteralPath "Env:$($variable.Name)" -Value $variable.Value -ErrorAction Stop
     }

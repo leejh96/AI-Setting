@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
 import { fileURLToPath, URL } from 'node:url';
@@ -11,6 +11,43 @@ import { checkLintRuntime } from './check-install-runtime.mjs';
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const checker = join(repo, 'scripts', 'check-install.mjs');
 const lintFiles = ['eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json'];
+
+test('Git 설치 점검은 다른 작업 트리의 설정을 배제하고 현재 저장소의 로컬 설정을 확인한다', t => {
+  const fixture = mkdtempSync(join(tmpdir(), 'ai-setting-check-git-'));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const current = join(fixture, 'current');
+  const other = join(fixture, 'other');
+  const install = join(fixture, 'installed-hook');
+  const scanner = join(fixture, process.platform === 'win32' ? 'gitleaks.exe' : 'gitleaks');
+  const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  const env = { ...cleanEnv, GIT_CONFIG_GLOBAL: join(fixture, 'gitconfig'), AI_SETTING_GITLEAKS_BIN: scanner };
+  const run = (command, args, vars = env) => spawnSync(command, args, { env: vars, encoding: 'utf8', timeout: 10_000, windowsHide: true });
+  const git = (...args) => {
+    const result = run('git', args);
+    assert.equal(result.status, 0, result.stderr);
+  };
+  for (const dir of [current, other]) {
+    mkdirSync(dir);
+    git('-C', dir, 'init', '--quiet');
+  }
+  for (const path of ['scripts/check-install.mjs', 'scripts/check-install-runtime.mjs',
+    'hooks/command-guard/shell-commands.mjs', 'hooks/code-quality-review/review-request.mjs', 'hooks/commit-secret-checker']) {
+    const destination = join(current, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(join(repo, path), destination, { recursive: true });
+  }
+  cpSync(join(repo, 'hooks', 'commit-secret-checker'), install, { recursive: true });
+  writeFileSync(scanner, '', { mode: 0o700 });
+  git('config', '--global', 'core.hooksPath', install);
+  git('-C', other, 'config', '--local', 'core.hooksPath', join(other, 'other-hooks'));
+  const polluted = { ...env, GIT_DIR: join(other, '.git'), GIT_WORK_TREE: other };
+  const check = () => run(process.execPath, [join(current, 'scripts/check-install.mjs'), 'git'], polluted);
+  assert.equal(check().status, 0);
+  git('-C', current, 'config', '--local', 'core.hooksPath', join(current, 'local-hooks'));
+  const result = check();
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /확인 필요 {2}Git 이 저장소의 pre-commit 경로/);
+});
 
 test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오류를 구분한다', t => {
   const home = mkdtempSync(join(tmpdir(), "ai-setting 설치 O’Connor's "));

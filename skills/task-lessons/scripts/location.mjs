@@ -109,17 +109,24 @@ function pipedGit() {
   };
 }
 
+function printLocation(value, mode) {
+  const json = JSON.stringify(value);
+  console.log(mode === '--git-stdin'
+    ? json.replace(/[\u0080-\uffff]/g, character => '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'))
+    : json);
+}
+
+const [directoryArgument, mode] = process.argv.slice(2);
 try {
   const root = storageRoot();
-  const [directoryArgument, mode] = process.argv.slice(2);
   const directory = realpathSync.native(directoryArgument || process.cwd());
   const readGit = mode === '--git-stdin' ? pipedGit() : inspectGit;
   const identity = gitIdentity(directory, readGit) || ['directory', directory];
   const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  console.log(JSON.stringify({ project: join(root, 'projects', key), shared: join(root, 'shared') }));
+  printLocation({ project: join(root, 'projects', key), shared: join(root, 'shared') }, mode);
 } catch (error) {
   if (error instanceof GitProbe) {
-    console.log(JSON.stringify({ probe: error.directory }));
+    printLocation({ probe: error.directory }, mode);
   } else {
     console.error(`교훈 저장 경로를 확인할 수 없습니다. ${error.code || error.message}`);
     process.exitCode = 1;

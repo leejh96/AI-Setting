@@ -1,6 +1,6 @@
 import console from 'node:console';
 import {
-  constants, copyFileSync, lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync,
+  constants, copyFileSync, lstatSync, readFileSync, readdirSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -40,15 +40,12 @@ function migrateLessons({ directories, files }) {
   for (const { from, to } of files) {
     if (!readInstallFile(to)) copyFileSync(from, to, constants.COPYFILE_EXCL);
   }
-  // Leave the legacy records in place until every destination is verified.
   for (const { from, to } of files) {
     const original = readInstallFile(from);
     if (!original || !readInstallFile(to)?.equals(original)) {
       throw new Error(`교훈을 이전하는 중 파일이 변경되었습니다 (${from} → ${to}).`);
     }
   }
-  for (const { from } of files) unlinkSync(from);
-  for (const { from } of directories.reverse()) rmdirSync(from);
   return files.length;
 }
 
@@ -72,11 +69,20 @@ export async function* syncTaskLessons({
   } else {
     if (override && !isAbsolute(override)) throw new Error('교훈 저장 루트는 절대 경로로 지정해야 합니다.');
     if (!override || resolve(override) === lessons) {
-      const migration = planMigration(join(base, 'task-lessons'), lessons);
+      const legacy = join(base, 'task-lessons');
+      const receipt = join(lessons, '.legacy-migration-complete');
+      const previous = readInstallFile(receipt);
+      if (previous && previous.toString('utf8') !== '1\n') throw new Error(`교훈 이전 기록의 형식을 확인하세요 (${receipt}).`);
+      const migration = previous ? undefined : planMigration(legacy, lessons);
       ensureInstallDirectory(installation);
       ensureInstallDirectory(lessons);
       yield await codexPermission(join(base, 'config.toml'), lessons, 'task-lessons-permission');
-      yield { path: lessons, migrated: migrateLessons(migration) };
+      let migrated = 0;
+      if (migration?.directories.length) {
+        migrated = migrateLessons(migration);
+        replaceInstallFile(receipt, undefined, '1\n', 'task-lessons-migration');
+      }
+      yield { path: lessons, migrated, ...(migration?.directories.length ? { preserved: legacy } : {}) };
     } else {
       yield { path: override, custom: true };
       ensureInstallDirectory(installation);
@@ -104,6 +110,7 @@ async function main(args) {
       else if (item.migrated !== undefined) console.log(`${tool} 교훈 ${item.migrated}개 이전, 저장 경로 확인 (${item.path})`);
       else if (item.storage) console.log(`${tool} 저장 경로 확인 (${item.path})`);
       else console.log(`${tool} ${item.added ? '갱신' : '기존 항목 확인'} (${item.path})`);
+      if (item.preserved) console.log(`이전 원본 보존 (${item.preserved})`);
       if (item.backup) console.log(`변경 전 백업 (${item.backup})`);
     }
   }

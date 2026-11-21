@@ -559,6 +559,10 @@ export function finalizeResult(job, workspace, state, id, decision) {
   verifyCleanup(job, workspace, state);
   const hasWorkspace = Boolean(lstatSync(workspace.cwd, { throwIfNoEntry: false }));
   if (hasWorkspace) verifyReviewedWorkspace(job, workspace, state, review);
+  if (!outcome.cleanupStarted) {
+    outcome.cleanupStarted = true;
+    writeRecord(job, 'finalized.json', outcome);
+  }
   if (state.kind === 'git') removeGitWorkspace(job, workspace);
   else {
     const cleanupWork = join(dirname(workspace.cwd), 'cleanup-work');
@@ -592,9 +596,40 @@ export function readCleanupReceipt(job) {
 export function writeCleanupReceipt(job, workspace, original, id, decision) {
   const receipt = { version: 1, id, decision, original, cwd: workspace.cwd, pid: process.pid, identity: identity(job) };
   const path = cleanupReceiptPath(job);
-  if (lstatSync(path, { throwIfNoEntry: false })) throw new Error('Cleanup receipt already exists: ' + path);
-  writeRecord(dirname(path), basename(path), receipt);
+  const temporary = join(job, 'cleanup-receipt-' + randomUUID() + '.tmp');
+  writeFileSync(temporary, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
+  try {
+    linkSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
   return receipt;
+}
+
+export function recoverCleanupReceipt(job, state, id, decision) {
+  const finalized = readOptionalRecord(job, 'finalized.json');
+  if (!finalized) return undefined;
+  if (finalized.id !== id || finalized.decision !== decision) {
+    throw new Error('Retry finish with the original review and decision.');
+  }
+  const workspace = { cwd: state.cwd, original: state.original };
+  const staged = join(dirname(workspace.cwd), 'cleanup-work');
+  if ([workspace.cwd, staged].some(path => lstatSync(path, { throwIfNoEntry: false }))) return undefined;
+  if (state.kind === 'git' && hasGitWorkspace(job, workspace)) {
+    throw new Error('Git worktree cleanup could not be verified.');
+  }
+  const review = readRecord(job, 'review.json');
+  if (review.id !== id || review.turn !== state.turn) throw new Error('Review is stale. Review the current results before asking again.');
+  verifyCleanup(job, workspace, state, { workspaceRemoved: true });
+  if (!finalized.cleanupStarted && decision === '--apply') {
+    const root = verifyOriginal(readRecord(job, 'baseline.json'), { allowNewCommit: true });
+    verifyApplied(root, review.changes);
+    if (!finalized.links && review.changes.some(({ after }) => after?.type === 'link')) {
+      throw new Error('The link targets from the original apply are unavailable. Inspect the job before cleanup.');
+    }
+    verifyAppliedLinks(root, finalized.links ?? []);
+  }
+  return writeCleanupReceipt(job, workspace, review.original, id, decision);
 }
 
 export function removeFinishedJob(job, receipt) {
@@ -642,6 +677,7 @@ function verifyCleanup(job, workspace, state, { workspaceRemoved = false } = {})
   for (const info of entries) {
     const { name } = info;
     if (info.isFile() && (jobControlFiles.includes(name)
+      || /^cleanup-receipt-[a-f0-9-]{36}\.tmp$/i.test(name)
       || /^prompt(?:[-_][a-z0-9_-]+)?\.(?:txt|md)$/i.test(name))) continue;
     if (info.isDirectory() && ['gemini', 'workspaces'].includes(name)) continue;
     if (info.isDirectory() && /^turn-[a-z0-9]{6}$/i.test(name)
