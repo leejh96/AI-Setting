@@ -24,6 +24,7 @@ ai-setting/
 │   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
 │   ├── compare-changes/       # 수정 전 자료 확보와 변경 전후 비교
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
+│   ├── explain-code-decisions/ # 기존 구현을 선택한 이유 조사
 │   ├── korean-writing/  # 한국어 업무 문서 작성·퇴고
 │   ├── task-lessons/   # 재사용할 작업 교훈의 조회·기록·정리
 │   ├── tech-research/    # 공식 근거와 적용 조건을 대조하는 기술 조사
@@ -57,6 +58,7 @@ ai-setting/
 | [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
 | [compare-changes](skills/compare-changes/SKILL.md) | 전후 비교 요청 또는 화면·동작·구조·성능의 차이를 문장으로 파악하기 어려운 변경 | 수정 전 자료 확보, 같은 조건에서 전후 비교, 스크린샷·표 등 변경에 맞는 형식 선택 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
+| [explain-code-decisions](skills/explain-code-decisions/SKILL.md) | 기존 구현·설정·예외를 왜 그렇게 정했는지 묻는 경우 | 현재 코드와 커밋·PR 기록을 대조해 당시 선택 이유와 지금도 유효한 제약을 설명 |
 | [korean-writing](skills/korean-writing/SKILL.md) | 한국어 메일·보고서·공지·기획서 등 업무 문서 작성·퇴고 | 독자와 목적에 맞는 말투, 번역투 점검, 사실·약속·불확실성 대조 |
 | [task-lessons](skills/task-lessons/SKILL.md) | 반복 실패나 뜻밖의 제약 등으로 이전 교훈이 다음 행동을 바꿀 때 | 프로젝트별 교훈 조회·기록·갱신·폐기 |
 | [decision-table](skills/decision-table/SKILL.md) | 결과가 갈리는 분기가 2개 이상인 백엔드 API·비즈니스 로직 | 조건·결과·부수효과의 결정 테이블을 구현·테스트에 연결 |
