@@ -33,7 +33,8 @@ done
 cp "hooks/code-quality-review/REVIEW.md" "$codex_hook_target/"
 cp "hooks/code-quality-review/codex/codex-code-quality-review.mjs" "$codex_hook_target/codex/"
 cp "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" "$gemini_hook_target/gemini/"
-node "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" --write-rule "$gemini_rules_target/code-quality-review.md"
+node "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" --write-rule "$gemini_rules_target/code-quality-review.md" || exit 1
+node scripts/sync-antigravity-lint-permission.mjs || exit 1
 ```
 
 Antigravity는 전역 훅 폴더 접근 제한을 피하기 위해 `REVIEW.md`를 훅 폴더에 두지 않고, 저장소 어댑터의 `--write-rule`로 `rules/code-quality-review.md`에 `trigger: model_decision` frontmatter를 붙여 생성합니다(`--print-rule`로 출력 내용을 미리 확인할 수 있습니다). 설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사·규칙 생성합니다.
@@ -56,7 +57,7 @@ node "$gemini_hook_target/gemini/gemini-code-quality-review.mjs" --print-config
 
 기존 `~/.gemini/config/hooks.json` 전체를 백업하고 출력의 `ai-setting-code-quality-review` 안의 `PreInvocation`과 `Stop`을 함께 병합합니다. 기존 `enabled` 상태와 시크릿 검사 등 다른 훅을 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 Antigravity 사용자 홈의 `~/.gemini/lints/`에서 읽습니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
-[전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 설정합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 활성 상태를 확인합니다. 생성한 따옴표를 임의로 제거하지 말고 앱 안에서 명령이 실제로 실행되는지 확인합니다.
+위 복사 단계에서 [전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 자동으로 등록합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 활성 상태를 확인합니다. 생성한 따옴표를 임의로 제거하지 말고 앱 안에서 명령이 실제로 실행되는지 확인합니다.
 
 ## 검증과 갱신
 

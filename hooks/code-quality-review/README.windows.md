@@ -39,6 +39,9 @@ Copy-Item -LiteralPath 'hooks/code-quality-review/REVIEW.md' -Destination $codex
 Copy-Item -LiteralPath 'hooks/code-quality-review/codex/codex-code-quality-review.mjs' -Destination "$codexHookTarget/codex"
 Copy-Item -LiteralPath 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' -Destination "$geminiHookTarget/gemini"
 node 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' --write-rule "$geminiRulesTarget/code-quality-review.md"
+if ($LASTEXITCODE -ne 0) { throw 'Antigravity 검토 규칙을 생성하지 못했습니다.' }
+node 'scripts/sync-antigravity-lint-permission.mjs'
+if ($LASTEXITCODE -ne 0) { throw 'Antigravity 린트 읽기 권한을 등록하지 못했습니다.' }
 ```
 
 Antigravity는 전역 훅 폴더 접근 제한을 피하기 위해 `REVIEW.md`를 훅 폴더에 두지 않고, 저장소 어댑터의 `--write-rule`로 `rules/code-quality-review.md`에 `trigger: model_decision` frontmatter를 붙여 생성합니다(`--print-rule`로 출력 내용을 미리 확인할 수 있습니다). 설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사·규칙 생성합니다.
@@ -81,7 +84,7 @@ if ($qualityCommand.StartsWith('powershell.exe ')) {
 }
 ```
 
-[전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 설정합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 해당 훅의 활성 상태를 확인합니다. 명령이 등록됐다는 사실만으로 검토와 반복 종료가 확인된 것은 아닙니다.
+위 복사 단계에서 [전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 자동으로 등록합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 해당 훅의 활성 상태를 확인합니다. 명령이 등록됐다는 사실만으로 검토와 반복 종료가 확인된 것은 아닙니다.
 
 ## 검증과 갱신
 
