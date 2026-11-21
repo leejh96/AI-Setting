@@ -7,7 +7,9 @@
 - Windows PowerShell에서는 `& '<이 스킬의 절대 경로>/scripts/location.ps1'`를 실행합니다. Node.js가 자식 프로세스 출력을 캡처할 수 없는 Windows 샌드박스에서도 PowerShell이 Git 출력을 직접 읽습니다.
 - 다른 환경에서는 `node '<이 스킬의 절대 경로>/scripts/location.mjs'`를 실행합니다.
 
-기본 루트는 `$CODEX_HOME/task-lessons`이며 `CODEX_HOME`이 없으면 `~/.codex/task-lessons`입니다. 기존 교훈 저장소가 확인되고 같은 구조라면 `CODEX_LESSONS_DIR`에 해당 절대 경로를 지정해 재사용합니다. 다른 구조라면 위치와 프로젝트 대응 관계를 확인해 기존 기록을 조회합니다. 이전이나 삭제가 필요하면 대상과 이유를 먼저 정리합니다. 검증에서는 `CODEX_LESSONS_DIR`에 전용 임시 경로를 지정합니다.
+기본 루트는 `$CODEX_HOME/skills/task-lessons/lessons`입니다. `CODEX_HOME`이 없으면 `~/.codex/skills/task-lessons/lessons`를 사용합니다. 설치·갱신 명령은 `lessons/`를 생성하고 쓰기 권한을 등록하며, 기존 `$CODEX_HOME/task-lessons`의 기록을 같은 상대 경로로 이전합니다. 기존 기록의 같은 경로에 내용이 다른 파일이 있으면 양쪽을 보존하고 충돌 경로를 알립니다.
+
+`CODEX_LESSONS_DIR`에 다른 절대 경로가 지정되어 있으면 해당 저장소를 계속 사용합니다. 이 경우 동기화는 스킬 파일을 갱신하며 사용자 지정 경로의 데이터와 권한은 별도로 관리합니다. 검증에는 전용 임시 경로를 지정할 수 있습니다.
 
 프로젝트 키는 Git `origin`으로 계산합니다. `github.com`의 표준 HTTPS와 `git` 사용자 SSH 주소는 같은 소유자·저장소 경로를 공유합니다. 일반 서버는 전송 방식과 경로를 구분하며, SSH에서는 사용자와 상대·절대 경로도 구분합니다. 비밀 인증값은 키에 넣지 않습니다. URL만으로 원격을 안전하게 식별할 수 없으면 Git 공용 디렉터리를 사용합니다. 로컬 Git 원본을 복제했다면 원본을 따라가고, Git 프로젝트가 아니면 지정한 작업 디렉터리를 기준으로 합니다. 원격의 별칭이나 전송 방식이 달라지면 같은 저장소의 복제본도 서로 다른 키를 얻을 수 있습니다.
 

@@ -8,6 +8,7 @@ Desktop.ini
 .env.*
 !.env.example
 !.env.*.example
+/skills/task-lessons/lessons/
 
 # Logs, temporary files, and backups
 *.log

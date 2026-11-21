@@ -82,15 +82,16 @@ ai-setting/
 
 기존 터미널 버전은 [보관 디렉터리](archive/antigravity-worker/SKILL.md)에 두고 동기화 대상에서 제외합니다. 이전 설치를 갱신할 때는 터미널 버전과 `antigravity-worker-acp` 설치본을 스킬 검색 경로 밖에 보관한 뒤 현재 `antigravity-worker`를 설치합니다.
 
-**`task-lessons`는 Codex 전용입니다.** 경로 계산에 Node.js 22 이상을 사용합니다. 교훈은 `~/.codex/task-lessons`에 프로젝트별로 저장하며 `CODEX_HOME` 또는 `CODEX_LESSONS_DIR` 설정을 따릅니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
+**`task-lessons`는 Codex 전용입니다.** 저장소 루트에서 `node scripts/sync-task-lessons.mjs`로 동기화합니다. 기본 경로는 스킬 설치본 아래 `lessons/`입니다. 스크립트는 기존 교훈을 이전하고 저장된 기록을 보존하며, `workspace-write` 설정에서 해당 폴더의 쓰기 경로를 한 번만 등록합니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 
-`compare-changes` 설치본을 갱신할 때는 기존 `artifacts/` 폴더를 같은 경로에 두고 배포 파일을 갱신합니다. 이전 답변의 파일 링크가 이 경로를 사용합니다.
+`compare-changes`는 저장소 루트에서 `node scripts/sync-compare-changes.mjs`로 두 도구에 동기화합니다. 한 도구만 갱신하려면 `codex` 또는 `antigravity`를 인자로 전달합니다. 기존 `artifacts/` 폴더와 자료를 보존하고, 폴더가 없으면 만들며, 기존 파일을 갱신할 때는 변경 전 백업 경로를 출력합니다.
 
-Codex를 `workspace-write`로 사용하는 경우 `compare-changes`를 동기화할 때 설치본 아래 `artifacts/` 폴더를 준비합니다. `CODEX_HOME/config.toml`(기본 `~/.codex/config.toml`)을 백업한 뒤, 기존 항목을 보존하면서 `sandbox_workspace_write.writable_roots` 배열에 `artifacts/`의 절대 경로를 한 번만 추가합니다. 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 적용을 확인합니다. [Codex 설정 레퍼런스](https://learn.chatgpt.com/docs/config-file/config-reference)
+- Codex는 `workspace-write` 설정을 사용합니다. PATH의 `codex` CLI가 `config.toml`의 `sandbox_workspace_write.writable_roots`에 스킬 설치본의 `artifacts/` 경로를 추가합니다. [Codex 설정 레퍼런스](https://learn.chatgpt.com/docs/config-file/config-reference)
+- Antigravity는 앱의 전역 설정과 CLI 설정 폴더가 있는 경우 CLI 설정에 `write_file(<artifacts 폴더의 절대 경로>)`를 등록합니다. 이 규칙은 폴더와 하위 파일의 읽기·쓰기를 허용합니다. [Antigravity CLI 권한 문서](https://antigravity.google/docs/permissions?tab=cli)
 
-Antigravity에 `compare-changes`를 동기화할 때는 설치본 아래 `artifacts/` 폴더를 준비하고, 그 절대 경로를 `write_file(<artifacts 폴더의 절대 경로>)` 규칙으로 허용합니다. 이 규칙은 해당 폴더와 하위 파일의 읽기·쓰기를 허용합니다. CLI에서는 `~/.gemini/antigravity-cli/settings.json`을 백업한 뒤, 기존 규칙을 보존하면서 `permissions.allow` 배열에 해당 항목을 한 번만 추가합니다. 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 적용을 확인합니다. [Antigravity CLI 권한 문서](https://antigravity.google/docs/permissions?tab=cli)
+이미 등록된 권한과 기존 설정은 보존합니다. 동기화 후 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 확인합니다.
 
 스킬 이름이 바뀌었다면 새 이름의 폴더를 복사하고, 이전 이름의 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다.
 
@@ -160,7 +161,7 @@ cd ai-setting
 | 코드 품질 검토 | [설정 안내](hooks/code-quality-review/README.macos.md) | [설정 안내](hooks/code-quality-review/README.windows.md) |
 | 위험한 터미널 명령 검사 | [설정 안내](hooks/command-guard/README.macos.md) | [설정 안내](hooks/command-guard/README.windows.md) |
 
-현재 자동 설치·동기화 스크립트는 없습니다. 저장소를 받는 것만으로 다른 프로젝트나 도구의 전역 지침과 훅이 자동 적용되지는 않습니다.
+전역 지침과 훅은 위 설치 절차를 따릅니다. `compare-changes`와 `task-lessons`는 각각 전용 명령으로 동기화합니다.
 
 ## 설치 상태 점검
 

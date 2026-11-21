@@ -12,6 +12,8 @@
 ## 스킬 설치·동기화
 
 - 스킬을 설치하거나 갱신할 때 README에서 스킬별 배포 대상을 확인합니다. Codex와 Antigravity를 함께 동기화하는 경우에도 각 도구에 해당하는 스킬만 복사합니다.
+- `compare-changes`를 설치·갱신할 때는 `node scripts/sync-compare-changes.mjs [codex|antigravity]`를 사용합니다. 한 도구를 지정하거나 인자 없이 두 도구를 동기화합니다. 설치 절차에서 `artifacts/`를 만들고 해당 폴더의 권한을 등록합니다.
+- `task-lessons`를 설치·갱신할 때는 `node scripts/sync-task-lessons.mjs`를 사용합니다. Codex 스킬 설치본 아래 `lessons/`를 보존하고, 기본 경로 사용 시 이전 교훈을 옮기고 해당 폴더의 권한을 등록합니다.
 - `skills/antigravity-worker/`는 Codex 전용입니다. Codex 설치·갱신에 포함하고 Antigravity 스킬 동기화에서는 제외합니다. `archive/antigravity-worker/`의 터미널 버전은 보관용입니다.
 
 ## Codex·Antigravity 훅 설치·갱신
