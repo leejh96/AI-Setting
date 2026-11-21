@@ -1,6 +1,6 @@
 import console from 'node:console';
 import {
-  constants, copyFileSync, lstatSync, readFileSync, readdirSync,
+  constants, copyFileSync, lstatSync, mkdtempSync, readFileSync, readdirSync, renameSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -11,7 +11,7 @@ import { syncCodexDirectoryPermission } from './codex-directory-permission.mjs';
 import { ensureInstallDirectory, readInstallFile, replaceInstallFile } from './install-file.mjs';
 
 const source = new URL('../skills/task-lessons/', import.meta.url);
-const skillFiles = ['SKILL.md', 'references/storage.md', 'scripts/location.mjs', 'scripts/location.ps1'];
+const skillFiles = ['SKILL.md', 'references/storage.md', 'scripts/git-files.mjs', 'scripts/location.mjs'];
 
 function planMigration(legacy, lessons) {
   const directories = [];
@@ -97,6 +97,15 @@ export async function* syncTaskLessons({
     const backup = updated ? replaceInstallFile(path, original, contents, 'task-lessons-sync') : undefined;
     yield { path, added: updated, backup };
   }
+
+  const retired = join(installation, 'scripts', 'location.ps1');
+  if (readInstallFile(retired)) {
+    const backupRoot = join(base, 'ai-setting-backups');
+    ensureInstallDirectory(backupRoot);
+    const backup = join(mkdtempSync(join(backupRoot, 'task-lessons-retired-')), 'location.ps1.bak');
+    renameSync(retired, backup);
+    yield { path: retired, added: false, retired: true, backup };
+  }
 }
 
 async function main(args) {
@@ -109,6 +118,7 @@ async function main(args) {
       if (item.custom) console.log(`${tool} 사용자 지정 교훈 경로 사용 (${item.path})`);
       else if (item.migrated !== undefined) console.log(`${tool} 교훈 ${item.migrated}개 이전, 저장 경로 확인 (${item.path})`);
       else if (item.storage) console.log(`${tool} 저장 경로 확인 (${item.path})`);
+      else if (item.retired) console.log(`${tool} 이전 PowerShell 실행 파일 정리 (${item.path})`);
       else console.log(`${tool} ${item.added ? '갱신' : '기존 항목 확인'} (${item.path})`);
       if (item.preserved) console.log(`이전 원본 보존 (${item.preserved})`);
       if (item.backup) console.log(`변경 전 백업 (${item.backup})`);

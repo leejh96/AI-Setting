@@ -1,16 +1,19 @@
 import { spawnSync } from 'node:child_process';
 import console from 'node:console';
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath } from 'node:url';
+import { inspectGitFiles } from './git-files.mjs';
+
+class GitUnavailable extends Error {}
 
 function git(directory, ...args) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
   const result = spawnSync('git', ['-C', directory, ...args], { env, encoding: 'utf8', windowsHide: true });
-  if (result.error?.code === 'ENOENT') return undefined;
+  if (['ENOENT', 'EACCES', 'EPERM'].includes(result.error?.code)) throw new GitUnavailable();
   if (result.error) throw new Error('Git을 실행할 수 없습니다.');
   return result.status === 0 ? result.stdout.replace(/\r?\n$/, '') : undefined;
 }
@@ -88,47 +91,23 @@ function storageRoot() {
   return resolve(directory);
 }
 
-class GitProbe extends Error {
-  constructor(directory) {
-    super('Git 저장소 정보가 필요합니다.');
-    this.directory = directory;
-  }
-}
-
-function pipedGit() {
-  let entries;
+function projectIdentity(directory) {
   try {
-    entries = JSON.parse(readFileSync(0, 'utf8'));
-  } catch {
-    throw new Error('Git 조회 결과를 읽을 수 없습니다.');
+    return gitIdentity(directory, inspectGit);
+  } catch (error) {
+    if (!(error instanceof GitUnavailable)) throw error;
+    return gitIdentity(directory, inspectGitFiles);
   }
-  const snapshots = new Map(entries.map(info => [info.directory, info]));
-  return directory => {
-    if (!snapshots.has(directory)) throw new GitProbe(directory);
-    return snapshots.get(directory);
-  };
 }
 
-function printLocation(value, mode) {
-  const json = JSON.stringify(value);
-  console.log(mode === '--git-stdin'
-    ? json.replace(/[\u0080-\uffff]/g, character => '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'))
-    : json);
-}
-
-const [directoryArgument, mode] = process.argv.slice(2);
+const [directoryArgument] = process.argv.slice(2);
 try {
   const root = storageRoot();
   const directory = realpathSync.native(directoryArgument || process.cwd());
-  const readGit = mode === '--git-stdin' ? pipedGit() : inspectGit;
-  const identity = gitIdentity(directory, readGit) || ['directory', directory];
+  const identity = projectIdentity(directory) || ['directory', directory];
   const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
-  printLocation({ project: join(root, 'projects', key), shared: join(root, 'shared') }, mode);
+  console.log(JSON.stringify({ project: join(root, 'projects', key), shared: join(root, 'shared') }));
 } catch (error) {
-  if (error instanceof GitProbe) {
-    printLocation({ probe: error.directory }, mode);
-  } else {
-    console.error(`교훈 저장 경로를 확인할 수 없습니다. ${error.code || error.message}`);
-    process.exitCode = 1;
-  }
+  console.error(`교훈 저장 경로를 확인할 수 없습니다. ${error.code || error.message}`);
+  process.exitCode = 1;
 }

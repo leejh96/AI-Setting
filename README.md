@@ -82,7 +82,7 @@ ai-setting/
 
 기존 터미널 버전은 [보관 디렉터리](archive/antigravity-worker/SKILL.md)에 두고 동기화 대상에서 제외합니다. 이전 설치를 갱신할 때는 터미널 버전과 `antigravity-worker-acp` 설치본을 스킬 검색 경로 밖에 보관한 뒤 현재 `antigravity-worker`를 설치합니다.
 
-`task-lessons`는 저장소 루트에서 `node scripts/sync-task-lessons.mjs`로 두 도구에 동기화합니다. 한 도구만 갱신하려면 `codex` 또는 `antigravity`를 전달합니다. 각 도구는 자기 스킬 설치본의 `lessons/`를 사용합니다. 동기화는 Codex의 기존 교훈을 새 기본 경로에 한 번 복사하고, 구버전 경로의 원본을 보존합니다. Codex에는 `workspace-write` 쓰기 경로를, Antigravity에는 앱 및 설치된 CLI의 폴더 읽기·쓰기 권한을 등록합니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
+`task-lessons`는 저장소 루트에서 `node scripts/sync-task-lessons.mjs`로 두 도구에 동기화합니다. 한 도구만 갱신하려면 `codex` 또는 `antigravity`를 전달합니다. 각 도구는 자기 스킬 설치본의 `lessons/`를 사용합니다. 동기화는 Codex의 기존 교훈을 새 기본 경로에 한 번 복사하고, 구버전 경로의 원본을 보존합니다. Codex에는 `workspace-write` 쓰기 경로를, Antigravity에는 앱 및 설치된 CLI의 폴더 읽기·쓰기 권한을 등록합니다. macOS와 Windows 모두 Node.js로 경로를 계산하며, 기존 PowerShell 실행 파일은 동기화 시 복구용 사본으로 옮깁니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 

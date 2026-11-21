@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -28,6 +28,8 @@ test('기존 교훈을 새 위치로 이전하고 권한을 등록하며 재동�
   const { codex, legacy, installation, lessons } = fixture(t);
   write(join(legacy, 'shared', 'shared.md'), 'legacy shared');
   write(join(legacy, 'projects', 'project-key', 'project.md'), 'legacy project');
+  const oldScript = join(installation, 'scripts', 'location.ps1');
+  write(oldScript, 'previous launcher');
   const permissionCalls = [];
   const codexPermission = async (path, directory, label) => {
     permissionCalls.push([path, directory, label]);
@@ -43,9 +45,11 @@ test('기존 교훈을 새 위치로 이전하고 권한을 등록하며 재동�
   assert.equal(readFileSync(join(legacy, 'shared', 'shared.md'), 'utf8'), 'legacy shared');
   assert.equal(readFileSync(join(lessons, 'shared', 'shared.md'), 'utf8'), 'legacy shared');
   assert.equal(readFileSync(join(lessons, 'projects', 'project-key', 'project.md'), 'utf8'), 'legacy project');
-  for (const file of ['SKILL.md', 'scripts/location.mjs', 'scripts/location.ps1', 'references/storage.md']) {
+  for (const file of ['SKILL.md', 'scripts/location.mjs', 'scripts/git-files.mjs', 'references/storage.md']) {
     assert.deepEqual(readFileSync(join(installation, file)), readFileSync(new URL(file, skill)));
   }
+  assert.equal(existsSync(oldScript), false);
+  assert.equal(readFileSync(first.find(item => item.retired).backup, 'utf8'), 'previous launcher');
 
   const newLesson = join(lessons, 'shared', 'new.md');
   write(newLesson, 'new lesson');
@@ -159,72 +163,143 @@ test('두 도구는 같은 프로젝트에서 각자 교훈을 사용하고 Anti
   const codexLocation = locate(codexSkill);
   const antigravityLocation = locate(antigravitySkill);
   assert.equal(codexLocation.shared, join(override, 'shared'));
-  const antigravityRoot = realpathSync.native(antigravityLessons);
-  assert.equal(antigravityLocation.shared, join(antigravityRoot, 'shared'));
-  assert.equal(antigravityLocation.project, join(antigravityRoot, 'projects', basename(codexLocation.project)));
+  const shared = statSync(antigravityLocation.shared);
+  const expected = statSync(join(antigravityLessons, 'shared'));
+  assert.deepEqual([shared.dev, shared.ino], [expected.dev, expected.ino]);
+  assert.equal(dirname(antigravityLocation.project), join(dirname(antigravityLocation.shared), 'projects'));
+  assert.equal(basename(antigravityLocation.project), basename(codexLocation.project));
 });
 
-for (const shell of ['Node.js', 'Windows PowerShell']) {
-  test(`${shell} 교훈 경로는 상속된 Git 환경 대신 실제 작업 폴더를 사용한다`, { skip: shell === 'Windows PowerShell' && process.platform !== 'win32' }, t => {
-    const { codex: home } = fixture(t);
-    const [other, project, plain] = ['other', '한글 프로젝트', '한글 일반 폴더'].map(name => join(home, name));
-    const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
-    const projectOrigin = 'https://github.com/lesson-fixture/project.git';
-    const git = (directory, ...args) => {
-      const result = spawnSync('git', ['-C', directory, ...args], { env: cleanEnv, encoding: 'utf8', windowsHide: true });
-      assert.equal(result.status, 0, result.stderr);
-    };
-    for (const directory of [other, project, plain]) mkdirSync(directory);
-    for (const [directory, url] of [[other, 'https://github.com/lesson-fixture/other.git'], [project, projectOrigin]]) {
-      git(directory, 'init', '--quiet');
-      git(directory, 'remote', 'add', 'origin', url);
-    }
+const cleanGitEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+const locator = fileURLToPath(new URL('scripts/location.mjs', skill));
+const blockedGit = [
+  "import cp from 'node:child_process';",
+  "import { syncBuiltinESMExports } from 'node:module';",
+  "import { pathToFileURL } from 'node:url';",
+  "cp.spawnSync = () => ({ error: Object.assign(new Error('Git start blocked'), { code: 'EPERM' }) });",
+  "syncBuiltinESMExports();",
+  "process.argv = [process.execPath, process.argv[2], process.argv[1]];",
+  "await import(pathToFileURL(process.argv[1]));",
+].join(' ');
 
-    const command = shell === 'Node.js' ? process.execPath : 'powershell.exe';
-    const locator = new URL(shell === 'Node.js' ? 'scripts/location.mjs' : 'scripts/location.ps1', skill);
-    const entry = fileURLToPath(locator);
-    const options = shell === 'Node.js' ? [entry] : ['-NoProfile', '-NonInteractive', '-Command',
-      `[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437); & '${entry.replaceAll("'", "''")}'`];
-    const locate = (cwd, overrides = {}) => {
-      const result = spawnSync(command, options, {
-        cwd, env: { ...cleanEnv, CODEX_LESSONS_DIR: join(home, '교훈'), ...overrides },
-        encoding: 'utf8', timeout: 15_000, windowsHide: true,
-      });
-      assert.equal(result.status, 0, result.stderr || result.error?.message);
-      const location = JSON.parse(result.stdout);
-      assert.equal(location.shared, join(home, '교훈', 'shared'));
-      return location.project;
-    };
-    const ownKey = locate(project);
-    const plainKey = locate(plain);
-    assert.equal(new Set([ownKey, plainKey, locate(other)]).size, 3);
+function git(directory, ...args) {
+  const result = spawnSync('git', ['-C', directory, ...args], {
+    env: cleanGitEnv, encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+}
 
-    const otherRepository = { GIT_DIR: join(other, '.git'), GIT_WORK_TREE: other };
-    assert.equal(locate(project, otherRepository), ownKey);
-    assert.equal(locate(plain, otherRepository), plainKey);
-    assert.equal(locate(project, {
-      GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'url.https://github.com/lesson-fixture/other.git.insteadOf',
-      GIT_CONFIG_VALUE_0: projectOrigin,
-    }), ownKey);
+function locate(home, directory, { blocked = false, missing = false, overrides = {} } = {}) {
+  const args = blocked ? ['--input-type=module', '-e', blockedGit, directory, locator] : [locator, directory];
+  const env = {
+    ...cleanGitEnv,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, 'xdg'),
+    CODEX_LESSONS_DIR: join(home, '교훈'),
+    ...overrides,
+  };
+  if (missing) {
+    for (const key of Object.keys(env).filter(name => name.toUpperCase() === 'PATH')) delete env[key];
+    env.PATH = join(home, 'no-git-bin');
+  }
+  return spawnSync(process.execPath, args, {
+    cwd: home, env, encoding: 'utf8', timeout: 15_000, windowsHide: true,
   });
 }
 
-test('PowerShell 경로 조회의 JSON은 콘솔 인코딩과 관계없이 한글과 유니코드 경로를 보존한다', t => {
-  const { codex } = fixture(t);
-  const directory = join(codex, '작업 😀');
-  const lessons = join(codex, '교훈');
-  mkdirSync(directory);
-  const locate = snapshots => {
-    const locator = fileURLToPath(new URL('scripts/location.mjs', skill));
-    const result = spawnSync(process.execPath, [locator, directory, '--git-stdin'], {
-      encoding: 'utf8', input: JSON.stringify(snapshots), env: { ...process.env, CODEX_LESSONS_DIR: lessons },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /[\u0080-\uffff]/u);
-    return JSON.parse(result.stdout);
+function lessonPaths(home, directory, options) {
+  const result = locate(home, directory, options);
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const paths = JSON.parse(result.stdout);
+  assert.equal(paths.shared, join(home, '교훈', 'shared'));
+  return paths;
+}
+
+test('교훈 경로는 상속된 Git 환경 대신 실제 작업 폴더를 사용한다', t => {
+  const { codex: home } = fixture(t);
+  const [other, project, plain] = ['other', '한글 프로젝트', '한글 일반 폴더'].map(name => join(home, name));
+  const projectOrigin = 'https://github.com/lesson-fixture/project.git';
+  for (const directory of [other, project, plain]) mkdirSync(directory);
+  for (const [directory, url] of [[other, 'https://github.com/lesson-fixture/other.git'], [project, projectOrigin]]) {
+    git(directory, 'init', '--quiet');
+    git(directory, 'remote', 'add', 'origin', url);
+  }
+
+  const own = lessonPaths(home, project);
+  const plainPaths = lessonPaths(home, plain);
+  assert.equal(new Set([own.project, plainPaths.project, lessonPaths(home, other).project]).size, 3);
+  const overrides = {
+    GIT_DIR: join(other, '.git'),
+    GIT_WORK_TREE: other,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'url.https://github.com/lesson-fixture/other.git.insteadOf',
+    GIT_CONFIG_VALUE_0: projectOrigin,
   };
-  const { probe } = locate([]);
-  assert.equal(probe, realpathSync.native(directory));
-  assert.equal(locate([{ directory: probe }]).shared, join(lessons, 'shared'));
+  assert.deepEqual(lessonPaths(home, project, { overrides }), own);
+  assert.deepEqual(lessonPaths(home, plain, { overrides }), plainPaths);
+  assert.deepEqual(lessonPaths(home, project, { blocked: true, overrides }), own);
+  assert.deepEqual(lessonPaths(home, project, { missing: true }), own);
+  assert.deepEqual(lessonPaths(home, plain, { blocked: true }), plainPaths);
+});
+
+test('Git 실행 차단 시 연결 워크트리와 로컬 원격의 기존 프로젝트 키를 보존한다', t => {
+  const { codex: home } = fixture(t);
+  const project = join(home, '팀 프로젝트');
+  const linked = join(home, '연결 워크트리');
+  const mirror = join(home, '로컬 복제본');
+  const nested = join(linked, '하위 폴더');
+  mkdirSync(project);
+  mkdirSync(mirror);
+  git(project, 'init', '--quiet');
+  git(project, '-c', 'user.name=Lesson Test', '-c', 'user.email=lesson@example.invalid',
+    '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '--quiet', '-m', 'initial');
+  git(project, 'worktree', 'add', '--quiet', '--detach', linked);
+  mkdirSync(nested);
+  git(mirror, 'init', '--quiet');
+  git(mirror, 'remote', 'add', 'origin', '../팀 프로젝트');
+  const commonPaths = lessonPaths(home, project);
+  for (const directory of [nested, mirror]) {
+    assert.deepEqual(lessonPaths(home, directory), commonPaths);
+    assert.deepEqual(lessonPaths(home, directory, { blocked: true }), commonPaths);
+  }
+  git(project, 'remote', 'add', 'origin', 'https://github.com/lesson-fixture/project');
+  const remotePaths = lessonPaths(home, project);
+  assert.notDeepEqual(remotePaths, commonPaths);
+  assert.deepEqual(lessonPaths(home, nested, { blocked: true }), remotePaths);
+  assert.deepEqual(lessonPaths(home, mirror, { blocked: true }), remotePaths);
+
+  git(mirror, 'remote', 'set-url', 'origin', '../삭제된 복제 원본');
+  const disconnected = lessonPaths(home, mirror);
+  assert.notDeepEqual(disconnected, remotePaths);
+  assert.deepEqual(lessonPaths(home, mirror, { blocked: true }), disconnected);
+});
+
+test('파일 조회는 주소 재작성 우선순위를 보존하고 확인이 어려운 설정에서 프로젝트 키를 반환하지 않는다', t => {
+  const { codex: home } = fixture(t);
+  const project = join(home, 'project');
+  mkdirSync(project);
+  git(project, 'init', '--quiet');
+  git(project, 'remote', 'add', 'origin', 'example:team/project');
+  write(join(home, '.gitconfig'), [
+    '[url "https://github.com/"]',
+    '  insteadOf = example:',
+    '[url "git@github.com:other/"]',
+    '  insteadOf = example:team/',
+    '',
+  ].join('\n'));
+  assert.deepEqual(lessonPaths(home, project, { blocked: true }), lessonPaths(home, project));
+  fs.appendFileSync(join(project, '.git', 'config'), '\n[includeIf "gitdir:./"]\n  path = additional.conf\n');
+  const blocked = locate(home, project, { blocked: true });
+  assert.equal(blocked.status, 1);
+  assert.equal(blocked.stdout, '');
+  assert.match(blocked.stderr, /파일만으로 프로젝트 키를 확인할 수 없습니다/u);
+});
+
+test('Git 실행 차단 시 bare 저장소에서 기존 프로젝트 키를 보존한다', t => {
+  const { codex: home } = fixture(t);
+  const bare = join(home, '저장소.git');
+  mkdirSync(bare);
+  git(bare, 'init', '--quiet', '--bare');
+  assert.deepEqual(lessonPaths(home, bare, { blocked: true }), lessonPaths(home, bare));
 });
