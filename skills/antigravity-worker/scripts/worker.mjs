@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import console from 'node:console';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { clearInterval, clearTimeout, setInterval, setTimeout } from 'node:timer
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { lockWorkspace, managedWorkspace, removeFileWorkspace } from './workspace.mjs';
 import { AcpResponseError, configureSession, connect, defaultEffort, defaultModel, openSession } from './acp.mjs';
+import { grantSwarmFiles, lastSwarmSequence, readSwarmRequest, SwarmPermissionCleanupError, swarmBoard, waitForSwarm } from './swarm.mjs';
 import {
   finalizeResult, prepareResult, readCleanupReceipt, recoverCleanupReceipt, removeFinishedJob, removeGitWorkspace,
   reviewResult, verifyNoRecovery, writeCleanupReceipt,
@@ -44,20 +45,37 @@ function updateCli() {
   emit('cli-updated', { version: version.stdout.trim(), report });
 }
 
-function quota() {
+async function readQuota() {
   const cwd = mkdtempSync(join(realpathSync(tmpdir()), 'codex-agy-acp-quota-'));
   try {
-    const result = spawnSync(agyExecutable(), ['-p', '/usage', '--print-timeout', '15s'], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 25_000,
+    const stdout = await new Promise((resolve, reject) => {
+      const child = execFile(agyExecutable(), ['-p', '/usage', '--print-timeout', '15s'], {
+        cwd, encoding: 'utf8', windowsHide: true, timeout: 25_000,
+      }, (error, output) => {
+        if (error) {
+          reject(new Error(`Antigravity quota lookup failed (${error.signal ?? error.code}).`, { cause: error }));
+        } else resolve(output);
+      });
+      child.stdin.end();
     });
-    if (result.error) throw new Error(`Antigravity quota lookup could not run (${result.error.code}).`);
-    if (result.status !== 0) throw new Error(`Antigravity quota lookup failed (${result.signal ?? result.status}).`);
-    const report = stripVTControlCharacters(result.stdout).trim();
+    const report = stripVTControlCharacters(stdout).trim();
     if (!report) throw new Error('Antigravity returned no quota report.');
-    emit('quota', { report });
+    return { report, checkedAt: new Date().toISOString() };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+async function turnQuota(turn, phase) {
+  let result;
+  try {
+    result = await readQuota();
+  } catch (error) {
+    result = { error: error.message };
+  }
+  if (phase) result.phase = phase;
+  emit('turn-quota', { turn, ...result });
+  return result;
 }
 
 async function capabilities(path = process.cwd()) {
@@ -138,12 +156,14 @@ function workspaceFor(job, state) {
   return workspace;
 }
 
-async function promptWorker(job, previous, action, promptPath, { edit, model, effort }) {
+async function promptWorker(job, previous, action, promptPath, { edit, model, effort, swarm }) {
   if (!isAbsolute(promptPath ?? '')) throw new Error('Pass an absolute UTF-8 prompt file path.');
   const prompt = readFileSync(promptPath, 'utf8').trim();
   if (!prompt) throw new Error('The prompt file is empty.');
+  if (swarm && !edit) throw new Error('--swarm requires --edit for the listed files.');
+  const swarmRequest = swarm && readSwarmRequest(swarm, previous.cwd);
   const unlock = lockWorkspace(workspaceFor(job, previous));
-  const state = { ...previous, status: 'starting', stopReason: null, error: null, denied: 0, runnerPid: process.pid, workerPid: null };
+  const state = { ...previous, status: 'starting', stopReason: null, error: null, denied: 0, quota: null, runnerPid: process.pid, workerPid: null };
   let client;
   let session;
   let responseReceived = false;
@@ -151,10 +171,13 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
   let cancelTimer;
   let cancelPoll;
   let cancelSent = false;
+  let swarmCancelled = false;
+  let restoreSwarmPermissions;
   let denied = 0;
   const { promise: cancelDeadline, reject: cancelExpired } = Promise.withResolvers();
 
   function cancel() {
+    swarmCancelled = true;
     if (!sent || responseReceived || cancelSent) return;
     cancelSent = true;
     try {
@@ -193,24 +216,29 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     writeFileSync(transcript, '', { mode: 0o600 });
     writeFileSync(events, '', { mode: 0o600 });
     state.turn = turn;
+    delete state.swarmOutcome;
     save(job, state);
     emit('starting', { job, cwd: state.cwd, turn });
 
+    if (swarmRequest) restoreSwarmPermissions = grantSwarmFiles(profile, turn, swarmRequest.rules);
     client = connectWorker(state.cwd, profile, turn, (id, update) => {
       if (!session || id !== session.sessionId) return;
       const kind = update.sessionUpdate;
       if (kind === 'available_commands_update' && Array.isArray(update.availableCommands)) {
         if (!sent) return; // The connection caches setup notifications until the turn starts.
         state.commands = update.availableCommands;
-        save(job, state);
+        if (!responseReceived) save(job, state);
         emit('available-commands', { commands: state.commands });
         return;
       }
-      if (!sent || responseReceived) return;
+      if (!sent) return;
+      if (kind === 'permission_denied') {
+        if (responseReceived && !swarmRequest) return;
+        denied++;
+      } else if (responseReceived) return;
       if (kind === 'agent_message_chunk' && update.content?.type === 'text') {
         appendFileSync(transcript, update.content.text);
       } else if (['tool_call', 'tool_call_update', 'permission_denied'].includes(kind)) {
-        if (kind === 'permission_denied') denied++;
         const data = { event: kind, title: update.title, status: update.status, toolCallId: update.toolCallId };
         appendFileSync(events, JSON.stringify(data) + '\n');
         emit(kind, data);
@@ -240,8 +268,11 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
 
     process.on('SIGINT', cancel);
     process.on('SIGTERM', cancel);
+    const board = swarmRequest && swarmBoard(profile, session.sessionId);
+    const boardCursor = board ? lastSwarmSequence(board) : 0;
+    const cancelFile = join(turn, 'cancel');
     cancelPoll = setInterval(() => {
-      if (existsSync(join(turn, 'cancel'))) cancel();
+      if (existsSync(cancelFile)) cancel();
     }, 250);
     sent = true;
     const result = await Promise.race([
@@ -251,18 +282,43 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
     responseReceived = true;
     state.stopReason = result?.stopReason ?? null;
     if (state.stopReason === 'cancelled') state.status = 'cancelled';
-    else if (state.stopReason === 'end_turn') state.status = denied ? 'permission-denied' : 'review-ready';
-    else throw new Error(`ACP ended the turn with ${state.stopReason ?? 'no stop reason'}.`);
+    else if (state.stopReason !== 'end_turn') throw new Error(`ACP ended the turn with ${state.stopReason ?? 'no stop reason'}.`);
+    else if (!board) state.status = denied ? 'permission-denied' : 'review-ready';
+    else {
+      state.quota = await turnQuota(turn, 'coordinator');
+      save(job, state);
+      emit('swarm-waiting', { turn, sessionId: session.sessionId, verifier: swarmRequest.verifier });
+      state.swarmOutcome = await waitForSwarm(board, swarmRequest.verifier, boardCursor,
+        () => {
+          if (client.failure) return 'disconnected';
+          if (swarmCancelled || existsSync(cancelFile)) return 'cancelled';
+          if (denied) return 'permission-denied';
+          return null;
+        }, post => {
+          appendFileSync(events, JSON.stringify({ event: 'swarm-post', ...post }) + '\n');
+          emit('swarm-post', post);
+        });
+      if (state.swarmOutcome === 'done') state.status = 'review-ready';
+      else if (['cancelled', 'permission-denied'].includes(state.swarmOutcome)) state.status = state.swarmOutcome;
+      else {
+        state.status = 'failed';
+        state.error = {
+          disconnected: `ACP disconnected while waiting for Swarm. ${client.failure?.message ?? ''}`.trimEnd(),
+          timeout: 'Swarm completion timed out.',
+          blocked: 'A Swarm member reported a blocker.',
+        }[state.swarmOutcome];
+      }
+    }
   } catch (error) {
     if (sent && error instanceof AcpResponseError) responseReceived = true;
-    state.status = sent && !responseReceived ? 'cleanup-needed' : 'failed';
+    state.status = (sent && !responseReceived) || error instanceof SwarmPermissionCleanupError ? 'cleanup-needed' : 'failed';
     state.error = error.message;
   } finally {
-    state.denied = denied;
     clearInterval(cancelPoll);
     clearTimeout(cancelTimer);
+    let workerStopped = !client;
     if (client) {
-      if (session?.canClose && (!sent || responseReceived)) {
+      if (session?.canClose && (!sent || responseReceived) && state.swarmOutcome !== 'disconnected') {
         try {
           await client.request('session/close', { sessionId: session.sessionId }, 5_000);
         } catch (error) {
@@ -271,6 +327,7 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
         }
       }
       const exit = await client.shutdown();
+      workerStopped = exit.code !== null || exit.signal !== null;
       if (exit.code === null || (exit.code !== 0 && sent)) {
         state.status = 'cleanup-needed';
         state.error ??= exit.code === null && exit.signal === null
@@ -278,14 +335,29 @@ async function promptWorker(job, previous, action, promptPath, { edit, model, ef
           : `ACP process exited (${exit.signal ?? exit.code}).`;
       }
     }
-    process.off('SIGINT', cancel);
-    process.off('SIGTERM', cancel);
+    if (workerStopped && restoreSwarmPermissions) {
+      try { restoreSwarmPermissions(); }
+      catch (error) {
+        state.status = 'cleanup-needed';
+        state.error = [state.error, error.message].filter(Boolean).join(' ');
+      }
+    }
+    state.denied = denied;
+    if (state.status === 'review-ready' && denied) state.status = 'permission-denied';
     if (state.status !== 'cleanup-needed') {
       state.workerPid = null;
       state.runnerPid = null;
     }
-    save(job, state);
-    if (state.status !== 'cleanup-needed') unlock();
+    try {
+      if (sent && (!swarmRequest || workerStopped)) {
+        state.quota = await turnQuota(state.turn, swarmRequest ? 'final' : undefined);
+      }
+      save(job, state);
+      if (state.status !== 'cleanup-needed') unlock();
+    } finally {
+      process.off('SIGINT', cancel);
+      process.off('SIGTERM', cancel);
+    }
     emit(state.status, state);
     if (state.status !== 'review-ready') process.exitCode = 1;
   }
@@ -367,7 +439,7 @@ async function main([action, ...args]) {
   }
   if (action === 'quota') {
     if (args.length) throw new Error('Usage: quota');
-    return quota();
+    return emit('quota', await readQuota());
   }
   if (!['start', 'follow-up', 'status', 'cancel', 'review', 'finish', 'discard'].includes(action)) {
     throw new Error('Usage: update | capabilities | quota | prepare | start | follow-up | status | cancel | review | finish | discard');
@@ -399,7 +471,7 @@ async function main([action, ...args]) {
   const { state } = readJob(job);
   if (action === 'start' || action === 'follow-up') {
     const { values } = parseArgs({
-      args: args.slice(2), options: { edit: { type: 'boolean' }, model: { type: 'string' }, effort: { type: 'string' } },
+      args: args.slice(2), options: { edit: { type: 'boolean' }, model: { type: 'string' }, effort: { type: 'string' }, swarm: { type: 'string' } },
     });
     return promptWorker(job, state, action, args[1], values);
   }

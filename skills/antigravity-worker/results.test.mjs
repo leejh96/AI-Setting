@@ -112,6 +112,11 @@ test('an ACP prompt error permits review after a clean shutdown', t => {
     import cp from 'node:child_process';
     import { syncBuiltinESMExports } from 'node:module';
     const spawn = cp.spawn;
+    cp.execFile = (_agy, args, _options, callback) => {
+      if (args[0] !== '-p' || args[1] !== '/usage') throw new Error('Expected a quota lookup');
+      queueMicrotask(() => callback(null, 'Gemini Models 95%'));
+      return { stdin: { end() {} } };
+    };
     cp.spawn = (_agy, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(`
       import { createInterface } from 'node:readline';
       const input = createInterface({ input: process.stdin });
@@ -138,7 +143,188 @@ test('an ACP prompt error permits review after a clean shutdown', t => {
   assert.match(result.result.error, /session\/prompt: Model unavailable/);
   assert.equal(result.result.workerPid, null);
   assert.equal(result.result.denied, 0);
+  assert.match(result.result.quota.report, /95%/);
+  assert.equal(result.events.filter(event => event.event === 'turn-quota').length, 1);
+  assert.deepEqual(f.invoke('status', f.job).result.quota, result.result.quota);
   assertFinished(f, f.invoke('finish', f.job, f.review(), '--clean'), 'cleaned');
+});
+
+function mockSwarm(scenario) {
+  const server = `
+    import { spawn } from 'node:child_process';
+    import { mkdirSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { createInterface } from 'node:readline';
+    const scenario = ${JSON.stringify(scenario)};
+    const profile = process.env.ANTIGRAVITY_GEMINI_DIR;
+    const sessionId = 'test';
+    let closeId;
+    function complete() {
+      const board = join(profile, 'antigravity-cli', 'brain', sessionId, '.system_generated', 'swarm');
+      mkdirSync(board, { recursive: true });
+      writeFileSync(join(board, 'board.jsonl'), JSON.stringify({
+        seq: Number(process.argv[1]), agent: 'verifier', text: '@coordinator [done]',
+      }) + '\\n');
+    }
+    const send = packet => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...packet }) + '\\n');
+    const ask = () => send({ id: 'mock-denied', method: 'session/request_permission', params: {
+      sessionId, toolCall: { title: 'Swarm write needs approval' },
+    } });
+    process.on('exit', () => writeFileSync(join(profile, 'mock-acp-exited'), ''));
+    createInterface({ input: process.stdin }).on('line', line => {
+      const { id, method } = JSON.parse(line);
+      if (id === 'mock-denied') return closeId === undefined ? complete() : send({ id: closeId, result: {} });
+      if (method === 'initialize') return send({ id, result: { protocolVersion: 1, agentCapabilities: {
+        sessionCapabilities: { close: true, resume: true },
+      } } });
+      if (['session/new', 'session/resume'].includes(method)) return send({ id, result: { sessionId, configOptions: [
+        { id: 'model', currentValue: 'gemini-4-hydrogen' }, { id: 'thought_level', currentValue: 'high' },
+        { id: 'mode', currentValue: 'accept-edits' },
+      ] } });
+      if (method === 'session/prompt') {
+        send({ id, result: { stopReason: 'end_turn' } });
+        if (scenario === 'disconnected') setTimeout(() => process.exit(0), 50);
+        else if (scenario === 'inherited-output') setTimeout(() => {
+          spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2500)'], {
+            stdio: ['ignore', process.stdout, 'ignore'], windowsHide: true,
+          }).unref();
+          complete();
+          process.exit(0);
+        }, 50);
+        else setTimeout(scenario === 'denied' ? ask : complete, 50);
+      } else if (method === 'session/close') {
+        send({ method: 'session/update', params: { sessionId, update: {
+          sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'mock-command' }],
+        } } });
+        if (scenario === 'denied-at-close') {
+          closeId = id;
+          ask();
+        } else send({ id, result: {} });
+      }
+    });
+  `;
+  return `
+    import cp from 'node:child_process';
+    import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { join } from 'node:path';
+    const { spawn } = cp;
+    const job = process.argv[3];
+    const exited = join(job, 'gemini', 'mock-acp-exited');
+    let reads = 0;
+    cp.execFile = (_agy, args, _options, callback) => {
+      if (args[0] !== '-p' || args[1] !== '/usage') throw new Error('Expected a quota lookup');
+      const final = ++reads === 2;
+      let error;
+      if (final && !existsSync(exited)) error = Object.assign(new Error('ACP is still running'), { code: 3 });
+      else if (final && JSON.parse(readFileSync(join(job, 'status.json'))).status !== 'running') {
+        error = Object.assign(new Error('Terminal state was published before final quota'), { code: 4 });
+      } else if (final && ${JSON.stringify(scenario)} === 'done' && !process.emit('SIGINT')) {
+        error = Object.assign(new Error('SIGINT handler was removed before final quota'), { code: 5 });
+      } else if (final && ${JSON.stringify(scenario)} === 'quota-error') {
+        error = Object.assign(new Error('Mock quota error'), { code: 2 });
+      }
+      queueMicrotask(() => callback(error, final ? 'Gemini Models 80%' : 'Gemini Models 95%'));
+      return { stdin: { end() {} } };
+    };
+    cp.spawn = (_agy, _args, options) => {
+      if (existsSync(exited)) unlinkSync(exited);
+      const sequence = process.argv[2] === 'follow-up' ? '2' : '1';
+      return spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(server)}, sequence], options);
+    };
+    syncBuiltinESMExports();
+  `;
+}
+
+function runSwarm(f, action = 'start') {
+  const prompt = join(f.job, 'prompt.txt');
+  const manifest = join(f.job, 'prompt-swarm.txt');
+  writeFileSync(prompt, '/swarm Test the worker outcome');
+  writeFileSync(manifest, JSON.stringify({ files: ['probe.txt'], verifier: 'verifier' }));
+  return f.invoke(action, f.job, prompt, '--edit', '--swarm', manifest);
+}
+
+test('Swarm start and follow-up publish both quota readings and persist the final one', t => {
+  const preload = mockSwarm('done');
+  const f = fixture(t, 'folder', { preloadFor: { start: preload, 'follow-up': preload } });
+  for (const action of ['start', 'follow-up']) {
+    const { code, result, events } = runSwarm(f, action);
+    assert.equal(code, 0, JSON.stringify(result));
+    assert.equal(result.event, 'review-ready');
+    assert.equal(result.swarmOutcome, 'done');
+    assert.deepEqual(events.filter(event => ['turn-quota', 'swarm-post'].includes(event.event))
+      .map(event => event.phase ?? event.event), ['coordinator', 'swarm-post', 'final']);
+    const readings = events.filter(event => event.event === 'turn-quota');
+    assert.match(readings[0].report, /95%/);
+    assert.match(readings[1].report, /80%/);
+    assert.equal(result.quota.phase, 'final');
+    assert.equal(result.quota.checkedAt, readings[1].checkedAt);
+    assert.deepEqual(f.invoke('status', f.job).result.quota, result.quota);
+    assert.equal(result.commands[0].name, 'mock-command');
+  }
+  assertFinished(f, f.invoke('finish', f.job, f.review(), '--clean'), 'cleaned');
+});
+
+for (const scenario of ['denied', 'denied-at-close']) {
+  test('Swarm records a post-response permission refusal: ' + scenario, t => {
+    const f = fixture(t, 'folder', { preloadFor: { start: mockSwarm(scenario) } });
+    const { code, result, events } = runSwarm(f);
+    assert.equal(code, 1, JSON.stringify(result));
+    assert.equal(result.event, 'permission-denied');
+    assert.equal(result.denied, 1);
+    assert.equal(events.filter(event => event.event === 'permission_denied').length, 1);
+    assert.match(readFileSync(join(result.turn, 'events.jsonl'), 'utf8'), /"event":"permission_denied"/);
+    assert.equal(result.quota.phase, 'final');
+  });
+}
+
+for (const scenario of ['disconnected', 'inherited-output']) {
+  test('Swarm stops waiting when ACP exits: ' + scenario, t => {
+    const f = fixture(t, 'folder', { preloadFor: { start: mockSwarm(scenario) } });
+    const { code, result, events } = runSwarm(f);
+    assert.equal(code, 1, JSON.stringify(result));
+    assert.equal(result.event, 'failed');
+    assert.equal(result.swarmOutcome, 'disconnected');
+    assert.match(result.error, /ACP disconnected while waiting for Swarm/);
+    assert.equal(result.workerPid, null);
+    assert.equal(result.quota.phase, 'final');
+    assert.ok(events.some(event => event.event === 'swarm-waiting'));
+  });
+}
+
+test('a failed final Swarm quota lookup preserves the turn outcome and replaces the first reading', t => {
+  const f = fixture(t, 'folder', { preloadFor: { start: mockSwarm('quota-error') } });
+  const { code, result } = runSwarm(f);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.equal(result.swarmOutcome, 'done');
+  assert.deepEqual(result.quota, { phase: 'final', error: 'Antigravity quota lookup failed (2).' });
+  assert.deepEqual(f.invoke('status', f.job).result.quota, result.quota);
+});
+
+test('a partial Swarm grant whose rollback fails keeps the job locked', t => {
+  const f = fixture(t, 'folder', { preloadFor: { start: `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const { renameSync, unlinkSync } = fs;
+    fs.renameSync = (source, target) => {
+      if (target.endsWith('settings.json')) throw new Error('Mock grant failed');
+      return renameSync(source, target);
+    };
+    fs.unlinkSync = path => {
+      if (path.endsWith('config.json')) throw new Error('Mock rollback failed');
+      return unlinkSync(path);
+    };
+    syncBuiltinESMExports();
+  ` } });
+  const { code, result } = runSwarm(f);
+  assert.equal(code, 1, JSON.stringify(result));
+  assert.equal(result.event, 'cleanup-needed');
+  assert.match(result.error, /Mock grant failed.*Swarm permission cleanup failed.*Mock rollback failed/);
+  assert.equal(result.quota, null);
+  assert.equal(f.invoke('status', f.job).result.event, 'cleanup-needed');
+  assert.ok(existsSync(join(dirname(f.cwd), 'operation.lock')));
+  assert.match(readFileSync(join(f.job, 'gemini', 'config', 'config.json'), 'utf8'), /\/probe\.txt\)/);
+  assert.equal(runSwarm(f).result.event, 'error');
 });
 
 test('Windows Git worktrees can prepare and clean under a short path alias',

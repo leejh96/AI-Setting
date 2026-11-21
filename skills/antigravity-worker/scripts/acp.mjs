@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { closeSync, openSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import process from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const version = 1;
@@ -15,7 +17,7 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
   let child;
   try {
     child = spawn(agy, ['acp', '--sandbox', '--gemini-dir', profile, '--log-file', serverLog], {
-      cwd, stdio: ['pipe', 'pipe', stderr], windowsHide: true,
+      cwd, env: { ...process.env, ANTIGRAVITY_GEMINI_DIR: profile }, stdio: ['pipe', 'pipe', stderr], windowsHide: true,
     });
   } finally {
     closeSync(stderr);
@@ -111,13 +113,18 @@ export function connect(agy, cwd, profile, serverLog, stderrLog, onUpdate) {
 
   return {
     pid: child.pid,
+    get failure() {
+      if (failure) return failure;
+      const exit = child.signalCode ?? child.exitCode;
+      return exit === null ? undefined : new Error(`ACP process exited (${exit}).`);
+    },
     request,
     cancel: sessionId => send({ method: 'session/cancel', params: { sessionId } }),
     commandsFor: sessionId => commands.get(sessionId) ?? null,
     async listCommands(sessionId) {
       if (failure) throw failure;
       if (!commands.has(sessionId)) {
-        const signal = AbortSignal.timeout(5_000);
+        const signal = globalThis.AbortSignal.timeout(5_000);
         try {
           await once(commandUpdates, sessionId, { signal });
         } catch (error) {

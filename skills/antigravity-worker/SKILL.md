@@ -18,9 +18,9 @@ node <runner> quota
 node <runner> prepare <absolute-original-folder>
 node <runner> prepare --copy <original-worktree>
 node <runner> prepare
-node <runner> start <job> <prompt-file> [--edit] [--model <id>] [--effort <level>]
+node <runner> start <job> <prompt-file> [--edit] [--model <id>] [--effort <level>] [--swarm <manifest>]
 node <runner> status <job>
-node <runner> follow-up <job> <prompt-file> [--edit] [--model <id>] [--effort <level>]
+node <runner> follow-up <job> <prompt-file> [--edit] [--model <id>] [--effort <level>] [--swarm <manifest>]
 node <runner> cancel <job>
 node <runner> review <job>
 node <runner> finish <job> <review-id> --apply
@@ -38,6 +38,13 @@ Codex 기본 작업 경로인 `$CODEX_HOME/antigravity-worker/worktrees/`에 쓰
 2. 반환된 `job` 바로 아래에 `prompt.txt` 또는 `prompt-2.txt`처럼 이름을 붙인 UTF-8 프롬프트 파일을 만들고 목표, `cwd`, 변경 범위, 수용 조건, 검증 방법, 허용 도구를 씁니다. 저장소 작업은 Codex가 읽기 전용으로 관련 파일을 찾고, 격리 폴더 기준의 구체적인 상대 경로를 프롬프트에 적습니다. 워커에는 목록·검색용 셸 명령(`rg --files`, `rg -n` 등) 대신 Antigravity 내장 도구로 파일을 읽고 편집하도록 지시합니다. 내장 도구 인수에는 `cwd` 아래의 운영체제 형식에 맞는 절대 경로를 사용합니다. Windows에서는 `C:\…\work\docs\example.md`처럼 드라이브 문자부터 시작하는 경로를 전달합니다. 경로가 더 필요하면 필요한 파일이나 탐색 조건을 답변에 적도록 합니다. 확인용 요청에는 도구가 필요한지 명시합니다. 커밋·푸시·배포·외부 변경은 사용자 승인 범위에서만 진행합니다.
 3. `start`를 실행하고 도구 실행 세션을 계속 확인합니다. 사용자가 파일 편집을 승인한 턴이면 `start`와 `follow-up` 각각에 `--edit`를 붙입니다. `--edit`가 있는 턴은 파일 편집을 허용하는 ACP `accept-edits` 모드를 사용하고, 옵션을 생략한 턴은 `default` 모드를 사용합니다. 셸 명령 권한은 별도로 평가합니다. 실행기는 별도 승인이 필요한 요청을 취소하며 `permission-denied`와 `events.jsonl`에 기록합니다. 워커에서 막힌 검증은 Codex가 변경분 검토 단계에서 실행합니다. 실행기는 `agy acp --sandbox`와 표준 입출력으로 통신하고, 작업별 임시 프로필에 대화 상태를 저장합니다. 적용한 모델과 추론 수준은 `running.settings`에서 확인합니다.
 4. `review-ready`는 ACP가 `end_turn`을 반환하고 프로세스가 정상 종료된 상태입니다. `status`에 표시된 `turn/response.txt`와 `turn/events.jsonl`에서 답변과 도구별 성공·실패를 확인합니다.
+
+## Swarm 편집
+
+- 사용자가 Swarm 편집을 요청한 경우 `--edit --swarm <manifest>`를 사용합니다. 작업 폴더의 상대 파일 경로와 보드에서 완료를 보고할 작업자 이름을 UTF-8 JSON으로 적습니다. `verifier`는 소문자로 시작하는 1~64자의 문자열이며, 소문자·숫자·하이픈을 사용할 수 있습니다. 작업 폴더를 정리할 때 함께 제거되도록 `job` 바로 아래의 `prompt-swarm.txt` 등에 `{"files":["src/rules.js","tests/rules.test.js"],"verifier":"verifier"}` 형태로 저장하고 절대 경로를 인수로 전달합니다. 해당 턴에 필요한 파일만 적습니다. 새 파일은 부모 디렉터리가 있어야 합니다.
+- 새 Swarm은 `/swarm`으로 시작합니다. 같은 Swarm을 이어갈 때에는 기존 작업자를 재개하도록 지시합니다. 프롬프트에 검증 담당자는 완료 후 `@coordinator [done]`, 작업자는 진행이 막히면 `@coordinator [blocked]`로 보드에 보고하도록 적습니다.
+- 실행기는 작업별 Antigravity 프로필을 하위 프로세스에도 전달하고, 목록의 파일에 대한 쓰기 규칙을 작업별 프로필에 등록합니다. 원래의 승인·거부 규칙은 그대로 적용됩니다. 서버 종료가 확인되면 추가한 쓰기 규칙을 정리합니다. 등록 도중이나 종료 후에 권한 복구가 실패하면 `cleanup-needed`로 기록하고 잠금을 유지합니다. 이때 현재 작업 프로필과 `turn/swarm-config-*.bak`이 있는지 확인합니다.
+- `swarm-waiting` 중에는 `swarm-post`와 상태를 계속 확인합니다. 지정한 검증자의 완료 보고, 작업자의 차단 보고, 권한 거부, ACP 연결 종료, 취소 또는 15분 대기 한도가 확인되면 대기를 끝냅니다. 검증자의 완료 보고를 받았고 권한 거부 없이 서버가 정상 종료한 경우에만 `review-ready`로 기록합니다.
 
 ## 결과 검토
 
@@ -71,8 +78,9 @@ Codex 기본 작업 경로인 `$CODEX_HOME/antigravity-worker/worktrees/`에 쓰
 
 ## 남은 할당량 조회
 
-- 사용자가 남은 할당량을 요청하면 `quota`를 실행합니다. 실행기는 Antigravity CLI의 `agy -p /usage`를 호출합니다. 조회만 요청한 경우 작업 폴더를 준비하거나 ACP 세션을 열 필요가 없습니다.
-- `report`의 모델 그룹별 잔여 비율과 갱신 시각을 채팅에 표시합니다. 조회가 실패하면 실패를 알립니다. 할당량은 요청 시에만 조회합니다.
+- `start`와 `follow-up`은 `agy -p /usage`로 조회한 할당량을 `turn-quota`로 출력합니다. 일반 턴은 프롬프트를 보낸 뒤 턴이 끝날 때 한 번 조회합니다. 조회만 요청받으면 `quota`를 사용합니다.
+- Swarm에서는 코디네이터가 `end_turn`을 반환하면 한 번 조회합니다. `phase: coordinator` 이벤트를 받으면 코디네이터 응답과 함께 공유합니다. 작업자 대기가 끝나고 서버 종료가 확인되면 다시 조회합니다. `phase: final` 이벤트를 받으면 최종 상태와 함께 공유합니다. `status`의 `quota`에는 마지막 조회 결과 또는 오류가 표시됩니다.
+- 조회 결과를 공유할 때 사용한 모델 그룹의 남은 비율과 갱신 시각을 적습니다. 전체 사용량을 요청받으면 `report`의 모든 그룹을 표시합니다. 할당량 조회 실패는 턴 실행 결과와 구분해 적습니다.
 
 ## 슬래시 명령 목록
 
