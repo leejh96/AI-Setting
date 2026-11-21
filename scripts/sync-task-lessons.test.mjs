@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import process from 'node:process';
 import test from 'node:test';
 import { URL } from 'node:url';
 import { syncTaskLessons } from './sync-task-lessons.mjs';
@@ -82,4 +84,51 @@ test('사용자 지정 교훈 경로가 활성화된 경우 자료와 권한을 
   assert.equal(existsSync(lessons), false);
   assert.deepEqual(readFileSync(join(installation, 'SKILL.md')), readFileSync(new URL('SKILL.md', skill)));
   assert.equal(readFileSync(join(override, 'shared', 'custom.md'), 'utf8'), 'custom');
+});
+
+test('두 도구는 같은 프로젝트에서 각자 교훈을 사용하고 Antigravity 권한은 한 번만 등록한다', async t => {
+  const { codex: home } = fixture(t);
+  const codex = join(home, '.codex');
+  const codexSkill = join(codex, 'skills', 'task-lessons');
+  const override = join(home, 'codex-lessons');
+  const gemini = join(home, '.gemini');
+  const antigravitySkill = join(gemini, 'config', 'skills', 'task-lessons');
+  const antigravityLessons = join(antigravitySkill, 'lessons');
+  const app = join(gemini, 'config', 'config.json');
+  const cli = join(gemini, 'antigravity-cli', 'settings.json');
+  write(app, JSON.stringify({ userSettings: { globalPermissionGrants: { allow: ['unrelated'] } } }));
+  write(cli, JSON.stringify({ permissions: { allow: ['unrelated'] } }));
+  write(join(override, 'shared', 'codex.md'), 'codex record');
+  await Array.fromAsync(syncTaskLessons({ codex, override, codexPermission: assert.fail }));
+
+  const sync = () => Array.fromAsync(syncTaskLessons({ tool: 'antigravity', home, override, codexPermission: assert.fail }));
+  await sync();
+  const permission = `write_file(${antigravityLessons.replaceAll('\\', '/')})`;
+  const config = path => JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual(config(app).userSettings.globalPermissionGrants.allow, ['unrelated', permission]);
+  assert.deepEqual(config(cli).permissions.allow, ['unrelated', permission]);
+  assert.equal(existsSync(join(antigravityLessons, 'shared', 'codex.md')), false);
+
+  const record = join(antigravityLessons, 'shared', 'antigravity.md');
+  write(record, 'antigravity record');
+  assert.ok((await sync()).every(item => !item.added && !item.backup));
+  assert.equal(readFileSync(record, 'utf8'), 'antigravity record');
+  assert.equal(readFileSync(join(override, 'shared', 'codex.md'), 'utf8'), 'codex record');
+  assert.equal(existsSync(join(override, 'shared', 'antigravity.md')), false);
+
+  const locate = installation => {
+    const result = spawnSync(process.execPath, [join(installation, 'scripts', 'location.mjs')], {
+      cwd: home,
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: codex, CODEX_LESSONS_DIR: override },
+      encoding: 'utf8', timeout: 10_000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const codexLocation = locate(codexSkill);
+  const antigravityLocation = locate(antigravitySkill);
+  assert.equal(codexLocation.shared, join(override, 'shared'));
+  const antigravityRoot = realpathSync.native(antigravityLessons);
+  assert.equal(antigravityLocation.shared, join(antigravityRoot, 'shared'));
+  assert.equal(antigravityLocation.project, join(antigravityRoot, 'projects', basename(codexLocation.project)));
 });

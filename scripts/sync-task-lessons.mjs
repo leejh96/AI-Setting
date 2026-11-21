@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { URL, pathToFileURL } from 'node:url';
+import { syncAntigravityFolderPermission } from './antigravity-permission.mjs';
 import { syncCodexDirectoryPermission } from './codex-directory-permission.mjs';
 import { ensureInstallDirectory, readInstallFile, replaceInstallFile } from './install-file.mjs';
 
@@ -52,25 +53,34 @@ function migrateLessons({ directories, files }) {
 }
 
 export async function* syncTaskLessons({
-  codex = process.env.CODEX_HOME || join(homedir(), '.codex'),
+  tool = 'codex',
+  home = homedir(),
+  codex = process.env.CODEX_HOME || join(home, '.codex'),
   override = process.env.CODEX_LESSONS_DIR,
   codexPermission = syncCodexDirectoryPermission,
 } = {}) {
-  const home = resolve(codex);
-  const installation = join(home, 'skills', 'task-lessons');
+  const gemini = resolve(home, '.gemini');
+  const base = tool === 'codex' ? resolve(codex) : join(gemini, 'config');
+  const installation = join(base, 'skills', 'task-lessons');
   const lessons = join(installation, 'lessons');
-  const legacy = join(home, 'task-lessons');
-  if (override && !isAbsolute(override)) throw new Error('교훈 저장 루트는 절대 경로로 지정해야 합니다.');
 
-  if (!override || resolve(override) === lessons) {
-    const migration = planMigration(legacy, lessons);
+  if (tool === 'antigravity') {
     ensureInstallDirectory(installation);
     ensureInstallDirectory(lessons);
-    yield await codexPermission(join(home, 'config.toml'), lessons, 'task-lessons-permission');
-    yield { path: lessons, migrated: migrateLessons(migration) };
+    yield* syncAntigravityFolderPermission(gemini, lessons, 'write_file', 'task-lessons-permission');
+    yield { path: lessons, storage: true };
   } else {
-    yield { path: override, custom: true };
-    ensureInstallDirectory(installation);
+    if (override && !isAbsolute(override)) throw new Error('교훈 저장 루트는 절대 경로로 지정해야 합니다.');
+    if (!override || resolve(override) === lessons) {
+      const migration = planMigration(join(base, 'task-lessons'), lessons);
+      ensureInstallDirectory(installation);
+      ensureInstallDirectory(lessons);
+      yield await codexPermission(join(base, 'config.toml'), lessons, 'task-lessons-permission');
+      yield { path: lessons, migrated: migrateLessons(migration) };
+    } else {
+      yield { path: override, custom: true };
+      ensureInstallDirectory(installation);
+    }
   }
 
   for (const file of skillFiles) {
@@ -83,14 +93,25 @@ export async function* syncTaskLessons({
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  try {
-    for await (const item of syncTaskLessons()) {
-      if (item.custom) console.log(`사용자 지정 교훈 경로 사용 (${item.path})`);
-      else if (item.migrated !== undefined) console.log(`교훈 ${item.migrated}개 이전, 저장 경로 확인 (${item.path})`);
-      else console.log(`${item.added ? '갱신' : '기존 항목 확인'} (${item.path})`);
+async function main(args) {
+  const tools = ['codex', 'antigravity'];
+  if (args.length > 1 || (args.length === 1 && !tools.includes(args[0]))) {
+    throw new Error('사용법: node scripts/sync-task-lessons.mjs [codex|antigravity]');
+  }
+  for (const tool of args.length ? args : tools) {
+    for await (const item of syncTaskLessons({ tool })) {
+      if (item.custom) console.log(`${tool} 사용자 지정 교훈 경로 사용 (${item.path})`);
+      else if (item.migrated !== undefined) console.log(`${tool} 교훈 ${item.migrated}개 이전, 저장 경로 확인 (${item.path})`);
+      else if (item.storage) console.log(`${tool} 저장 경로 확인 (${item.path})`);
+      else console.log(`${tool} ${item.added ? '갱신' : '기존 항목 확인'} (${item.path})`);
       if (item.backup) console.log(`변경 전 백업 (${item.backup})`);
     }
+  }
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  try {
+    await main(process.argv.slice(2));
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

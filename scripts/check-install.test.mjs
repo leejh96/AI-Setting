@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
 import { fileURLToPath, URL } from 'node:url';
+import { checkLintRuntime } from './check-install-runtime.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const checker = join(repo, 'scripts', 'check-install.mjs');
@@ -71,8 +72,45 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
     assert.ok(healthy.stdout.includes(`일치  Antigravity 전역 린트 ${file}`));
   }
   assert.match(healthy.stdout, /Antigravity 훅 신뢰/);
+  assert.ok(healthy.stdout.includes(`일치  Antigravity ${join('skills', 'task-lessons')}`));
   assert.match(healthy.stdout, /Antigravity rules\/code-quality-review\.md/);
   assert.match(healthy.stdout, /Git 전역 pre-commit/);
+  assert.doesNotMatch(healthy.stdout, /규칙 위반 TS|읽기·쓰기·삭제/);
+
+  const artifacts = join(codex, 'skills', 'compare-changes', 'artifacts');
+  const lessons = join(home, 'custom-lessons');
+  env.CODEX_LESSONS_DIR = lessons;
+  for (const directory of [artifacts, lessons]) {
+    mkdirSync(directory);
+    writeFileSync(join(directory, 'keep.md'), 'previous contents');
+  }
+  // The fixture intentionally has no lint dependencies.
+  const runtime = scan('--runtime', 'codex');
+  assert.equal(runtime.status, 1, runtime.stdout);
+  assert.match(runtime.stdout, /확인 필요 {2}Codex 전역 린트 실행/);
+  assert.match(runtime.stdout, /일치 {2}Codex compare-changes\/artifacts 읽기·쓰기·삭제/);
+  assert.match(runtime.stdout, /일치 {2}Codex task-lessons 교훈 폴더 읽기·쓰기·삭제/);
+  assert.doesNotMatch(runtime.stdout, /Antigravity|Git 전역/);
+  for (const directory of [artifacts, lessons]) {
+    assert.deepEqual(readdirSync(directory), ['keep.md']);
+    assert.equal(readFileSync(join(directory, 'keep.md'), 'utf8'), 'previous contents');
+  }
+  env.CODEX_LESSONS_DIR = 'relative-storage';
+  const missing = scan('--runtime');
+  assert.equal(missing.status, 1, missing.stdout);
+  assert.match(missing.stdout, /저장 폴더에 절대 경로가 필요함/);
+  assert.match(missing.stdout, /확인 필요 {2}Antigravity compare-changes\/artifacts 읽기·쓰기·삭제\r?\n {2}- 파일 생성 실패 \(ENOENT\)/);
+  assert.equal(existsSync(join(gemini, 'skills', 'compare-changes', 'artifacts')), false);
+  const antigravityLessons = join(gemini, 'skills', 'task-lessons', 'lessons');
+  assert.match(missing.stdout, /확인 필요 {2}Antigravity task-lessons 교훈 폴더 읽기·쓰기·삭제\r?\n {2}- 파일 생성 실패 \(ENOENT\)/);
+  assert.equal(existsSync(antigravityLessons), false);
+  mkdirSync(antigravityLessons);
+  const antigravityRuntime = scan('antigravity', '--runtime');
+  assert.match(antigravityRuntime.stdout, /일치 {2}Antigravity task-lessons 교훈 폴더 읽기·쓰기·삭제/);
+  assert.doesNotMatch(antigravityRuntime.stdout, /Codex|절대 경로가 필요함/);
+  assert.deepEqual(readdirSync(antigravityLessons), []);
+  assert.equal(scan('git', '--runtime').status, 0);
+  assert.equal(scan('--runtime', '--runtime').status, 2);
 
   writeFileSync(join(codexLint, 'eslint.config.mjs'), 'different config');
   rmSync(join(antigravityLint, 'lint.mjs'));
@@ -120,4 +158,35 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
   assert.match(invalid.stdout, /등록 파일을 읽거나 해석할 수 없음/);
   assert.doesNotMatch(invalid.stdout + invalid.stderr, /private value/);
   assert.equal(scan('unknown').status, 2);
+});
+
+test('런타임 린트 점검은 두 예제의 종료 코드와 실제 규칙 진단을 대조하고 임시 폴더를 정리한다', t => {
+  const home = mkdtempSync(join(tmpdir(), 'check-install-runtime-test-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const runner = join(home, 'lint.mjs');
+  const trace = join(home, 'fixture-project');
+  const runWith = behavior => {
+    writeFileSync(runner, `
+      import { readFileSync, writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const [project, file] = process.argv.slice(2);
+      writeFileSync(${JSON.stringify(trace)}, project);
+      const config = JSON.parse(readFileSync(join(project, 'tsconfig.json'), 'utf8'));
+      const source = readFileSync(join(project, file), 'utf8');
+      if (!config.files.includes('floating.ts') || !source.includes('Promise.resolve')) process.exit(2);
+      ${behavior}
+    `);
+    const problems = checkLintRuntime(runner);
+    assert.equal(existsSync(readFileSync(trace, 'utf8')), false);
+    return problems;
+  };
+  assert.deepEqual(runWith(`if (file.endsWith('.ts')) {
+    console.log('1:1  error  Promise must be handled  @typescript-eslint/no-floating-promises');
+    process.exitCode = 1;
+  }`), []);
+  assert.match(runWith('').join('\n'), /TypeScript 위반 예제 종료 코드 0/);
+  const errors = runWith("console.log('fixture-private-error'); process.exitCode = 1;").join('\n');
+  assert.match(errors, /JavaScript 정상 예제 종료 코드 1/);
+  assert.match(errors, /no-floating-promises 진단 누락/);
+  assert.doesNotMatch(errors, /fixture-private-error/);
 });

@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
+import { checkLintRuntime, checkStorageRuntime } from './check-install-runtime.mjs';
 import { shellCommands } from '../hooks/command-guard/shell-commands.mjs';
 import {
   antigravityRuleFile,
@@ -15,7 +16,7 @@ import {
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const windows = process.platform === 'win32';
-const codexOnly = new Set(['antigravity-worker', 'task-lessons']);
+const codexOnly = new Set(['antigravity-worker']);
 const hooks = [
   ['prompt-secret-checker', 'secret-checker', 'UserPromptSubmit', 'PreInvocation'],
   ['code-quality-review', 'code-quality-review', 'UserPromptSubmit', 'PreInvocation', 'Stop'],
@@ -173,7 +174,7 @@ function checkAntigravityReviewRule(home) {
   report(label, problems);
 }
 
-function checkClient(codex) {
+function checkClient(codex, runtime) {
   const name = codex ? 'Codex' : 'Antigravity';
   const adapter = codex ? 'codex' : 'gemini';
   const home = codex ? resolve(process.env.CODEX_HOME || join(homedir(), '.codex')) : join(homedir(), '.gemini', 'config');
@@ -208,6 +209,13 @@ function checkClient(codex) {
     if (stop) checkRegistration(registrations, label, script, stop);
   }
   if (!codex) checkAntigravityReviewRule(home);
+  if (runtime) {
+    report(`${name} 전역 린트 실행 (정상 JS·규칙 위반 TS)`, checkLintRuntime(join(lintHome, 'lints', 'lint.mjs')));
+    const artifacts = join(home, 'skills', 'compare-changes', 'artifacts');
+    report(`${name} compare-changes/artifacts 읽기·쓰기·삭제`, checkStorageRuntime(artifacts));
+    const lessons = (codex && process.env.CODEX_LESSONS_DIR) || join(home, 'skills', 'task-lessons', 'lessons');
+    report(`${name} task-lessons 교훈 폴더 읽기·쓰기·삭제`, checkStorageRuntime(lessons));
+  }
   console.log(`${name} 훅 신뢰·새 세션에서의 실행 여부는 앱에서 확인`);
 }
 
@@ -240,14 +248,21 @@ function checkGit() {
   report('Git 커밋 훅 Gitleaks', executable(scanner) ? [] : ['Gitleaks 실행 파일을 찾을 수 없음']);
 }
 
-const [target, ...extra] = process.argv.slice(2);
-if (extra.length || (target && !['codex', 'antigravity', 'git'].includes(target))) {
-  console.error('사용법: node scripts/check-install.mjs [codex|antigravity|git]');
+const args = process.argv.slice(2);
+const runtime = args.includes('--runtime');
+const [target, ...extraTargets] = args.filter(arg => arg !== '--runtime');
+if (extraTargets.length || new Set(args).size !== args.length
+    || (target !== undefined && !['codex', 'antigravity', 'git'].includes(target))) {
+  console.error('사용법: node scripts/check-install.mjs [codex|antigravity|git] [--runtime]');
   process.exitCode = 2;
 } else {
-  report(`Node.js ${process.version}`, Number(process.versions.node.split('.')[0]) >= 22 ? [] : ['Node.js 22 이상 필요']);
-  if (!target || target === 'codex') checkClient(true);
-  if (!target || target === 'antigravity') checkClient(false);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (target === 'git') report(`Node.js ${process.version}`, major >= 22 ? [] : ['Node.js 22 이상 필요']);
+  else report(`Node.js ${process.version}`, major >= 24 || (major === 22 && minor >= 13)
+    ? [] : ['전역 린트는 Node.js 22.13 이상인 22.x 또는 24 이상 필요']);
+  if (runtime && target !== 'git') console.log('린트와 저장 폴더는 현재 점검 프로세스의 권한으로 실행');
+  if (!target || target === 'codex') checkClient(true, runtime);
+  if (!target || target === 'antigravity') checkClient(false, runtime);
   if (!target || target === 'git') checkGit();
   process.exitCode = failed ? 1 : 0;
 }

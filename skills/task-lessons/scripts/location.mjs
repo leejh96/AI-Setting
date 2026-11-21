@@ -3,7 +3,7 @@ import console from 'node:console';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath } from 'node:url';
 
@@ -77,6 +77,10 @@ function gitIdentity(directory, readGit, visited = []) {
 }
 
 function storageRoot() {
+  const installedSkill = dirname(dirname(fileURLToPath(import.meta.url)));
+  const antigravitySuffix = sep + join('.gemini', 'config', 'skills', 'task-lessons');
+  if (installedSkill.endsWith(antigravitySuffix)) return join(installedSkill, 'lessons');
+
   const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
   const directory = process.env.CODEX_LESSONS_DIR || join(codexHome, 'skills', 'task-lessons', 'lessons');
   if (!isAbsolute(directory)) throw new Error('교훈 저장 루트는 절대 경로로 지정해야 합니다.');

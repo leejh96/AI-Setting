@@ -82,7 +82,7 @@ ai-setting/
 
 기존 터미널 버전은 [보관 디렉터리](archive/antigravity-worker/SKILL.md)에 두고 동기화 대상에서 제외합니다. 이전 설치를 갱신할 때는 터미널 버전과 `antigravity-worker-acp` 설치본을 스킬 검색 경로 밖에 보관한 뒤 현재 `antigravity-worker`를 설치합니다.
 
-**`task-lessons`는 Codex 전용입니다.** 저장소 루트에서 `node scripts/sync-task-lessons.mjs`로 동기화합니다. 기본 경로는 스킬 설치본 아래 `lessons/`입니다. 스크립트는 기존 교훈을 이전하고 저장된 기록을 보존하며, `workspace-write` 설정에서 해당 폴더의 쓰기 경로를 한 번만 등록합니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
+`task-lessons`는 저장소 루트에서 `node scripts/sync-task-lessons.mjs`로 두 도구에 동기화합니다. 한 도구만 갱신하려면 `codex` 또는 `antigravity`를 전달합니다. 각 도구는 자기 스킬 설치본의 `lessons/`를 사용합니다. 동기화는 기존 기록을 보존하고 Codex의 기존 교훈 저장소를 기본 경로로 이전합니다. Codex에는 `workspace-write` 쓰기 경로를, Antigravity에는 앱 및 설치된 CLI의 폴더 읽기·쓰기 권한을 등록합니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
 
@@ -167,7 +167,14 @@ cd ai-setting
 
 저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅, 도구별 전역 ESLint 설치본, Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
 
-누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 점검은 설치 파일과 설정을 읽으며, 훅 신뢰 등록과 새 세션에서 실제 실행되는지는 앱에서 확인합니다.
+누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 훅의 신뢰 등록과 새 세션에서의 실행 여부는 앱에서 확인합니다.
+
+설치본의 린트 실행과 저장 폴더 접근까지 확인하려면 `node scripts/check-install.mjs --runtime`을 실행합니다. 한 도구만 확인할 때는 `codex` 또는 `antigravity`를 함께 전달합니다.
+
+- 임시 프로젝트에서 도구별 전역 린트가 정상 파일을 통과시키고 처리되지 않은 Promise를 검출하는지 확인합니다.
+- 각 도구의 `compare-changes/artifacts/`와 `task-lessons/lessons/`에 임시 파일을 쓰고, 같은 내용을 읽은 뒤 삭제합니다. `CODEX_LESSONS_DIR`이 지정되어 있으면 Codex 교훈 폴더 점검에 사용합니다. 폴더가 없거나 접근할 수 없으면 확인 필요로 보고합니다.
+
+런타임 점검 결과는 명령을 실행한 환경의 권한을 기준으로 합니다. 앱 샌드박스에서의 접근은 해당 세션에서 따로 확인합니다.
 
 ## 전체 회귀 테스트
 
