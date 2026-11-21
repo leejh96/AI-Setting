@@ -88,10 +88,10 @@ ai-setting/
 
 `compare-changes`는 저장소 루트에서 `node scripts/sync-compare-changes.mjs`로 두 도구에 동기화합니다. 한 도구만 갱신하려면 `codex` 또는 `antigravity`를 인자로 전달합니다. 기존 `artifacts/` 폴더와 자료를 보존하고, 폴더가 없으면 만들며, 기존 파일을 갱신할 때는 변경 전 백업 경로를 출력합니다.
 
-- Codex는 `workspace-write` 설정을 사용합니다. PATH의 `codex` CLI가 `config.toml`의 `sandbox_workspace_write.writable_roots`에 스킬 설치본의 `artifacts/` 경로를 추가합니다. [Codex 설정 레퍼런스](https://learn.chatgpt.com/docs/config-file/config-reference)
+- Codex가 `workspace-write`로 실행되면 PATH의 `codex` CLI가 `config.toml`의 `sandbox_workspace_write.writable_roots`에 스킬 설치본의 `artifacts/` 경로를 추가합니다. `compare-changes`와 `task-lessons` 모두 유효한 설정이 `danger-full-access`이면 기존 모드로 동기화하고 별도 쓰기 경로 등록을 생략합니다. [Codex 설정 레퍼런스](https://learn.chatgpt.com/docs/config-file/config-reference)
 - Antigravity는 앱의 전역 설정과 CLI 설정 폴더가 있는 경우 CLI 설정에 `write_file(<artifacts 폴더의 절대 경로>)`를 등록합니다. 이 규칙은 폴더와 하위 파일의 읽기·쓰기를 허용합니다. [Antigravity CLI 권한 문서](https://antigravity.google/docs/permissions?tab=cli)
 
-이미 등록된 권한과 기존 설정은 보존합니다. 동기화 후 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 확인합니다.
+이미 등록된 권한과 기존 설정은 보존합니다. 같은 Antigravity 권한 설정에 동시 변경이 감지되면 뒤의 명령은 오류를 반환합니다. 먼저 실행한 명령이 끝난 뒤 다시 실행합니다. 비정상 종료로 `.ai-setting-permissions.lock` 디렉터리가 남으면 동기화 프로세스가 종료됐는지 확인하고 오류에 표시된 잠금 디렉터리만 제거합니다. 동기화 후 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 확인합니다.
 
 스킬 이름이 바뀌었다면 새 이름의 폴더를 복사하고, 이전 이름의 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다.
 
@@ -167,7 +167,7 @@ cd ai-setting
 
 저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅, 도구별 전역 ESLint 설치본, Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
 
-누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 훅의 신뢰 등록과 새 세션에서의 실행 여부는 앱에서 확인합니다.
+누락·불일치·중복·비활성화 또는 폐기된 실행 경로가 발견되면 종료 코드 `1`을 반환합니다. 폐기 경로 검사는 이 저장소에서 교체한 스크립트와 이전 워커 이름, 해당 도구에서 제외되는 스킬을 확인합니다. 훅의 신뢰 등록과 새 세션에서의 실행 여부는 앱에서 확인합니다.
 
 설치본의 린트 실행과 저장 폴더 접근까지 확인하려면 `node scripts/check-install.mjs --runtime`을 실행합니다. 한 도구만 확인할 때는 `codex` 또는 `antigravity`를 함께 전달합니다.
 

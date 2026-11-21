@@ -21,18 +21,18 @@ gemini_hook_target="$HOME/.gemini/config/hooks/code-quality-review"
 gemini_rules_target="$HOME/.gemini/config/rules"
 codex_lint_target="${CODEX_HOME:-$HOME/.codex}/lints"
 gemini_lint_target="$HOME/.gemini/lints"
-mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" "$gemini_rules_target" "$codex_lint_target" "$gemini_lint_target"
+mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" "$gemini_rules_target" "$codex_lint_target" "$gemini_lint_target" || exit 1
 for lint_target in "$codex_lint_target" "$gemini_lint_target"; do
   cp lints/eslint.config.mjs lints/lint.mjs lints/package.json lints/package-lock.json "$lint_target/" || exit 1
   npm --prefix "$lint_target" ci --ignore-scripts --no-audit --no-fund || exit 1
 done
 for hook_runtime_file in review-request.mjs review-status.mjs review-changes.mjs watch-worker.mjs; do
-  cp "hooks/code-quality-review/$hook_runtime_file" "$codex_hook_target/"
-  cp "hooks/code-quality-review/$hook_runtime_file" "$gemini_hook_target/"
+  cp "hooks/code-quality-review/$hook_runtime_file" "$codex_hook_target/" || exit 1
+  cp "hooks/code-quality-review/$hook_runtime_file" "$gemini_hook_target/" || exit 1
 done
-cp "hooks/code-quality-review/REVIEW.md" "$codex_hook_target/"
-cp "hooks/code-quality-review/codex/codex-code-quality-review.mjs" "$codex_hook_target/codex/"
-cp "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" "$gemini_hook_target/gemini/"
+cp "hooks/code-quality-review/REVIEW.md" "$codex_hook_target/" || exit 1
+cp "hooks/code-quality-review/codex/codex-code-quality-review.mjs" "$codex_hook_target/codex/" || exit 1
+cp "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" "$gemini_hook_target/gemini/" || exit 1
 node "hooks/code-quality-review/gemini/gemini-code-quality-review.mjs" --write-rule "$gemini_rules_target/code-quality-review.md" || exit 1
 node scripts/sync-antigravity-lint-permission.mjs || exit 1
 ```

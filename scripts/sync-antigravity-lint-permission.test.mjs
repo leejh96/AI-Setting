@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
+import { syncAntigravityFolderPermission } from './antigravity-permission.mjs';
 import { syncAntigravityLintPermission } from './sync-antigravity-lint-permission.mjs';
 
 function fixture(t) {
@@ -84,4 +86,35 @@ test('읽기 차단 규칙과 해석할 수 없는 설정은 그대로 둔다', 
     assert.equal(readFileSync(app, 'utf8'), original);
     assert.deepEqual(readdirSync(dirname(app)), ['config.json']);
   }
+});
+
+test('같은 권한 파일의 동시 갱신을 막고 재시도하면 두 규칙을 보존한다', t => {
+  const { home, app, rule } = fixture(t);
+  const gemini = join(home, '.gemini');
+  const artifacts = join(gemini, 'config', 'skills', 'compare-changes', 'artifacts');
+  const writeRule = `write_file(${process.platform === 'win32' ? artifacts.replaceAll('\\', '/') : artifacts})`;
+  const syncArtifacts = () => [...syncAntigravityFolderPermission(gemini, artifacts, 'write_file', 'compare-changes-permission')];
+  const entries = () => JSON.parse(readFileSync(app, 'utf8')).userSettings.globalPermissionGrants.allow;
+  writeConfig(app, '{}\n');
+  const rename = fs.renameSync;
+  let raced = false;
+  try {
+    fs.renameSync = (source, destination) => {
+      if (destination === app && !raced) {
+        raced = true;
+        assert.throws(syncArtifacts, /권한 동기화가 진행 중/u);
+      }
+      return rename(source, destination);
+    };
+    syncBuiltinESMExports();
+    assert.equal([...syncAntigravityLintPermission(home)][0].added, true);
+  } finally {
+    fs.renameSync = rename;
+    syncBuiltinESMExports();
+  }
+  assert.ok(raced);
+  assert.deepEqual(entries(), [rule]);
+  assert.equal(syncArtifacts()[0].added, true);
+  assert.deepEqual(entries(), [rule, writeRule]);
+  assert.ok(!readdirSync(dirname(app)).some(file => file.endsWith('.lock')));
 });

@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import process from 'node:process';
 import { readInstallFile, replaceInstallFile } from './install-file.mjs';
 
@@ -57,10 +57,26 @@ function updatePermission(path, keys, folder, action, label) {
   return { path, added: true, backup };
 }
 
+function syncPermissionFile(path, keys, folder, action, label) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const lock = path + '.ai-setting-permissions.lock';
+  try {
+    mkdirSync(lock, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    throw new Error(`다른 Antigravity 권한 동기화가 진행 중입니다. 잠금을 확인한 뒤 다시 실행하세요 (${lock}).`, { cause: error });
+  }
+  try {
+    return updatePermission(path, keys, folder, action, label);
+  } finally {
+    rmdirSync(lock);
+  }
+}
+
 export function* syncAntigravityFolderPermission(gemini, folder, action, label) {
   const cliDirectory = join(gemini, 'antigravity-cli');
-  yield updatePermission(join(gemini, 'config', 'config.json'), ['userSettings', 'globalPermissionGrants'], folder, action, label);
+  yield syncPermissionFile(join(gemini, 'config', 'config.json'), ['userSettings', 'globalPermissionGrants'], folder, action, label);
   if (existsSync(cliDirectory)) {
-    yield updatePermission(join(cliDirectory, 'settings.json'), ['permissions'], folder, action, label);
+    yield syncPermissionFile(join(cliDirectory, 'settings.json'), ['permissions'], folder, action, label);
   }
 }

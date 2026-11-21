@@ -17,14 +17,14 @@
 $codexHookHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
 $codexHookTarget = Join-Path $codexHookHome 'hooks/prompt-secret-checker'
 $geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/prompt-secret-checker'
-New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini" | Out-Null
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini" -ErrorAction Stop | Out-Null
 $hookRuntimeFiles = @('secret-checker.mjs', 'gitleaks.toml')
 foreach ($hookRuntimeFile in $hookRuntimeFiles) {
-    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $codexHookTarget
-    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $geminiHookTarget
+    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $codexHookTarget -ErrorAction Stop
+    Copy-Item -LiteralPath "hooks/prompt-secret-checker/$hookRuntimeFile" -Destination $geminiHookTarget -ErrorAction Stop
 }
-Copy-Item -LiteralPath 'hooks/prompt-secret-checker/codex/codex-secret-checker.mjs' -Destination "$codexHookTarget/codex"
-Copy-Item -LiteralPath 'hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs' -Destination "$geminiHookTarget/gemini"
+Copy-Item -LiteralPath 'hooks/prompt-secret-checker/codex/codex-secret-checker.mjs' -Destination "$codexHookTarget/codex" -ErrorAction Stop
+Copy-Item -LiteralPath 'hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs' -Destination "$geminiHookTarget/gemini" -ErrorAction Stop
 ```
 
 설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.

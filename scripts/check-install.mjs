@@ -1,12 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
 import console from 'node:console';
-import { accessSync, constants, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import { checkLintRuntime, checkStorageRuntime } from './check-install-runtime.mjs';
+import { sameInstallPath } from './install-file.mjs';
 import { shellCommands } from '../hooks/command-guard/shell-commands.mjs';
 import {
   antigravityRuleFile,
@@ -17,6 +18,7 @@ import {
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const windows = process.platform === 'win32';
 const codexOnly = new Set(['antigravity-worker']);
+const retiredSkillPaths = ['antigravity-worker-acp', 'agents-md-editor/scripts/compare_size.py', 'task-lessons/scripts/location.ps1'];
 const hooks = [
   ['prompt-secret-checker', 'secret-checker', 'UserPromptSubmit', 'PreInvocation'],
   ['code-quality-review', 'code-quality-review', 'UserPromptSubmit', 'PreInvocation', 'Stop'],
@@ -103,13 +105,6 @@ function readRegistrations(home, codex) {
   }));
 }
 
-function samePath(a, b) {
-  const key = path => windows ? path.toLowerCase() : path;
-  if (key(resolve(a)) === key(resolve(b))) return true;
-  try { return key(realpathSync(a)) === key(realpathSync(b)); }
-  catch { return false; }
-}
-
 function matchesTool(matcher, tool) {
   try { return matcher === undefined || new RegExp(matcher).test(tool); }
   catch { return false; }
@@ -121,7 +116,7 @@ function checkRegistration(registrations, label, path, event, tool, prepare, sec
   if (found.length !== 1) problems.push(found.length ? '같은 이벤트에 중복 등록됨' : '등록 누락');
   for (const entry of found) {
     if (!entry.enabled) problems.push('등록 비활성화됨');
-    if (!isAbsolute(entry.script) || !samePath(entry.script, path)) problems.push('등록이 예상 설치본을 가리키지 않음');
+    if (!isAbsolute(entry.script) || !sameInstallPath(entry.script, path)) problems.push('등록이 예상 설치본을 가리키지 않음');
     if (!executable(entry.node)) problems.push('등록된 Node 실행 파일을 찾을 수 없음');
     if (entry.args.join(' ') !== (prepare ? '--prepare' : '')) problems.push('등록 실행 인자 불일치');
     if (tool && !matchesTool(entry.matcher, tool)) problems.push('터미널 도구 matcher 불일치');
@@ -174,6 +169,19 @@ function checkAntigravityReviewRule(home) {
   report(label, problems);
 }
 
+function checkRetiredSkillPaths(home, codex) {
+  const paths = codex ? retiredSkillPaths : [...retiredSkillPaths, ...codexOnly];
+  const problems = [];
+  for (const path of paths) {
+    try {
+      if (lstatSync(join(home, 'skills', path), { throwIfNoEntry: false })) problems.push(`skills/${path} 남아 있음`);
+    } catch {
+      problems.push(`skills/${path} 경로를 확인할 수 없음`);
+    }
+  }
+  report(`${codex ? 'Codex' : 'Antigravity'} 폐기·제외 스킬 경로`, problems);
+}
+
 function checkClient(codex, runtime) {
   const name = codex ? 'Codex' : 'Antigravity';
   const adapter = codex ? 'codex' : 'gemini';
@@ -191,6 +199,7 @@ function checkClient(codex, runtime) {
       checkCopy(`${name} ${source}`, source, join(home, source), entry => !testFile(entry.name));
     }
   }
+  checkRetiredSkillPaths(home, codex);
   let registrations;
   try { registrations = readRegistrations(home, codex); }
   catch (error) {
@@ -239,7 +248,7 @@ function checkGit() {
       report(label, [global ? 'core.hooksPath가 절대 경로가 아님' : 'core.hooksPath 미등록']);
     } else {
       checkCopy(label, commitHook, global, entry => commitFiles.has(entry.name));
-      report('Git 이 저장소의 pre-commit 경로', effective && samePath(effective, global) && runnable(join(global, 'pre-commit'))
+      report('Git 이 저장소의 pre-commit 경로', effective && sameInstallPath(effective, global) && runnable(join(global, 'pre-commit'))
         ? [] : ['전역 경로가 덮어써졌거나 pre-commit을 실행할 수 없음']);
     }
   } catch {

@@ -22,7 +22,7 @@ $geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/code-qualit
 $geminiRulesTarget = Join-Path $env:USERPROFILE '.gemini/config/rules'
 $codexLintTarget = Join-Path $codexHookHome 'lints'
 $geminiLintTarget = Join-Path $env:USERPROFILE '.gemini/lints'
-New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget, $codexLintTarget, $geminiLintTarget | Out-Null
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget, $codexLintTarget, $geminiLintTarget -ErrorAction Stop | Out-Null
 foreach ($lintTarget in @($codexLintTarget, $geminiLintTarget)) {
     foreach ($lintRuntimeFile in @('eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json')) {
         Copy-Item -LiteralPath "lints/$lintRuntimeFile" -Destination $lintTarget -ErrorAction Stop
@@ -32,12 +32,12 @@ foreach ($lintTarget in @($codexLintTarget, $geminiLintTarget)) {
 }
 $hookRuntimeFiles = @('review-request.mjs', 'review-status.mjs', 'review-changes.mjs', 'watch-worker.mjs')
 foreach ($hookRuntimeFile in $hookRuntimeFiles) {
-    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $codexHookTarget
-    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $geminiHookTarget
+    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $codexHookTarget -ErrorAction Stop
+    Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $geminiHookTarget -ErrorAction Stop
 }
-Copy-Item -LiteralPath 'hooks/code-quality-review/REVIEW.md' -Destination $codexHookTarget
-Copy-Item -LiteralPath 'hooks/code-quality-review/codex/codex-code-quality-review.mjs' -Destination "$codexHookTarget/codex"
-Copy-Item -LiteralPath 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' -Destination "$geminiHookTarget/gemini"
+Copy-Item -LiteralPath 'hooks/code-quality-review/REVIEW.md' -Destination $codexHookTarget -ErrorAction Stop
+Copy-Item -LiteralPath 'hooks/code-quality-review/codex/codex-code-quality-review.mjs' -Destination "$codexHookTarget/codex" -ErrorAction Stop
+Copy-Item -LiteralPath 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' -Destination "$geminiHookTarget/gemini" -ErrorAction Stop
 node 'hooks/code-quality-review/gemini/gemini-code-quality-review.mjs' --write-rule "$geminiRulesTarget/code-quality-review.md"
 if ($LASTEXITCODE -ne 0) { throw 'Antigravity 검토 규칙을 생성하지 못했습니다.' }
 node 'scripts/sync-antigravity-lint-permission.mjs'

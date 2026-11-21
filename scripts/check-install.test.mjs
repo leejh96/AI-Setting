@@ -12,6 +12,43 @@ const repo = fileURLToPath(new URL('../', import.meta.url));
 const checker = join(repo, 'scripts', 'check-install.mjs');
 const lintFiles = ['eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json'];
 
+for (const hook of ['code-quality-review', 'command-guard', 'prompt-secret-checker']) {
+  test(`${hook} 설치 안내는 복사 실패 뒤 다음 단계로 넘어가지 않는다`, () => {
+    const windows = process.platform === 'win32';
+    const file = windows ? 'README.windows.md' : 'README.macos.md';
+    const guide = readFileSync(join(repo, 'hooks', hook, file), 'utf8');
+    const copy = windows ? /\bCopy-Item\b/u : /^\s*cp\s/mu;
+    const blocks = guide.split('```').filter((block, index) => index % 2 === 1 && copy.test(block));
+    assert.equal(blocks.length, hook === 'command-guard' ? 2 : 1);
+    const setup = windows ? `
+      function New-Item {}
+      function Copy-Item {
+        [CmdletBinding()] param([string[]] $LiteralPath, [string] $Destination)
+        if ($LiteralPath -like 'hooks/${hook}/*') { Write-Error 'fixture-copy-failed' }
+      }
+      function npm { $global:LASTEXITCODE = 0 }
+      function node { 'unexpected-rule-generation'; $global:LASTEXITCODE = 0 }
+    ` : `
+      mkdir() { return 0; }
+      cp() { case "$1" in hooks/${hook}/*) echo fixture-copy-failed >&2; return 1;; esac; return 0; }
+      npm() { return 0; }
+      node() { echo unexpected-rule-generation; return 0; }
+    `;
+    const shell = windows ? 'powershell.exe' : '/bin/sh';
+    const options = windows ? ['-NoProfile', '-NonInteractive', '-Command'] : ['-c'];
+    for (const block of blocks) {
+      const commands = block.slice(block.indexOf('\n'));
+      const result = spawnSync(shell, [...options, setup + commands + '\nnode fixture-next-step\n'], {
+        encoding: 'utf8', timeout: 10_000, windowsHide: true,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /fixture-copy-failed/u);
+      assert.doesNotMatch(result.stdout, /unexpected-rule-generation/u);
+    }
+  });
+}
+
 test('Git 설치 점검은 다른 작업 트리의 설정을 배제하고 현재 저장소의 로컬 설정을 확인한다', t => {
   const fixture = mkdtempSync(join(tmpdir(), 'ai-setting-check-git-'));
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
@@ -30,7 +67,7 @@ test('Git 설치 점검은 다른 작업 트리의 설정을 배제하고 현재
     mkdirSync(dir);
     git('-C', dir, 'init', '--quiet');
   }
-  for (const path of ['scripts/check-install.mjs', 'scripts/check-install-runtime.mjs',
+  for (const path of ['scripts/check-install.mjs', 'scripts/check-install-runtime.mjs', 'scripts/install-file.mjs',
     'hooks/command-guard/shell-commands.mjs', 'hooks/code-quality-review/review-request.mjs', 'hooks/commit-secret-checker']) {
     const destination = join(current, path);
     mkdirSync(dirname(destination), { recursive: true });
@@ -78,7 +115,10 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
     [gemini, 'gemini', join(home, '.gemini', 'GEMINI.md')]]) {
     mkdirSync(base, { recursive: true });
     cpSync(join(repo, 'global', 'AGENTS.md'), guide);
-    cpSync(join(repo, 'skills'), join(base, 'skills'), { recursive: true });
+    cpSync(join(repo, 'skills'), join(base, 'skills'), {
+      recursive: true,
+      filter: path => adapter === 'codex' || path !== join(repo, 'skills', 'antigravity-worker'),
+    });
     const config = adapter === 'codex' ? { hooks: {} } : {};
     for (const [folder, entry] of [['prompt-secret-checker', 'secret-checker'],
       ['code-quality-review', 'code-quality-review'], ['command-guard', 'command-guard']]) {
@@ -113,6 +153,30 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
   assert.match(healthy.stdout, /Antigravity rules\/code-quality-review\.md/);
   assert.match(healthy.stdout, /Git 전역 pre-commit/);
   assert.doesNotMatch(healthy.stdout, /규칙 위반 TS|읽기·쓰기·삭제/);
+
+  const unrelated = join(codex, 'skills', 'personal-skill');
+  mkdirSync(unrelated);
+  writeFileSync(join(unrelated, 'SKILL.md'), 'user skill');
+  writeFileSync(join(codex, 'skills', 'task-lessons', 'scripts', 'location.ps1.bak'), 'backup');
+  assert.equal(scan().status, 0);
+
+  const retired = [
+    [codex, 'task-lessons/scripts/location.ps1'],
+    [codex, 'agents-md-editor/scripts/compare_size.py'],
+    [codex, 'antigravity-worker-acp'],
+    [gemini, 'antigravity-worker'],
+    [gemini, 'antigravity-worker-acp'],
+  ];
+  for (const [base, file] of retired) writeFileSync(join(base, 'skills', file), 'legacy');
+  const obsolete = scan();
+  assert.equal(obsolete.status, 1, obsolete.stdout);
+  assert.match(obsolete.stdout, /확인 필요 {2}Codex 폐기·제외 스킬 경로/);
+  assert.match(obsolete.stdout, /확인 필요 {2}Antigravity 폐기·제외 스킬 경로/);
+  for (const [base, file] of retired) {
+    assert.ok(obsolete.stdout.includes('skills/' + file + ' 남아 있음'), obsolete.stdout);
+    rmSync(join(base, 'skills', file));
+  }
+  assert.doesNotMatch(obsolete.stdout, /location\.ps1\.bak|personal-skill/);
 
   const artifacts = join(codex, 'skills', 'compare-changes', 'artifacts');
   const lessons = join(home, 'custom-lessons');

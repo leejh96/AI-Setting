@@ -121,6 +121,30 @@ test('사용자 지정 교훈 경로가 활성화된 경우 자료와 권한을 
   assert.equal(readFileSync(join(override, 'shared', 'custom.md'), 'utf8'), 'custom');
 });
 
+test('Windows 최초 동기화에서 기본 교훈 경로의 기존 상위 폴더 별칭을 처리한다', {
+  skip: process.platform !== 'win32',
+}, async t => {
+  const { codex: home } = fixture(t);
+  const codex = join(home, 'Codex');
+  const lessons = join(codex, 'skills', 'task-lessons', 'lessons');
+  const override = join(home, 'CODEX', 'skills', 'task-lessons', 'lessons');
+  const legacyRecord = join(codex, 'task-lessons', 'shared', 'lesson.md');
+  write(legacyRecord, 'previous lesson');
+  assert.equal(existsSync(lessons), false);
+  const calls = [];
+  const codexPermission = async (path, directory) => {
+    calls.push([path, directory]);
+    assert.ok(existsSync(directory));
+    return { path, added: true };
+  };
+
+  const results = await Array.fromAsync(syncTaskLessons({ codex, override, codexPermission }));
+  assert.deepEqual(calls, [[join(codex, 'config.toml'), lessons]]);
+  assert.ok(results.some(item => item.path === lessons && item.migrated === 1));
+  assert.equal(readFileSync(join(lessons, 'shared', 'lesson.md'), 'utf8'), 'previous lesson');
+  assert.equal(readFileSync(legacyRecord, 'utf8'), 'previous lesson');
+});
+
 test('두 도구는 같은 프로젝트에서 각자 교훈을 사용하고 Antigravity 권한은 한 번만 등록한다', async t => {
   const { codex: home } = fixture(t);
   const codex = join(home, '.codex');

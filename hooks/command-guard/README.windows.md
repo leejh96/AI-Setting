@@ -7,9 +7,9 @@
 ```powershell
 $codexGuardHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
 $codexGuardDir = Join-Path $codexGuardHome 'hooks/command-guard'
-New-Item -ItemType Directory -Force -Path "$codexGuardDir/codex" | Out-Null
-Copy-Item -LiteralPath 'hooks/command-guard/command-guard.mjs','hooks/command-guard/hook-cli.mjs','hooks/command-guard/shell-commands.mjs' -Destination $codexGuardDir
-Copy-Item -LiteralPath 'hooks/command-guard/codex/codex-command-guard.mjs' -Destination "$codexGuardDir/codex/"
+New-Item -ItemType Directory -Force -Path "$codexGuardDir/codex" -ErrorAction Stop | Out-Null
+Copy-Item -LiteralPath 'hooks/command-guard/command-guard.mjs','hooks/command-guard/hook-cli.mjs','hooks/command-guard/shell-commands.mjs' -Destination $codexGuardDir -ErrorAction Stop
+Copy-Item -LiteralPath 'hooks/command-guard/codex/codex-command-guard.mjs' -Destination "$codexGuardDir/codex/" -ErrorAction Stop
 node "$codexGuardDir/codex/codex-command-guard.mjs" --print-config
 ```
 
@@ -19,9 +19,9 @@ node "$codexGuardDir/codex/codex-command-guard.mjs" --print-config
 
 ```powershell
 $antigravityGuardDir = Join-Path $env:USERPROFILE '.gemini/config/hooks/command-guard'
-New-Item -ItemType Directory -Force -Path "$antigravityGuardDir/gemini" | Out-Null
-Copy-Item -LiteralPath 'hooks/command-guard/command-guard.mjs','hooks/command-guard/hook-cli.mjs','hooks/command-guard/shell-commands.mjs' -Destination $antigravityGuardDir
-Copy-Item -LiteralPath 'hooks/command-guard/gemini/gemini-command-guard.mjs' -Destination "$antigravityGuardDir/gemini/"
+New-Item -ItemType Directory -Force -Path "$antigravityGuardDir/gemini" -ErrorAction Stop | Out-Null
+Copy-Item -LiteralPath 'hooks/command-guard/command-guard.mjs','hooks/command-guard/hook-cli.mjs','hooks/command-guard/shell-commands.mjs' -Destination $antigravityGuardDir -ErrorAction Stop
+Copy-Item -LiteralPath 'hooks/command-guard/gemini/gemini-command-guard.mjs' -Destination "$antigravityGuardDir/gemini/" -ErrorAction Stop
 node "$antigravityGuardDir/gemini/gemini-command-guard.mjs" --print-config
 ```
 

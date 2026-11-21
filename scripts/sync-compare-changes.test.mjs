@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 import { URL } from 'node:url';
-import { syncCodexDirectoryPermission } from './codex-directory-permission.mjs';
+import { syncCodexDirectoryPermission, withConfigServer } from './codex-directory-permission.mjs';
+import { sameInstallPath } from './install-file.mjs';
 import { syncCompareChanges } from './sync-compare-changes.mjs';
 
 const source = readFileSync(new URL('../skills/compare-changes/SKILL.md', import.meta.url));
@@ -70,6 +73,101 @@ test('동기화 중 Codex 설정이 바뀌면 현재 설정을 보존하고 다�
   assert.equal(readFileSync(path, 'utf8'), updated);
   assert.deepEqual(readdirSync(home), ['config.toml']);
 });
+
+test('Codex의 최종 권한이 전체 접근을 허용할 때만 별도 쓰기 경로 등록을 건너뛴다', async t => {
+  const home = fixture(t);
+  const path = join(home, 'config.toml');
+  const dir = join(home, 'artifacts');
+  const content = 'sandbox_mode = "danger-full-access"\n';
+  writeFileSync(path, content);
+  const userConfig = { sandbox_mode: 'danger-full-access' };
+  const sync = config => syncCodexDirectoryPermission(path, dir, 'compare-changes-permission', run => run(async method => {
+    assert.equal(method, 'config/read');
+    return { layers: [{ name: { type: 'user', file: path }, config: userConfig }], config };
+  }));
+  assert.deepEqual(await sync(userConfig), { path, added: false });
+  await assert.rejects(sync({ sandbox_mode: 'read-only' }), /workspace-write/u);
+  await assert.rejects(sync({ ...userConfig, default_permissions: 'restricted' }), /workspace-write/u);
+  assert.equal(readFileSync(path, 'utf8'), content);
+  assert.deepEqual(readdirSync(home), ['config.toml']);
+});
+
+test('Codex는 사용자 설정에만 있는 경로를 최종 권한으로 인정하지 않는다', async t => {
+  const home = fixture(t);
+  const path = join(home, 'config.toml');
+  const dir = join(home, 'artifacts');
+  const content = 'sandbox_mode = "workspace-write"\n';
+  writeFileSync(path, content);
+  const config = roots => ({ sandbox_mode: 'workspace-write', sandbox_workspace_write: { writable_roots: roots } });
+  const sync = (local, effective) => syncCodexDirectoryPermission(path, dir, 'compare-changes-permission', run => run(async method => {
+    assert.equal(method, 'config/read');
+    return {
+      layers: [{ name: { type: 'user', file: path }, config: config(local) }],
+      config: config(effective),
+    };
+  }));
+  await assert.rejects(sync([dir], []), /상위 Codex 설정/u);
+  assert.deepEqual(await sync([], [dir]), { path, added: false });
+  assert.equal(readFileSync(path, 'utf8'), content);
+  assert.deepEqual(readdirSync(home), ['config.toml']);
+});
+
+test('Codex는 Windows에서 대소문자 표기만 다른 설정 파일과 쓰기 경로를 인식한다', {
+  skip: process.platform !== 'win32',
+}, async t => {
+  const home = fixture(t);
+  const path = join(home, 'Config.toml');
+  const dir = join(home, 'Artifacts');
+  const content = 'sandbox_mode = "workspace-write"\n';
+  writeFileSync(path, content);
+  mkdirSync(dir);
+  const config = { sandbox_mode: 'workspace-write', sandbox_workspace_write: { writable_roots: [dir.toUpperCase()] } };
+  const results = await syncCodexDirectoryPermission(path, dir, 'compare-changes-permission', run => run(async method => {
+    assert.equal(method, 'config/read');
+    return { layers: [{ name: { type: 'user', file: path.toUpperCase() }, config }], config };
+  }));
+  assert.deepEqual(results, { path, added: false });
+  assert.equal(readFileSync(path, 'utf8'), content);
+  assert.deepEqual(readdirSync(home).sort(), ['Artifacts', 'Config.toml']);
+});
+
+test('실제 경로를 확인할 수 없는 대소문자 별칭을 같은 설치 경로로 처리하지 않는다', t => {
+  const home = fixture(t);
+  assert.equal(sameInstallPath(join(home, 'Artifacts'), join(home, 'ARTIFACTS')), false);
+});
+
+for (const shell of [false, true]) {
+  test(`Codex 설정 서버가 응답하지 않으면 시간 제한 후 서버를 종료한다 (Windows 셸: ${shell})`, {
+    skip: shell && process.platform !== 'win32', timeout: 10_000,
+  }, async t => {
+    const script = join(fixture(t), 'unresponsive server.cjs');
+    writeFileSync(script, [
+      "const { createInterface } = require('node:readline');",
+      "createInterface({input:process.stdin}).on('line', line => {",
+      "  const request = JSON.parse(line);",
+      "  if (request.method === 'initialize') console.log(JSON.stringify({ id: request.id, result: {} }));",
+      "  if (request.method === 'config/read') console.log(JSON.stringify({ id: request.id, result: process.pid }));",
+      "});",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    let closed;
+    let pid;
+    const open = () => {
+      const options = { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true };
+      const child = shell ? spawn(`"${process.execPath}" "${script}"`, { ...options, shell: true })
+        : spawn(process.execPath, [script], options);
+      closed = once(child, 'exit');
+      return { child, shell };
+    };
+    await assert.rejects(withConfigServer(async request => {
+      pid = await request('config/read', { includeLayers: true });
+      return request('config/value/write', {});
+    }, { open, timeoutMs: 2_000 }), /응답 시간이 초과되었습니다 \(config\/value\/write\)/u);
+    await closed;
+    assert.ok(Number.isInteger(pid));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  });
+}
 
 test('Antigravity는 기존 자료를 보존하며 앱과 CLI에 artifacts 읽기·쓰기 권한을 등록한다', async t => {
   const home = fixture(t);

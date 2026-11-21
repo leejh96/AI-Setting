@@ -15,13 +15,13 @@
 ```sh
 codex_hook_target="${CODEX_HOME:-$HOME/.codex}/hooks/prompt-secret-checker"
 gemini_hook_target="$HOME/.gemini/config/hooks/prompt-secret-checker"
-mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini"
+mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" || exit 1
 for hook_runtime_file in secret-checker.mjs gitleaks.toml; do
-  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$codex_hook_target/"
-  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$gemini_hook_target/"
+  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$codex_hook_target/" || exit 1
+  cp "hooks/prompt-secret-checker/$hook_runtime_file" "$gemini_hook_target/" || exit 1
 done
-cp "hooks/prompt-secret-checker/codex/codex-secret-checker.mjs" "$codex_hook_target/codex/"
-cp "hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs" "$gemini_hook_target/gemini/"
+cp "hooks/prompt-secret-checker/codex/codex-secret-checker.mjs" "$codex_hook_target/codex/" || exit 1
+cp "hooks/prompt-secret-checker/gemini/gemini-secret-checker.mjs" "$gemini_hook_target/gemini/" || exit 1
 ```
 
 설정은 아래 설치본에서 생성합니다. 심볼릭 링크·테스트·개발 문서·반대 도구 어댑터는 설치하지 않으며, 원본을 수정한 뒤에는 다시 복사합니다.

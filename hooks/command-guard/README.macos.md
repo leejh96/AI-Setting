@@ -6,9 +6,9 @@
 
 ```sh
 codex_guard_dir="${CODEX_HOME:-$HOME/.codex}/hooks/command-guard"
-mkdir -p "$codex_guard_dir/codex"
-cp hooks/command-guard/{command-guard,hook-cli,shell-commands}.mjs "$codex_guard_dir/"
-cp hooks/command-guard/codex/codex-command-guard.mjs "$codex_guard_dir/codex/"
+mkdir -p "$codex_guard_dir/codex" || exit 1
+cp hooks/command-guard/command-guard.mjs hooks/command-guard/hook-cli.mjs hooks/command-guard/shell-commands.mjs "$codex_guard_dir/" || exit 1
+cp hooks/command-guard/codex/codex-command-guard.mjs "$codex_guard_dir/codex/" || exit 1
 node "$codex_guard_dir/codex/codex-command-guard.mjs" --print-config
 ```
 
@@ -18,9 +18,9 @@ node "$codex_guard_dir/codex/codex-command-guard.mjs" --print-config
 
 ```sh
 antigravity_guard_dir="$HOME/.gemini/config/hooks/command-guard"
-mkdir -p "$antigravity_guard_dir/gemini"
-cp hooks/command-guard/{command-guard,hook-cli,shell-commands}.mjs "$antigravity_guard_dir/"
-cp hooks/command-guard/gemini/gemini-command-guard.mjs "$antigravity_guard_dir/gemini/"
+mkdir -p "$antigravity_guard_dir/gemini" || exit 1
+cp hooks/command-guard/command-guard.mjs hooks/command-guard/hook-cli.mjs hooks/command-guard/shell-commands.mjs "$antigravity_guard_dir/" || exit 1
+cp hooks/command-guard/gemini/gemini-command-guard.mjs "$antigravity_guard_dir/gemini/" || exit 1
 node "$antigravity_guard_dir/gemini/gemini-command-guard.mjs" --print-config
 ```
 

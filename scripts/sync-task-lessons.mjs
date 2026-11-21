@@ -8,7 +8,7 @@ import process from 'node:process';
 import { URL, pathToFileURL } from 'node:url';
 import { syncAntigravityFolderPermission } from './antigravity-permission.mjs';
 import { syncCodexDirectoryPermission } from './codex-directory-permission.mjs';
-import { ensureInstallDirectory, readInstallFile, replaceInstallFile } from './install-file.mjs';
+import { ensureInstallDirectory, readInstallFile, replaceInstallFile, sameInstallPath } from './install-file.mjs';
 
 const source = new URL('../skills/task-lessons/', import.meta.url);
 const skillFiles = ['SKILL.md', 'references/storage.md', 'scripts/git-files.mjs', 'scripts/location.mjs'];
@@ -68,7 +68,7 @@ export async function* syncTaskLessons({
     yield { path: lessons, storage: true };
   } else {
     if (override && !isAbsolute(override)) throw new Error('교훈 저장 루트는 절대 경로로 지정해야 합니다.');
-    if (!override || resolve(override) === lessons) {
+    if (!override || sameInstallPath(override, lessons)) {
       const legacy = join(base, 'task-lessons');
       const receipt = join(lessons, '.legacy-migration-complete');
       const previous = readInstallFile(receipt);

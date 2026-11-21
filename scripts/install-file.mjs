@@ -1,8 +1,26 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 
 const privateFile = { flag: 'wx', mode: 0o600 };
+
+export function sameInstallPath(left, right) {
+  let a = resolve(left);
+  let b = resolve(right);
+  while (a !== b) {
+    try {
+      return realpathSync.native(a) === realpathSync.native(b);
+    } catch (error) {
+      const parentA = dirname(a);
+      const parentB = dirname(b);
+      if (error.code !== 'ENOENT' || basename(a) !== basename(b) || parentA === a || parentB === b) return false;
+      // Uncreated paths can inherit a verified ancestor alias only with identical suffixes.
+      a = parentA;
+      b = parentB;
+    }
+  }
+  return true;
+}
 
 export function ensureInstallDirectory(path) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
