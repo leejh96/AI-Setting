@@ -5,7 +5,7 @@
 | 파일 | 전역 규칙 |
 | --- | --- |
 | `.js`, `.jsx`, `.mjs`, `.cjs` | `@eslint/js` 권장 규칙과 `eqeqeq`, `no-self-compare`, `no-var` |
-| `.ts`, `.tsx`, `.mts`, `.cts` | `@eslint/js`와 `typescript-eslint` 권장 규칙, `eqeqeq`, `no-self-compare`. `no-var`는 TypeScript 호환 설정에서 적용합니다. |
+| `.ts`, `.tsx`, `.mts`, `.cts` | `@eslint/js`와 `typescript-eslint` 권장 규칙, `eqeqeq`, `no-self-compare`, TypeScript 타입 오류, 처리되지 않은 Promise. `no-var`는 TypeScript 호환 설정에서 적용합니다. |
 
 프로젝트 루트에서 직접 검사할 수 있습니다. 아래는 기본 Codex 홈을 사용한 예시입니다. Antigravity에서는 실행기 경로를 `$HOME/.gemini/lints/lint.mjs`로 바꿉니다. 파일은 하나 이상 지정합니다. 상대 경로는 첫 번째 인자인 프로젝트 루트를 기준으로 합니다.
 
@@ -13,7 +13,7 @@
 node "$HOME/.codex/lints/lint.mjs" "." "src/app.ts" "scripts/build.js"
 ```
 
-실행 결과는 위반 없이 검사했으면 0, 린트 오류가 있으면 1, 잘못된 설정이나 파일 경로 또는 파싱 오류가 있으면 2입니다.
+실행 결과는 위반 없이 검사했으면 0, 린트·타입 오류가 있으면 1, 잘못된 설정이나 파일 경로 또는 파싱 오류 등으로 검사를 실행할 수 없으면 2입니다.
 
 ## 프로젝트 규칙과 예외
 
@@ -27,9 +27,13 @@ export default [
 ];
 ```
 
-## 타입 기반 검사를 적용할 폴더
+## TypeScript 기본 검사
 
-프로젝트 설정에서 파일 범위와 TypeScript 프로젝트를 지정합니다. 예시의 `src`와 `packages/api/src` 안 TypeScript 파일은 타입 기반 검사까지 받고, 그 밖의 TypeScript 파일은 전역 기본 규칙으로 검사합니다. 선택된 파일은 해당 `tsconfig.json`에 포함되어야 합니다.
+전역 실행기는 검사 대상 TS 파일에서 `const value: number = 'text'` 같은 타입 오류와 `save()`처럼 처리하지 않은 Promise를 기본으로 검사합니다. `void save()`만 붙여도 거부 처리는 생기지 않으므로 기본 설정에서 오류입니다. 오류는 검사 대상 파일 기준으로 보고하고, 가져온 모듈의 타입 정보는 검사에 사용합니다. 프로젝트 전체 빌드나 전체 타입 검사가 필요한 경우에는 기존 명령을 별도로 실행하세요.
+
+프로젝트 ESLint가 `parserOptions.project` 또는 `projectService` 등으로 타입 정보를 제공하면 이를 사용합니다. 설정하지 않았다면 TypeScript 프로젝트 서비스가 파일을 포함하는 `tsconfig.json`이나 그 참조 설정을 찾습니다. 타입 정보를 얻을 수 없는 파일은 실행 실패로 보고합니다. 의도적으로 제외한 파일은 프로젝트 ESLint의 `ignores`를 사용하고, 규칙별 예외는 해당 파일 범위에서 설정할 수 있습니다.
+
+더 많은 타입 기반 규칙이 필요한 폴더에는 프로젝트 설정을 추가할 수 있습니다. 다음 예시는 `src`와 `packages/api/src`에서 `recommendedTypeChecked`를 사용합니다. 이 설정의 규칙 옵션은 해당 범위의 전역 기본값보다 우선합니다.
 
 ```js
 import { defineConfig } from 'eslint/config';
@@ -49,4 +53,4 @@ export default defineConfig([
 ]);
 ```
 
-이 예시처럼 프로젝트 설정이 패키지를 직접 가져오는 경우 해당 패키지는 프로젝트 의존성에 포함합니다. 전역 설치의 TypeScript 플러그인을 사용하는 경우 일반 설정 배열에 같은 `files`와 `languageOptions`를 두고 `rules: { '@typescript-eslint/no-floating-promises': 'error' }`처럼 필요한 타입 기반 규칙을 지정할 수 있습니다. [타입 검사 설정](https://typescript-eslint.io/getting-started/typed-linting/)
+이 예시처럼 프로젝트 설정이 패키지를 직접 가져오는 경우 해당 패키지는 프로젝트 의존성에 포함합니다. [타입 기반 린트 설정](https://typescript-eslint.io/getting-started/typed-linting/)

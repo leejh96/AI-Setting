@@ -3,10 +3,11 @@ import { realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { ESLint } from 'eslint';
-import baseConfig from './eslint.config.mjs';
+import baseConfig, { typescriptChecks } from './eslint.config.mjs';
 
 const typescriptPlugin = '@typescript-eslint';
 const sourceExtension = /\.(?:[cm]?js|jsx|[cm]?ts|tsx)$/u;
+const typescriptExtension = /\.(?:[cm]?ts|tsx)$/u;
 
 function inProject(project, path) {
   const name = relative(project, path);
@@ -23,32 +24,50 @@ function withProjectPlugin(baseConfig, plugin) {
     : config);
 }
 
-async function lintGroup(options, baseConfig, files) {
-  const combined = new ESLint({ ...options, baseConfig });
-  try {
-    return await combined.lintFiles(files);
-  } catch (error) {
-    if (!typescriptPluginConflict(error)) throw error;
-  }
+function needsProjectService(file, config) {
+  if (!typescriptExtension.test(file) || !config) return false;
+  const checksEnabled = Object.keys(typescriptChecks.rules).some(rule => config.rules[rule]?.[0] > 0);
+  const parserOptions = config.languageOptions.parserOptions ?? {};
+  return checksEnabled && !parserOptions.projectService && !parserOptions.project && !parserOptions.programs?.length;
+}
 
-  // The project may load its own instance of the same TypeScript plugin.
-  const projectOnly = new ESLint(options);
-  const byPlugin = new Map();
+async function lintGroup(options, baseConfig, files) {
+  const createGroup = baseConfig => ({
+    baseConfig, linter: new ESLint({ ...options, baseConfig }), files: [], projectServiceFiles: [],
+  });
+  const combined = createGroup(baseConfig);
+  const byPlugin = new Map([[undefined, combined]]);
+  let projectOnly;
   const results = [];
   for (const file of files) {
-    let linter = combined;
+    let group = combined;
+    let config;
     try {
-      await combined.calculateConfigForFile(file);
+      config = await combined.linter.calculateConfigForFile(file);
     } catch (error) {
       if (!typescriptPluginConflict(error)) throw error;
+      // The project may load its own instance of the same TypeScript plugin.
+      projectOnly ??= new ESLint(options);
       const plugin = (await projectOnly.calculateConfigForFile(file))?.plugins?.[typescriptPlugin];
       if (!plugin) throw error;
       if (!byPlugin.has(plugin)) {
-        byPlugin.set(plugin, new ESLint({ ...options, baseConfig: withProjectPlugin(baseConfig, plugin) }));
+        byPlugin.set(plugin, createGroup(withProjectPlugin(baseConfig, plugin)));
       }
-      linter = byPlugin.get(plugin);
+      group = byPlugin.get(plugin);
+      config = await group.linter.calculateConfigForFile(file);
     }
-    results.push(...await linter.lintFiles(file));
+    (needsProjectService(file, config) ? group.projectServiceFiles : group.files).push(file);
+  }
+
+  for (const group of byPlugin.values()) {
+    if (group.files.length) results.push(...await group.linter.lintFiles(group.files));
+    if (group.projectServiceFiles.length) {
+      const linter = new ESLint({
+        ...options, baseConfig: group.baseConfig,
+        overrideConfig: { languageOptions: { parserOptions: { projectService: true } } },
+      });
+      results.push(...await linter.lintFiles(group.projectServiceFiles));
+    }
   }
   return results;
 }
@@ -85,10 +104,13 @@ async function main([projectPath, ...input]) {
   }
 
   const results = [];
+  const lintConfig = [...baseConfig, {
+    ...typescriptChecks, languageOptions: { parserOptions: { tsconfigRootDir: project } },
+  }];
   for (const [config, targets] of groups) {
     const cwd = config ? dirname(config) : project;
     const options = { cwd, overrideConfigFile: config ?? true, globInputPaths: false };
-    results.push(...await lintGroup(options, baseConfig, targets));
+    results.push(...await lintGroup(options, lintConfig, targets));
   }
   const formatted = await (await discover.loadFormatter('stylish')).format(results);
   if (formatted) process.stdout.write(formatted);
