@@ -22,6 +22,7 @@ ai-setting/
 │   ├── concept-explainer/    # 질문에 필요한 개념과 예시 설명
 │   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
 │   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
+│   ├── compare-changes/       # 수정 전 자료 확보와 변경 전후 비교
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
 │   ├── korean-writing/  # 한국어 업무 문서 작성·퇴고
 │   ├── task-lessons/   # 재사용할 작업 교훈의 조회·기록·정리
@@ -54,6 +55,7 @@ ai-setting/
 | [agents-md-editor](skills/agents-md-editor/SKILL.md) | 전역·프로젝트 지침 평가·최적화·초기 작성 | 적용 범위·의미·예외 보존, 독립 최종 검토, 요청 시 크기·실행 비교 |
 | [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
 | [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
+| [compare-changes](skills/compare-changes/SKILL.md) | 전후 비교 요청 또는 화면·동작·구조·성능의 차이를 문장으로 파악하기 어려운 변경 | 수정 전 자료 확보, 같은 조건에서 전후 비교, 스크린샷·표 등 변경에 맞는 형식 선택 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
 | [korean-writing](skills/korean-writing/SKILL.md) | 한국어 메일·보고서·공지·기획서 등 업무 문서 작성·퇴고 | 독자와 목적에 맞는 말투, 번역투 점검, 사실·약속·불확실성 대조 |
 | [task-lessons](skills/task-lessons/SKILL.md) | 반복 실패나 뜻밖의 제약 등으로 이전 교훈이 다음 행동을 바꿀 때 | 프로젝트별 교훈 조회·기록·갱신·폐기 |
@@ -81,6 +83,12 @@ ai-setting/
 **`task-lessons`는 Codex 전용입니다.** 경로 계산에 Node.js 22 이상을 사용합니다. 교훈은 `~/.codex/task-lessons`에 프로젝트별로 저장하며 `CODEX_HOME` 또는 `CODEX_LESSONS_DIR` 설정을 따릅니다. [저장 경로와 교훈 관리](skills/task-lessons/references/storage.md)
 
 저장소의 스킬 폴더 전체를 각 설치 위치에 직접 복사하며 심볼릭 링크는 사용하지 않습니다. 교체 전에는 설치본의 별도 수정 여부를 대조하고 기존 파일 전체를 복구할 수 있게 백업합니다. 원본 수정이나 Git pull만으로 설치본은 갱신되지 않으므로 다시 복사하고 새 세션에서 반영을 확인합니다.
+
+`compare-changes` 설치본을 갱신할 때는 기존 `artifacts/` 폴더를 같은 경로에 두고 배포 파일을 갱신합니다. 이전 답변의 파일 링크가 이 경로를 사용합니다.
+
+Codex를 `workspace-write`로 사용하는 경우 `compare-changes`를 동기화할 때 설치본 아래 `artifacts/` 폴더를 준비합니다. `CODEX_HOME/config.toml`(기본 `~/.codex/config.toml`)을 백업한 뒤, 기존 항목을 보존하면서 `sandbox_workspace_write.writable_roots` 배열에 `artifacts/`의 절대 경로를 한 번만 추가합니다. 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 적용을 확인합니다. [Codex 설정 레퍼런스](https://learn.chatgpt.com/docs/config-file/config-reference)
+
+Antigravity에 `compare-changes`를 동기화할 때는 설치본 아래 `artifacts/` 폴더를 준비하고, 그 절대 경로를 `write_file(<artifacts 폴더의 절대 경로>)` 규칙으로 허용합니다. 이 규칙은 해당 폴더와 하위 파일의 읽기·쓰기를 허용합니다. CLI에서는 `~/.gemini/antigravity-cli/settings.json`을 백업한 뒤, 기존 규칙을 보존하면서 `permissions.allow` 배열에 해당 항목을 한 번만 추가합니다. 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 적용을 확인합니다. [Antigravity CLI 권한 문서](https://antigravity.google/docs/permissions?tab=cli)
 
 스킬 이름이 바뀌었다면 새 이름의 폴더를 복사하고, 이전 이름의 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다.
 
