@@ -19,10 +19,13 @@ command -v node
 codex_hook_target="${CODEX_HOME:-$HOME/.codex}/hooks/code-quality-review"
 gemini_hook_target="$HOME/.gemini/config/hooks/code-quality-review"
 gemini_rules_target="$HOME/.gemini/config/rules"
-shared_lint_target="$HOME/.ai-setting/lint"
-mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" "$gemini_rules_target" "$shared_lint_target"
-cp lints/eslint.config.mjs lints/lint.mjs lints/package.json lints/package-lock.json "$shared_lint_target/"
-npm --prefix "$shared_lint_target" ci --ignore-scripts --no-audit --no-fund || exit 1
+codex_lint_target="${CODEX_HOME:-$HOME/.codex}/lints"
+gemini_lint_target="$HOME/.gemini/lints"
+mkdir -p "$codex_hook_target/codex" "$gemini_hook_target/gemini" "$gemini_rules_target" "$codex_lint_target" "$gemini_lint_target"
+for lint_target in "$codex_lint_target" "$gemini_lint_target"; do
+  cp lints/eslint.config.mjs lints/lint.mjs lints/package.json lints/package-lock.json "$lint_target/" || exit 1
+  npm --prefix "$lint_target" ci --ignore-scripts --no-audit --no-fund || exit 1
+done
 for hook_runtime_file in review-request.mjs review-status.mjs review-changes.mjs watch-worker.mjs; do
   cp "hooks/code-quality-review/$hook_runtime_file" "$codex_hook_target/"
   cp "hooks/code-quality-review/$hook_runtime_file" "$gemini_hook_target/"
@@ -51,9 +54,9 @@ Codex를 재시작하고 CLI `/hooks`에서 출처와 명령을 검토해 신뢰
 node "$gemini_hook_target/gemini/gemini-code-quality-review.mjs" --print-config
 ```
 
-기존 `~/.gemini/config/hooks.json` 전체를 백업하고 출력의 `ai-setting-code-quality-review` 안의 `PreInvocation`과 `Stop`을 함께 병합합니다. 기존 `enabled` 상태와 시크릿 검사 등 다른 훅을 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 사용자 홈의 공통 경로를 사용합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
+기존 `~/.gemini/config/hooks.json` 전체를 백업하고 출력의 `ai-setting-code-quality-review` 안의 `PreInvocation`과 `Stop`을 함께 병합합니다. 기존 `enabled` 상태와 시크릿 검사 등 다른 훅을 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 Antigravity 사용자 홈의 `~/.gemini/lints/`에서 읽습니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
-Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 활성 상태를 확인합니다. 생성한 따옴표를 임의로 제거하지 말고 앱 안에서 명령이 실제로 실행되는지 확인합니다.
+[전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 설정합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 활성 상태를 확인합니다. 생성한 따옴표를 임의로 제거하지 말고 앱 안에서 명령이 실제로 실행되는지 확인합니다.
 
 ## 검증과 갱신
 

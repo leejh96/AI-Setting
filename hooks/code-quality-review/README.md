@@ -80,9 +80,9 @@ OS의 파일 감시는 네트워크 파일시스템·가상화 환경에서 불�
 
 ## 전역 ESLint 실행
 
-JavaScript·TypeScript 변경이 있으면 두 도구의 Stop 검토가 `~/.ai-setting/lint/lint.mjs`를 각 도구의 명령 권한으로 실행합니다. 실행기는 전역 기본 규칙에 해당 파일의 프로젝트 `eslint.config.*` 규칙과 예외를 적용합니다. 기본 규칙과 의존성은 사용자 홈의 한 곳에 설치하며, 프로젝트에 파일·의존성·스크립트를 추가할 필요가 없습니다. [전역 설치와 프로젝트 설정](../../lints/README.md)
+JavaScript·TypeScript 변경이 있으면 Stop 검토가 현재 도구에 설치된 전역 ESLint를 실행합니다. Codex는 `$CODEX_HOME/lints/lint.mjs`(기본값 `~/.codex/lints/lint.mjs`), Antigravity는 `~/.gemini/lints/lint.mjs`를 사용합니다. 실행기는 전역 기본 규칙에 해당 파일의 프로젝트 `eslint.config.*` 규칙과 예외를 적용합니다. 두 설치본은 같은 저장소 원본에서 동기화하며, 프로젝트에 파일·의존성·스크립트를 추가할 필요가 없습니다. [전역 설치와 프로젝트 설정](../../lints/README.md)
 
-Antigravity 터미널 샌드박스를 사용한다면 Antigravity의 권한 설정에서 설치 폴더의 실제 절대 경로를 `read_file(...)`로 허용합니다. 예를 들어 Windows에서는 `read_file(C:/Users/your-name/.ai-setting/lint)`를 추가합니다. 이 규칙으로 실행기와 그 의존성을 샌드박스 안에서 읽을 수 있습니다. [Antigravity 터미널 샌드박스](https://antigravity.google/docs/sandbox/)
+Antigravity 터미널 샌드박스를 사용한다면 Antigravity의 권한 설정에서 `.gemini/lints`의 실제 절대 경로를 `read_file(...)`로 허용합니다. 예를 들어 Windows에서는 `read_file(C:/Users/your-name/.gemini/lints)`를 추가합니다. 이 규칙으로 실행기와 그 의존성을 샌드박스 안에서 읽을 수 있습니다. [Antigravity 터미널 샌드박스](https://antigravity.google/docs/sandbox/)
 
 ## 파일 구성
 

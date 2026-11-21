@@ -178,7 +178,12 @@ function checkClient(codex) {
   const adapter = codex ? 'codex' : 'gemini';
   const home = codex ? resolve(process.env.CODEX_HOME || join(homedir(), '.codex')) : join(homedir(), '.gemini', 'config');
   const guide = codex ? join(home, 'AGENTS.md') : join(homedir(), '.gemini', 'GEMINI.md');
+  const lintHome = codex ? home : join(homedir(), '.gemini');
   checkCopy(`${name} 전역 지침`, join('global', 'AGENTS.md'), guide);
+  for (const file of ['eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json']) {
+    const source = join('lints', file);
+    checkCopy(`${name} 전역 린트 ${file}`, source, join(lintHome, source));
+  }
   for (const skill of readdirSync(join(repo, 'skills'), { withFileTypes: true })) {
     if (skill.isDirectory() && (codex || !codexOnly.has(skill.name))) {
       const source = join('skills', skill.name);
@@ -243,11 +248,6 @@ if (extra.length || (target && !['codex', 'antigravity', 'git'].includes(target)
   report(`Node.js ${process.version}`, Number(process.versions.node.split('.')[0]) >= 22 ? [] : ['Node.js 22 이상 필요']);
   if (!target || target === 'codex') checkClient(true);
   if (!target || target === 'antigravity') checkClient(false);
-  if (target !== 'git') {
-    for (const file of ['eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json']) {
-      checkCopy(`전역 린트 ${file}`, join('lints', file), join(homedir(), '.ai-setting', 'lint', file));
-    }
-  }
   if (!target || target === 'git') checkGit();
   process.exitCode = failed ? 1 : 0;
 }

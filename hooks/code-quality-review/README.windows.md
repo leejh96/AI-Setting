@@ -20,13 +20,16 @@ $codexHookHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:
 $codexHookTarget = Join-Path $codexHookHome 'hooks/code-quality-review'
 $geminiHookTarget = Join-Path $env:USERPROFILE '.gemini/config/hooks/code-quality-review'
 $geminiRulesTarget = Join-Path $env:USERPROFILE '.gemini/config/rules'
-$sharedLintTarget = Join-Path $env:USERPROFILE '.ai-setting/lint'
-New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget, $sharedLintTarget | Out-Null
-foreach ($lintRuntimeFile in @('eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json')) {
-    Copy-Item -LiteralPath "lints/$lintRuntimeFile" -Destination $sharedLintTarget
+$codexLintTarget = Join-Path $codexHookHome 'lints'
+$geminiLintTarget = Join-Path $env:USERPROFILE '.gemini/lints'
+New-Item -ItemType Directory -Force -Path "$codexHookTarget/codex", "$geminiHookTarget/gemini", $geminiRulesTarget, $codexLintTarget, $geminiLintTarget | Out-Null
+foreach ($lintTarget in @($codexLintTarget, $geminiLintTarget)) {
+    foreach ($lintRuntimeFile in @('eslint.config.mjs', 'lint.mjs', 'package.json', 'package-lock.json')) {
+        Copy-Item -LiteralPath "lints/$lintRuntimeFile" -Destination $lintTarget -ErrorAction Stop
+    }
+    npm --prefix "$lintTarget" ci --ignore-scripts --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { throw "ESLint 의존성을 설치하지 못했습니다 ($lintTarget)." }
 }
-npm --prefix "$sharedLintTarget" ci --ignore-scripts --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { throw '전역 ESLint 의존성을 설치하지 못했습니다.' }
 $hookRuntimeFiles = @('review-request.mjs', 'review-status.mjs', 'review-changes.mjs', 'watch-worker.mjs')
 foreach ($hookRuntimeFile in $hookRuntimeFiles) {
     Copy-Item -LiteralPath "hooks/code-quality-review/$hookRuntimeFile" -Destination $codexHookTarget
@@ -60,7 +63,7 @@ Codex를 새로 시작하고 CLI `/hooks`에서 활성 상태·출처·명령을
 node "$geminiHookTarget/gemini/gemini-code-quality-review.mjs" --print-config
 ```
 
-전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 사용자 홈의 공통 경로를 사용합니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
+전역 `$env:USERPROFILE\.gemini\config\hooks.json`에 출력의 `ai-setting-code-quality-review` 키의 `PreInvocation`과 `Stop`을 모두 병합합니다. 기존 `enabled` 상태를 보존합니다. 프로젝트만 적용하려면 `.agents/hooks.json`과 `.agents/hooks/code-quality-review/`, `.agents/rules/code-quality-review.md`를 사용합니다. 이 경우에도 ESLint 실행기는 Antigravity 사용자 홈의 `~/.gemini/lints/`에서 읽습니다. 기존 `ai-setting-secret-checker` 등 다른 키는 유지합니다. Gemini CLI의 `settings.json`에는 이 설정을 넣지 않습니다.
 
 Windows에서는 Node와 훅의 경로가 공백·셸 특수문자·비ASCII 문자 없는 단순 드라이브 절대 경로이면 Node를 직접 실행합니다. 그 외 경로는 기존 `powershell.exe -NoProfile -NonInteractive -EncodedCommand ...` 형식을 사용합니다. Antigravity가 따옴표를 파일명으로 넘기거나 cmd가 `%`를 확장하는 문제를 피하도록, 인용한 호출문을 UTF-16 Base64로 전달합니다. 인코딩은 비밀값 보호 기능이 아니며 기기 경로만 담습니다. 생성한 명령을 그대로 사용합니다. 감시 프로세스는 계속 숨겨진 `Start-Process`로 분리합니다.
 
@@ -78,7 +81,7 @@ if ($qualityCommand.StartsWith('powershell.exe ')) {
 }
 ```
 
-Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 해당 훅의 활성 상태를 확인합니다. 명령이 등록됐다는 사실만으로 검토와 반복 종료가 확인된 것은 아닙니다.
+[전역 ESLint 폴더 읽기 권한](README.md#전역-eslint-실행)을 설정합니다. Antigravity를 재시작하고 CLI `/hooks` 또는 앱의 Customizations > Hooks에서 해당 훅의 활성 상태를 확인합니다. 명령이 등록됐다는 사실만으로 검토와 반복 종료가 확인된 것은 아닙니다.
 
 ## 검증과 갱신
 

@@ -1,16 +1,16 @@
 # JavaScript·TypeScript 전역 ESLint
 
-Codex와 Antigravity의 Stop 검토는 사용자 홈의 `.ai-setting/lint/lint.mjs`를 실행합니다. 공통 설정과 의존성은 이곳에 한 번만 설치합니다. 전역 ESLint에는 Node.js 22.13 이상인 22.x 또는 24 이상이 필요합니다. 설치와 검토 지침 갱신은 [Windows](../hooks/code-quality-review/README.windows.md#실행-파일과-공통-린트-설정-복사)와 [macOS](../hooks/code-quality-review/README.macos.md#실행-파일과-공통-린트-설정-복사) 안내를 따릅니다.
+공통 실행기와 설정은 각 도구의 사용자 디렉터리에 설치합니다. Codex는 `$CODEX_HOME/lints/`(기본값 `~/.codex/lints/`), Antigravity는 `~/.gemini/lints/`의 실행기를 Stop 검토에서 사용합니다. 전역 ESLint에는 Node.js 22.13 이상인 22.x 또는 24 이상이 필요합니다. 설치와 검토 지침 갱신은 [Windows](../hooks/code-quality-review/README.windows.md#실행-파일과-공통-린트-설정-복사)와 [macOS](../hooks/code-quality-review/README.macos.md#실행-파일과-공통-린트-설정-복사) 안내를 따릅니다.
 
 | 파일 | 전역 규칙 |
 | --- | --- |
 | `.js`, `.jsx`, `.mjs`, `.cjs` | `@eslint/js` 권장 규칙과 `eqeqeq`, `no-self-compare`, `no-var` |
 | `.ts`, `.tsx`, `.mts`, `.cts` | `@eslint/js`와 `typescript-eslint` 권장 규칙, `eqeqeq`, `no-self-compare`. `no-var`는 TypeScript 호환 설정에서 적용합니다. |
 
-프로젝트 루트에서 같은 명령으로 직접 검사할 수 있습니다. 파일은 하나 이상 지정합니다. 상대 경로는 첫 번째 인자인 프로젝트 루트를 기준으로 합니다.
+프로젝트 루트에서 직접 검사할 수 있습니다. 아래는 기본 Codex 홈을 사용한 예시입니다. Antigravity에서는 실행기 경로를 `$HOME/.gemini/lints/lint.mjs`로 바꿉니다. 파일은 하나 이상 지정합니다. 상대 경로는 첫 번째 인자인 프로젝트 루트를 기준으로 합니다.
 
 ```sh
-node "$HOME/.ai-setting/lint/lint.mjs" "." "src/app.ts" "scripts/build.js"
+node "$HOME/.codex/lints/lint.mjs" "." "src/app.ts" "scripts/build.js"
 ```
 
 실행 결과는 위반 없이 검사했으면 0, 린트 오류가 있으면 1, 잘못된 설정이나 파일 경로 또는 파싱 오류가 있으면 2입니다.

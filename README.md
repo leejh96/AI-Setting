@@ -154,7 +154,7 @@ cd ai-setting
 
 ## 설치 상태 점검
 
-저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅, 두 도구가 함께 쓰는 전역 ESLint 설치본, Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
+저장소 루트에서 `node scripts/check-install.mjs`를 실행하면 전역 지침·스킬·훅, 도구별 전역 ESLint 설치본, Antigravity 품질 검토 규칙 파일(`rules/code-quality-review.md`)을 원본과 비교합니다. Codex·Antigravity의 전역 `hooks.json` 등록과 실행 경로, Git 전역 `pre-commit` 경로도 확인합니다. `codex`, `antigravity`, `git` 중 하나를 인자로 전달하면 해당 대상만 점검합니다.
 
 누락·불일치·중복·비활성화 등 확인할 항목이 있으면 종료 코드 `1`을 반환합니다. 점검은 설치 파일과 설정을 읽으며, 훅 신뢰 등록과 새 세션에서 실제 실행되는지는 앱에서 확인합니다.
 

@@ -16,7 +16,8 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const codex = join(home, 'codex home');
   const gemini = join(home, '.gemini', 'config');
-  const globalLint = join(home, '.ai-setting', 'lint');
+  const codexLint = join(codex, 'lints');
+  const antigravityLint = join(home, '.gemini', 'lints');
   const commit = join(home, 'commit hook');
   const scanner = join(home, process.platform === 'win32' ? 'gitleaks.exe' : 'gitleaks');
   writeFileSync(scanner, '', { mode: 0o700 });
@@ -30,8 +31,10 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
   const git = run('git', ['config', '--global', 'core.hooksPath', commit]);
   assert.equal(git.status, 0, git.stderr);
   cpSync(join(repo, 'hooks', 'commit-secret-checker'), commit, { recursive: true });
-  mkdirSync(globalLint, { recursive: true });
-  for (const file of lintFiles) cpSync(join(repo, 'lints', file), join(globalLint, file));
+  for (const destination of [codexLint, antigravityLint]) {
+    mkdirSync(destination, { recursive: true });
+    for (const file of lintFiles) cpSync(join(repo, 'lints', file), join(destination, file));
+  }
 
   for (const [base, adapter, guide] of [[codex, 'codex', join(codex, 'AGENTS.md')],
     [gemini, 'gemini', join(home, '.gemini', 'GEMINI.md')]]) {
@@ -63,18 +66,22 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
 
   const healthy = scan();
   assert.equal(healthy.status, 0, healthy.stdout + healthy.stderr);
-  for (const file of lintFiles) assert.ok(healthy.stdout.includes(`일치  전역 린트 ${file}`));
+  for (const file of lintFiles) {
+    assert.ok(healthy.stdout.includes(`일치  Codex 전역 린트 ${file}`));
+    assert.ok(healthy.stdout.includes(`일치  Antigravity 전역 린트 ${file}`));
+  }
   assert.match(healthy.stdout, /Antigravity 훅 신뢰/);
   assert.match(healthy.stdout, /Antigravity rules\/code-quality-review\.md/);
   assert.match(healthy.stdout, /Git 전역 pre-commit/);
 
-  writeFileSync(join(globalLint, 'eslint.config.mjs'), 'different config');
-  rmSync(join(globalLint, 'lint.mjs'));
+  writeFileSync(join(codexLint, 'eslint.config.mjs'), 'different config');
+  rmSync(join(antigravityLint, 'lint.mjs'));
   const lintDrift = scan();
   assert.equal(lintDrift.status, 1, lintDrift.stdout);
-  assert.match(lintDrift.stdout, /확인 필요 {2}전역 린트 eslint\.config\.mjs\r?\n {2}- eslint\.config\.mjs 내용 불일치/);
-  assert.match(lintDrift.stdout, /확인 필요 {2}전역 린트 lint\.mjs\r?\n {2}- lint\.mjs 누락/);
-  for (const file of lintFiles) cpSync(join(repo, 'lints', file), join(globalLint, file));
+  assert.match(lintDrift.stdout, /확인 필요 {2}Codex 전역 린트 eslint\.config\.mjs\r?\n {2}- eslint\.config\.mjs 내용 불일치/);
+  assert.match(lintDrift.stdout, /확인 필요 {2}Antigravity 전역 린트 lint\.mjs\r?\n {2}- lint\.mjs 누락/);
+  cpSync(join(repo, 'lints', 'eslint.config.mjs'), join(codexLint, 'eslint.config.mjs'));
+  cpSync(join(repo, 'lints', 'lint.mjs'), join(antigravityLint, 'lint.mjs'));
 
   const geminiRulePath = join(gemini, 'rules', 'code-quality-review.md');
   writeFileSync(geminiRulePath, '---\ntrigger: always_on\ndescription: "wrong"\n---\n\nchanged body\n');
