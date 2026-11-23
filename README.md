@@ -56,7 +56,7 @@ ai-setting/
 | [agents-md-editor](skills/agents-md-editor/SKILL.md) | 전역·프로젝트 지침 평가·최적화·초기 작성 | 적용 범위·의미·예외 보존, 독립 최종 검토, 요청 시 크기·실행 비교 |
 | [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
 | [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
-| [compare-changes](skills/compare-changes/SKILL.md) | 전후 비교 요청 또는 화면·동작·구조·성능의 차이를 문장으로 파악하기 어려운 변경 | 수정 전 자료 확보, 같은 조건에서 전후 비교, 스크린샷·표 등 변경에 맞는 형식 선택 |
+| [compare-changes](skills/compare-changes/SKILL.md) | 전후 비교 요청, 화면 배치·스타일·조작 흐름·조건별 처리 결과 변경, 처리 순서나 측정값 비교가 필요한 구조·성능 변경 | 수정 전 자료 확보, 같은 조건에서 전후 비교, 스크린샷·표 등 변경에 맞는 형식 선택 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
 | [explain-code-decisions](skills/explain-code-decisions/SKILL.md) | 기존 구현·설정·예외를 왜 그렇게 정했는지 묻는 경우 | 현재 코드와 커밋·PR 기록을 대조해 당시 선택 이유와 지금도 유효한 제약을 설명 |
 | [korean-writing](skills/korean-writing/SKILL.md) | 한국어 메일·보고서·공지·기획서 등 업무 문서 작성·퇴고 | 독자와 목적에 맞는 말투, 번역투 점검, 사실·약속·불확실성 대조 |
