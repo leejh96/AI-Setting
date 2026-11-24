@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 import { shellCommands } from './shell-commands.mjs';
 
 const protectedBranches = new Set(['main', 'master', 'develop', 'test', 'prod']);
@@ -20,6 +21,14 @@ const assignment = /^[a-z_]\w*=/i;
 const directWorktreeRemove = /^[ \t]*git(?:\.exe)?[ \t]+worktree[ \t]+remove[ \t]+(?:--[ \t]+)?(?:'([^'\r\n]+)'|"([^"\r\n]+)"|([^ \t\r\n]+))[ \t]*$/i;
 const literalWorktreePath = /^(?![- ])[\p{L}\p{M}\p{N}_.@+ /:~-]+$/u;
 const gitRepositoryOverride = /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|CONFIG(?:_.*)?|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|GRAFT_FILE|SHALLOW_FILE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)$/i;
+const codexTransportKeys = new Set();
+for (const host of ['chatgpt.com', 'chatgpt-staging.com']) {
+  const url = 'https://' + host + '/backend-api/codex/sites/git/';
+  for (const key of ['credential.' + url + '.helper', 'credential.' + url + '.useHttpPath',
+    'http.' + url + '.followRedirects', 'http.' + url + '.proactiveAuth']) {
+    codexTransportKeys.add(key);
+  }
+}
 
 function executable(word) {
   return word.split(/[/\\]/).at(-1).replace(/\.exe$/i, '').toLowerCase();
@@ -64,19 +73,41 @@ function dryRun(flags) {
   return !flags.has('--no-dry-run') && (flags.has('-n') || flags.has('--dry-run'));
 }
 
+function worktreeProbeEnv() {
+  const overrides = Object.keys(process.env).filter(key => gitRepositoryOverride.test(key));
+  if (!overrides.length) return process.env;
+
+  const env = { ...process.env };
+  const count = Number(env.GIT_CONFIG_COUNT);
+  if (!Number.isSafeInteger(count) || count < 1 || String(count) !== env.GIT_CONFIG_COUNT
+    || overrides.length !== 1 + 2 * count) return;
+
+  // Require exactly the numbered transport settings. Local probes never need their values.
+  delete env.GIT_CONFIG_COUNT;
+  for (let i = 0; i < count; i++) {
+    const key = 'GIT_CONFIG_KEY_' + i;
+    const value = 'GIT_CONFIG_VALUE_' + i;
+    if (!codexTransportKeys.has(env[key]) || !Object.hasOwn(env, value)) return;
+    delete env[key];
+    delete env[value];
+  }
+  return env;
+}
+
 function worktreeRemove(command, cwd, windows) {
   const match = directWorktreeRemove.exec(command);
   const target = match?.slice(1).find(part => part !== undefined);
   if (!target || !literalWorktreePath.test(target) || /[\r\n]/.test(command)
     || !windows && /[:~]/.test(target)
-    || windows && (/^[a-z]:(?!\/)/i.test(target) || /^[\/~]/.test(target)
+    || windows && (/^[a-z]:(?!\/)/i.test(target) || /^[/~]/.test(target)
       || target.replace(/^[a-z]:/i, '').includes(':'))) {
     return deny('워크트리 제거는 git worktree remove에 경로 하나를 직접 지정할 때만 허용됩니다.');
   }
 
   const unverifiable = 'Git에 등록된 연결 워크트리와 작업 상태를 확인하지 못했습니다.';
-  if (windows !== (process.platform === 'win32') || !path.isAbsolute(cwd)
-    || Object.keys(process.env).some(key => gitRepositoryOverride.test(key))) return deny(unverifiable);
+  if (windows !== (process.platform === 'win32') || !path.isAbsolute(cwd)) return deny(unverifiable);
+  const env = worktreeProbeEnv();
+  if (!env) return deny('워크트리 검사에 허용되지 않거나 불완전한 Git 환경 설정이 있습니다.');
 
   const deadline = Date.now() + 3500;
   function git(directory, args, input) {
@@ -84,7 +115,7 @@ function worktreeRemove(command, cwd, windows) {
       '--no-optional-locks', '--no-replace-objects', '--no-lazy-fetch',
       '-c', 'core.fsmonitor=false', '-C', directory, ...args,
     ], {
-      encoding: 'utf8', input, timeout: Math.max(1, deadline - Date.now()), windowsHide: true,
+      encoding: 'utf8', env, input, timeout: Math.max(1, deadline - Date.now()), windowsHide: true,
     });
   }
 

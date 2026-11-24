@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import process from 'node:process';
+import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 import { inspectCommand } from './command-guard.mjs';
 
@@ -177,14 +178,36 @@ test('로컬 브랜치나 태그에 커밋이 보존된 깨끗한 연결 워크�
   const codex = clients.codex;
   const command = codex.event(remove(linked));
   command.tool_input.workdir = repo;
-  const result = parseResult(spawnSync(process.execPath, [codex.script], {
-    input: JSON.stringify(command), encoding: 'utf8',
+  const runWithEnv = env => parseResult(spawnSync(process.execPath, [codex.script], {
+    input: JSON.stringify(command), encoding: 'utf8', env,
   }));
-  assert.equal(codex.decision(result), 'allow');
-  const overridden = parseResult(spawnSync(process.execPath, [codex.script], {
-    input: JSON.stringify(command), encoding: 'utf8', env: { ...process.env, GIT_DIR: path.join(repo, '.git') },
-  }));
-  assert.equal(codex.decision(overridden), 'deny');
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_CONFIG(?:_|$)/i.test(name)));
+  assert.equal(codex.decision(runWithEnv(baseEnv)), 'allow');
+  const transportEnv = { ...baseEnv, GIT_CONFIG_COUNT: '10' };
+  let slot = 0;
+  for (const host of ['chatgpt.com', 'chatgpt-staging.com']) {
+    const url = 'https://' + host + '/backend-api/codex/sites/git/';
+    for (const [key, value] of [
+      ['credential.' + url + '.helper', ''], ['credential.' + url + '.helper', 'example'],
+      ['credential.' + url + '.useHttpPath', 'true'], ['http.' + url + '.followRedirects', 'false'],
+      ['http.' + url + '.proactiveAuth', 'basic'],
+    ]) {
+      transportEnv['GIT_CONFIG_KEY_' + slot] = key;
+      transportEnv['GIT_CONFIG_VALUE_' + slot++] = value;
+    }
+  }
+  assert.equal(codex.decision(runWithEnv(transportEnv)), 'allow');
+  for (const override of [
+    { GIT_DIR: path.join(repo, '.git') }, { GIT_CONFIG_PARAMETERS: '' }, { GIT_CONFIG_GLOBAL: '' },
+    { GIT_CONFIG_KEY_0: 'core.worktree' }, { GIT_CONFIG_KEY_0: 'credential.helper' },
+    { GIT_CONFIG_KEY_0: 'http.https://example.invalid/.followRedirects' },
+    { GIT_CONFIG_COUNT: '9' }, { GIT_CONFIG_COUNT: '1e1' }, { GIT_CONFIG_COUNT: undefined },
+    { GIT_CONFIG_KEY_0: undefined }, { GIT_CONFIG_VALUE_1: undefined }, { GIT_CONFIG_KEY_10: 'unused' },
+  ]) {
+    const denied = runWithEnv({ ...transportEnv, ...override });
+    assert.equal(codex.decision(denied), 'deny');
+    assert.match(codex.reason(denied), /Git 환경 설정/);
+  }
 
   mkdirSync(plain);
   for (const command of [remove(repo), remove(plain), remove('$TARGET'), remove('linked worktree'),
@@ -203,6 +226,7 @@ test('로컬 브랜치나 태그에 커밋이 보존된 깨끗한 연결 워크�
     const name = path.join(linked, file);
     writeFileSync(name, 'uncommitted\n');
     assert.equal(inspect(remove(linked)), 'deny', file);
+    assert.match(codex.reason(runWithEnv(transportEnv)), /커밋하지 않은 변경/, file);
     if (file === 'tracked.txt') git(linked, 'restore', file);
     else rmSync(name);
   }
