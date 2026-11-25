@@ -18,7 +18,12 @@ import {
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const windows = process.platform === 'win32';
 const codexOnly = new Set(['antigravity-worker']);
-const retiredSkillPaths = ['antigravity-worker-acp', 'agents-md-editor/scripts/compare_size.py', 'task-lessons/scripts/location.ps1'];
+const retiredSkillPaths = [
+  'antigravity-worker-acp',
+  'agents-md-editor/scripts/compare_size.py',
+  'task-lessons/scripts/location.ps1',
+  'concept-explainer',
+];
 const hooks = [
   ['prompt-secret-checker', 'secret-checker', 'UserPromptSubmit', 'PreInvocation'],
   ['code-quality-review', 'code-quality-review', 'UserPromptSubmit', 'PreInvocation', 'Stop'],

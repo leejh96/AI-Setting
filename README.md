@@ -19,9 +19,8 @@ ai-setting/
 ├── lints/        # 두 Stop 훅이 함께 사용하는 전역 ESLint 실행기와 설정
 ├── skills/
 │   ├── agents-md-editor/   # AGENTS.md 최적화와 전후 비교
-│   ├── concept-explainer/    # 질문에 필요한 개념과 예시 설명
 │   ├── decision-table/    # 업무 분기를 표로 정리하고 구현·테스트에 연결
-│   ├── dev-checklist/         # 개발 작업의 진행 상태와 완료 조건 관리
+│   ├── dev-checklist/         # 보류·병행·다단계 개발의 상태와 완료 조건 추적
 │   ├── compare-changes/       # 수정 전 자료 확보와 변경 전후 비교
 │   ├── bug-diagnosis/  # 불명확·반복 실패의 원인 분리와 최소 수정
 │   ├── explain-code-decisions/ # 기존 구현을 선택한 이유 조사
@@ -54,8 +53,7 @@ ai-setting/
 | 스킬 | 적용 조건 | 전문 절차 |
 | --- | --- | --- |
 | [agents-md-editor](skills/agents-md-editor/SKILL.md) | 전역·프로젝트 지침 평가·최적화·초기 작성 | 적용 범위·의미·예외 보존, 독립 최종 검토, 요청 시 크기·실행 비교 |
-| [concept-explainer](skills/concept-explainer/SKILL.md) | 개념 질문, 전략·기획·조사 이해에 필요한 설명 | 용어·필요성·쉬운 예시와 핵심 동작 연결 |
-| [dev-checklist](skills/dev-checklist/SKILL.md) | 기능 구현·수정·버그 수정·리팩터링 | 작업별 상태와 완료 조건·검증 추적, 단순 작업은 목록 생략 |
+| [dev-checklist](skills/dev-checklist/SKILL.md) | 보류·병행 작업 또는 항목별 구현·검증 상태가 갈리는 다단계 개발 | 작업별 상태(`대기`·`진행 중`·`완료`·`보류`)와 완료 조건·검증 추적, 압축 후 상태 복원 |
 | [compare-changes](skills/compare-changes/SKILL.md) | 전후 비교 요청, 화면 배치·스타일·조작 흐름·조건별 처리 결과 변경, 처리 순서나 측정값 비교가 필요한 구조·성능 변경 | 수정 전 자료 확보, 같은 조건에서 전후 비교, 스크린샷·표 등 변경에 맞는 형식 선택 |
 | [bug-diagnosis](skills/bug-diagnosis/SKILL.md) | 원인이 불명확하거나 수정 후 반복되는 실패 | 가설을 구별할 증거 수집, 최소 수정, 원래 실패 경로 검증 |
 | [explain-code-decisions](skills/explain-code-decisions/SKILL.md) | 기존 구현·설정·예외를 왜 그렇게 정했는지 묻는 경우 | 현재 코드와 커밋·PR 기록을 대조해 당시 선택 이유와 지금도 유효한 제약을 설명 |
@@ -93,7 +91,7 @@ ai-setting/
 
 이미 등록된 권한과 기존 설정은 보존합니다. 같은 Antigravity 권한 설정에 동시 변경이 감지되면 뒤의 명령은 오류를 반환합니다. 먼저 실행한 명령이 끝난 뒤 다시 실행합니다. 비정상 종료로 `.ai-setting-permissions.lock` 디렉터리가 남으면 동기화 프로세스가 종료됐는지 확인하고 오류에 표시된 잠금 디렉터리만 제거합니다. 동기화 후 새 세션에서 `artifacts/` 안에 임시 파일을 쓰고 다시 읽은 뒤 삭제해 확인합니다.
 
-스킬 이름이 바뀌었다면 새 이름의 폴더를 복사하고, 이전 이름의 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다.
+스킬 이름이 바뀌었거나 폐기된 경우 기존 설치 폴더는 스킬 검색 경로 밖에 복구용으로 보관합니다. `global/AGENTS.md`에 통합된 `concept-explainer`는 새 전역 지침을 반영한 뒤 기존 `concept-explainer` 폴더를 스킬 검색 경로 밖에 백업하고 `node scripts/check-install.mjs`로 다시 확인합니다.
 
 새 환경에서는 실제 지원 경로를 확인하고 한 곳에만 등록해 중복 노출을 피하세요. Codex의 `~/.codex/skills`는 이 환경에서 사용하는 호환 경로이며 공식 안내의 `~/.agents/skills`와 중복 설치하지 않습니다. [Codex 공식 안내](https://developers.openai.com/codex/skills), [Antigravity 공식 안내](https://antigravity.google/docs/skills?app=antigravity).
 

@@ -164,17 +164,30 @@ test('설치 점검은 생성된 등록을 읽고 복사본 차이와 설정 오
     [codex, 'task-lessons/scripts/location.ps1'],
     [codex, 'agents-md-editor/scripts/compare_size.py'],
     [codex, 'antigravity-worker-acp'],
+    [codex, 'concept-explainer', 'SKILL.md'],
     [gemini, 'antigravity-worker'],
     [gemini, 'antigravity-worker-acp'],
+    [gemini, 'concept-explainer', 'SKILL.md'],
   ];
-  for (const [base, file] of retired) writeFileSync(join(base, 'skills', file), 'legacy');
+  for (const [base, path, child] of retired) {
+    const target = join(base, 'skills', path);
+    if (child) {
+      mkdirSync(target, { recursive: true });
+      writeFileSync(join(target, child), 'legacy');
+    } else writeFileSync(target, 'legacy');
+  }
   const obsolete = scan();
+  const obsoleteCodex = scan('codex');
+  const obsoleteAntigravity = scan('antigravity');
   assert.equal(obsolete.status, 1, obsolete.stdout);
-  assert.match(obsolete.stdout, /확인 필요 {2}Codex 폐기·제외 스킬 경로/);
-  assert.match(obsolete.stdout, /확인 필요 {2}Antigravity 폐기·제외 스킬 경로/);
-  for (const [base, file] of retired) {
-    assert.ok(obsolete.stdout.includes('skills/' + file + ' 남아 있음'), obsolete.stdout);
-    rmSync(join(base, 'skills', file));
+  assert.equal(obsoleteCodex.status, 1, obsoleteCodex.stdout);
+  assert.equal(obsoleteAntigravity.status, 1, obsoleteAntigravity.stdout);
+  assert.match(obsoleteCodex.stdout, /확인 필요 {2}Codex 폐기·제외 스킬 경로/);
+  assert.match(obsoleteAntigravity.stdout, /확인 필요 {2}Antigravity 폐기·제외 스킬 경로/);
+  for (const [base, path] of retired) {
+    const output = (base === codex ? obsoleteCodex : obsoleteAntigravity).stdout;
+    assert.ok(output.includes('skills/' + path + ' 남아 있음'), output);
+    rmSync(join(base, 'skills', path), { recursive: true });
   }
   assert.doesNotMatch(obsolete.stdout, /location\.ps1\.bak|personal-skill/);
 
